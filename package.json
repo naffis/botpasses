@@ -1,20 +1,24 @@
 {
-  "name": "agent-vault",
-  "version": "0.1.0",
-  "description": "Agent grant vault: named secrets injected into tools, never into the model or transcript.",
+  "name": "botpasses",
+  "version": "0.3.0",
+  "description": "Botpasses: named secrets injected into tools, never into the model or transcript.",
   "type": "module",
   "engines": {
     "node": ">=22.14.0"
   },
   "bin": {
+    "botpasses": "./bin/vault.js",
     "vault": "./bin/vault.js"
   },
   "scripts": {
+    "botpasses": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
     "vault": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
+    "hosted": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/hosted/main.ts",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=spec test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
+    "botpasses",
     "agent",
     "vault",
     "grants",
@@ -24,6 +28,11 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.13.10",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.16.13",
+    "pg": "^8.23.0"
   }
 }

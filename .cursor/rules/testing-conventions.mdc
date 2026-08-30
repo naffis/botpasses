@@ -1,0 +1,12 @@
+---
+description: How and when to test — Arrange-Act-Assert, mock only at boundaries, prefer real objects.
+globs: ["**/*.test.*", "**/*.spec.*", "**/test/**", "**/spec/**", "**/__tests__/**"]
+alwaysApply: false
+---
+
+# Testing conventions
+
+- Structure tests Arrange-Act-Assert; one behavior per test; name the expected behavior, not the method.
+- Mock only at true external boundaries (network, clock, filesystem, third-party SDKs). Don't mock the unit under test or stub internal collaborators you could use for real.
+- Prefer factories/builders with explicit overrides over giant fixtures; assert on meaningful values, not snapshots of everything.
+- Test behavior and edge cases, not coverage for its own sake. A passing test you didn't watch fail isn't trusted.

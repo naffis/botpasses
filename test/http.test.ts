@@ -20,7 +20,8 @@ test("HTTP operator API never returns secret values", async () => {
     assert.ok(!JSON.stringify(storedBody).includes(CANARY));
 
     const page = await (await fetch(`${base}/`)).text();
-    assert.match(page, /Agent Grant Vault/);
+    assert.match(page, /Botpasses/);
+    assert.doesNotMatch(page, /Agent Grant Vault/);
     assert.doesNotMatch(page, /LastPass|1Password|Bitwarden/);
     assert.ok(!page.includes(CANARY));
 
@@ -59,6 +60,24 @@ test("HTTP operator API never returns secret values", async () => {
     };
     assert.ok(!JSON.stringify(audit).includes(CANARY));
     assert.ok(audit.audit.some((row) => row.action === "grant"));
+
+    const health = await (await fetch(`${base}/health`)).json() as Record<string, unknown>;
+    assert.equal(health.ok, true);
+    assert.equal(health.product, "botpasses");
+    assert.equal("fingerprint" in health, false);
+    assert.ok(!JSON.stringify(health).includes(CANARY));
+
+    const init = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+    });
+    const initBody = (await init.json()) as {
+      result?: { serverInfo?: { name?: string }; instructions?: string };
+    };
+    assert.equal(initBody.result?.serverInfo?.name, "botpasses");
+    assert.match(initBody.result?.instructions ?? "", /Botpasses/);
+    assert.doesNotMatch(initBody.result?.instructions ?? "", /Agent grant vault/);
   } finally {
     await http.close();
     vault.close();

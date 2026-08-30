@@ -1,0 +1,57 @@
+---
+description: >
+  Dig deeper before implementing an approved fix. Triggers on "yes, fix it",
+  "do it correctly", "dig deeper", "don't bandaid", "find the real issue",
+  "properly", "not a shortcut", or when approving a shallow "Want me to
+  tighten/exclude/carve-out …?" proposal. Re-diagnose; multi-issue hunt; ≥2
+  solutions; reject proximate patches; then implement. Read the `do-it-right`
+  skill for the full workflow.
+alwaysApply: false
+---
+
+# Do it right
+
+When the user approves a fix — especially after a shallow proposal — you do
+**not** implement the first idea. You re-diagnose, hunt for more issues, compare
+real solutions, then class-kill at the correct layer.
+
+## Completeness bar
+
+Done only when:
+
+1. Prior proposal (if any) was labeled DRAFT and challenged.
+2. ≥3 falsifiable hypotheses were written; losers have kill evidence.
+3. A multi-issue hunt ran ("only one issue" is earned, not assumed).
+4. ≥2 distinct solutions were scored; bandaids auto-rejected.
+5. Chosen Fix was printed **before** production edits.
+6. Regression pins the class; inverse case still correct.
+7. Implement handed off to `root-cause-fix` / `debugging-an-issue` when those own the class.
+
+## Absolute bans
+
+- Implementing the first proposal because the user said "yes"
+- Asking "Want me to tighten / exclude / carve-out …?" instead of diagnosing
+- Stopping at the first finding or first solution
+- Shipping keyword/heuristic exceptions as the class fix when a structured
+  signal exists
+- Silent "follow-up" for sibling issues found in the hunt
+
+## Process (mandatory)
+
+1. **Frame** — symptom, prior draft, trigger vs class.
+2. **Re-diagnose** — `do-it-right/references/diagnosis-gate.md`.
+3. **Solutions** — `do-it-right/references/solution-gate.md`; print Chosen Fix.
+4. **Implement** — via owning skill or inline under `no-shortcuts`.
+5. **Prove** — regression + inverse + DoD.
+6. **Report** — Do-it-right report block from the skill.
+
+## Delivery
+
+1. Leave edits unstaged unless asked to commit.
+2. Do **not** commit/push/PR unless the user explicitly asks.
+3. Full procedure: read the `do-it-right` skill.
+
+## Alignment
+
+Enforces `no-shortcuts`. Pipeline/quality class fixes → `root-cause-fix`.
+Everyday red tests already framed → `debugging-an-issue`. Investigate-only → `debugging-with-observability`. Session wrap → `reviewing-and-shipping`.

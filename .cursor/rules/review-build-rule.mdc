@@ -1,0 +1,80 @@
+---
+description: >
+  Review implemented work against the plan or original request. Triggers on
+  "Review the build", "review this build", "review-build", "review the
+  implementation", "did we build what we planned". Evidence over assertion:
+  git diff, requirement trace, shortcut sweep, gate commands with pasted
+  output, fix blockers/majors. Read the `review-build` skill for the full
+  workflow.
+alwaysApply: false
+---
+
+# Review a build
+
+When asked to review a build, you are **not** summarizing the session and you
+are **not** rubber-stamping your own work. You are a skeptical staff engineer
+seeing the diff for the first time. Evidence over assertion: nothing counts as
+verified without the command output or file reference that proves it.
+
+Prefer a fresh chat when the stakes are high — a reviewer with no memory of
+writing the work finds more than the author re-reading itself.
+
+## Completeness bar
+
+Review is done only when:
+
+1. You reviewed the **actual** `git status` / `git diff` (and re-opened unsure
+   files) — not your memory of the change.
+2. Every requirement / plan step maps to an implementation site (or an explicit
+   deviation with rationale).
+3. Shortcut sweep is complete; every hit is fixed or justified.
+4. Project gate commands ran and their **output is shown**; failures were fixed
+   and re-run until clean.
+5. Blockers and majors are fixed; the final report has an explicit verdict.
+
+## Absolute bans
+
+These are review failures — rewrite / re-run until none remain:
+
+- Claiming pass/green without pasting the command output
+- Skipping the plan/request trace or the shortcut sweep
+- Chat-only critique that leaves blockers/majors unfixed
+- Inventing findings to appear thorough, or skipping checks to appear done
+- Treating session memory as ground truth instead of the diff
+
+## Process (mandatory)
+
+1. **Ground truth** — `git status`, `git diff` vs base, re-open unsure files.
+2. **Trace** — every requirement / plan step → file:line; list deviations.
+3. **Unit boundaries** — when a task graph / `TASK.md` exists, check `git diff`
+   paths against each unit's declared file allowlist; breaches are blockers.
+   See `review-build` skill §2b and `implement-node-rule`.
+4. **Shortcut sweep** — TODO/FIXME/HACK/XXX, placeholders, stubs outside tests,
+   hardcoded config, commented-out code, swallowed catches, type suppressions,
+   disabled tests/lint, leftover debug logging. Report file:line; fix or justify.
+5. **Verify** — typecheck, lint, tests, build (as the project documents). Paste
+   output. Fix failures; re-run until clean.
+6. **Correctness** — error handling, edge cases (empty/null, concurrency,
+   partial failure, idempotency), security on new inputs/endpoints/queries,
+   out-of-scope behavior changes.
+7. **Findings** — numbered; severity blocker / major / minor; evidence required.
+   Fix all blockers and majors; re-run step 5.
+8. **Report** — requirement trace, unit-boundary table (if any), commands +
+   outcomes, findings fixed, anything left open with reason, verdict PASS |
+   PASS WITH NOTES | FAIL.
+
+## Delivery
+
+1. Fix blockers/majors in the working tree; leave edits unstaged unless asked
+   to commit.
+2. Do **not** commit/push/PR unless the user explicitly asks
+   (`commit-and-pr-conventions`).
+3. For an independent second opinion on a large diff, also dispatch the
+   `reviewer` agent — but do not skip your own evidence pass.
+
+## Alignment
+
+Enforces `no-shortcuts`, `definition-of-done`, `regression-test`, and project
+`AGENTS.md` invariants. Pairs with `review-plan` (before coding),
+`complete-the-build` (when open plan rows remain), and `reviewing-and-shipping`
+(after a clean build review, when wrapping up).

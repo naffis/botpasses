@@ -1,0 +1,85 @@
+---
+description: >
+  Deep-dive a brief seed (thought, idea, feature, or bug) into a committed
+  recommendation. Triggers on "deep dive:", "dig in:", "deep-dive", "what's the
+  best way to", "think through this". Classify idea/feature/bug/problem, scale
+  effort, investigate this repo before the web, generate real alternatives with
+  forcing functions, one self-critique pass, then recommend. Do not implement.
+  Do not confuse with "dig deeper" (that is do-it-right). Read the `deep-dive`
+  skill for the full workflow.
+alwaysApply: false
+---
+
+# Deep dive
+
+When the user says `deep dive:` or `dig in:` followed by a seed, run the
+`deep-dive` skill. Take a brief thought, idea, feature request, or bug and land
+on the best solution to the **underlying problem**. Never accept the first
+plausible answer. Do not implement.
+
+## Usage
+
+```
+deep dive: should billing live in Stripe Customer Portal or our own settings page?
+dig in: users can submit the form twice and get two charges
+```
+
+`dig in:` is this rule. `dig deeper` is `do-it-right`.
+
+## Completeness bar
+
+Done only when:
+
+1. Class (idea / feature / bug / problem) and mode (LIGHT / STANDARD / FULL)
+   were stated, with why.
+2. The underlying problem was named, not just the stated solution. Wrong
+   framing was challenged before solution search.
+3. Features and bugs investigated **this repo first** (patterns, constraints,
+   prior art). Bugs: root cause before options; five whys; bleeding vs disease.
+4. External research ran unless the seed is purely internal (said so if skipped).
+   Sources cited. Version-specific claims verified.
+5. STANDARD/FULL: 2–4 genuinely different approaches; all three forcing
+   functions (other domain, inversion, 10x simpler); second-order effects;
+   steelman of the losers.
+6. One recommendation, kill criteria, verification / regression (bugs), explicit
+   out of scope, sequenced next slice. User choices flagged as `DECISION:`.
+7. STANDARD/FULL: exactly one self-critique pass, then revise or record why the
+   objection survives. First draft is not the deliverable.
+
+LIGHT may stop after a short answer. Do not inflate it. A LIGHT bug still
+names the cause in one line.
+
+## Absolute bans
+
+- Jumping to "explore solution space" on a bug before root cause
+- Researching the world before this codebase on a feature or bug
+- Presenting the first plausible answer as the recommendation
+- "Think outside the box" with no forcing function (other domain, inversion,
+  10x simpler)
+- Expanding a seed into a rewrite; silent scope growth
+- Implementing, or writing a `create-plan` artifact, unless the user asked
+- Iterating self-critique until every objection dies (one hard pass)
+- Confusing this with `do-it-right` (`dig deeper` / approved shallow fix)
+
+## Process (mandatory)
+
+0. Classify + scale. State mode and why.
+1. Interrogate. Underlying problem, hidden assumptions, questions only if
+   direction-changing.
+2. Local (features/bugs). Codebase archaeology. Bugs: reproduce, root cause,
+   five whys.
+3. External. Primary sources. Skip only when irrelevant.
+4. Explore. 2–4 real approaches. All three forcing functions. Steelman the rest.
+5. Recommend. Commit, kill criteria, DoD, out of scope, next slice.
+6. One self-review pass. Revise or record the survived objection.
+7. Output: terse; recommendation first, then reasoning, alternatives,
+   self-review. No filler, no parallel-structure padding, no em-dashes.
+
+Full procedure: read the `deep-dive` skill.
+
+## Alignment
+
+Does not replace `create-plan` (buildable plan), `do-it-right` (dig deeper after
+a shallow fix), or `root-cause-fix` (implement the class kill). Hands off to
+those when the user wants the next step. Enforces `no-shortcuts`. Bugs that
+will be fixed must still earn a `regression-test`.

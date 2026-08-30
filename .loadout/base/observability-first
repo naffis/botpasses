@@ -1,0 +1,11 @@
+---
+description: For runtime failures, read logs/traces/metrics before diving into source. Use structured logging with correlation IDs.
+alwaysApply: false
+---
+
+# Observability first
+
+- When something fails at runtime, look at the evidence first: logs, traces, error tracker, and metrics — before reading source or guessing.
+- Correlate with a request/run ID (e.g. `X-Request-ID`, `run_id`) end to end; quote the actual log line in your diagnosis.
+- Use structured logging with stable event names and a consistent prefix per subsystem; never log secrets, tokens, or PII.
+- A bug isn't understood until you can point at the signal that proves the cause. Then write the fix and a regression test.

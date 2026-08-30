@@ -1,10 +1,12 @@
+import { PRODUCT_NAME } from "./brand.ts";
+
 export function operatorHtml(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Grant Vault</title>
+  <title>${PRODUCT_NAME}</title>
   <style>
     :root { color-scheme: dark; --bg:#111; --fg:#eee; --muted:#9aa; --line:#333; --ok:#8fd19e; --warn:#e6c07b; }
     html, body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ui-sans-serif, system-ui, sans-serif; }
@@ -32,7 +34,7 @@ export function operatorHtml(): string {
 </head>
 <body>
   <main>
-    <h1>Agent Grant Vault</h1>
+    <h1>${PRODUCT_NAME}</h1>
     <p>Named secrets for connectors and agents. Values are stored encrypted and injected into a tool process. They are never shown here after submit, and they are never returned to the model.</p>
     <div class="banner">
       This is not a human password manager. No autofill, TOTP, passkeys, or sharing secrets with other people.

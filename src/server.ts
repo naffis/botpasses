@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { HEALTH_PRODUCT } from "./brand.ts";
 import { handleMcpRpc, type JsonRpcRequest } from "./mcp.ts";
 import { operatorHtml } from "./operator-page.ts";
 import type { Vault } from "./vault.ts";
@@ -12,7 +13,7 @@ export type ServerOptions = {
 
 export function createVaultServer(opts: ServerOptions) {
   const host = opts.host ?? "127.0.0.1";
-  const port = opts.port ?? 8787;
+  const port = opts.port ?? 8788;
 
   const server = createServer(async (req, res) => {
     try {
@@ -59,7 +60,7 @@ async function route(vault: Vault, req: IncomingMessage, res: ServerResponse): P
     return;
   }
   if (method === "GET" && path === "/health") {
-    json(res, 200, { ok: true, product: "agent-grant-vault", fingerprint: vault.fingerprint });
+    json(res, 200, { ok: true, product: HEALTH_PRODUCT });
     return;
   }
   if (method === "GET" && path === "/api/secrets") {

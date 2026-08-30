@@ -1,0 +1,13 @@
+---
+description: Human, direct product/UI/docs copy. No AI tells — no em-dashes, no filler, no hype.
+globs: ["**/*.md", "**/*.mdx"]
+alwaysApply: false
+---
+
+# Copy voice
+
+- Write like a person: plain, direct, specific. Lead with the point.
+- No em-dashes. Use a period, comma, or parentheses instead.
+- Ban filler and hype: "seamlessly", "effortlessly", "robust", "leverage", "elevate", "in today's fast-paced world", "it's important to note", "delve".
+- No rhetorical "It's not just X, it's Y" constructions and no exclamation-mark enthusiasm.
+- Prefer concrete nouns and verbs over adjectives. Cut any sentence that doesn't add information.

@@ -1,0 +1,11 @@
+---
+description: Refactors are behavior-preserving and scoped — a test net first, pure moves only, no bundled bug fixes or features.
+alwaysApply: false
+---
+
+# Refactor discipline
+
+- Before refactoring, ensure a test net covers the behavior you're about to move (add boundary tests first if missing).
+- A refactor commit contains only behavior-preserving changes: move, extract, rename, re-export. No logic changes.
+- No side quests: don't fix bugs or add features in the same commit as a refactor. Split them — bug fixes get their own commit (with a regression test).
+- Keep diffs reviewable: prefer a sequence of small, obviously-correct moves over one large reshuffle.

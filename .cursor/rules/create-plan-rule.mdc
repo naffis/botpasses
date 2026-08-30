@@ -1,0 +1,98 @@
+---
+description: >
+  Create a complete, zero-shortcut implementation plan. Triggers on
+  "create-plan", "run create-plan", "/plan", "Create a plan for X", "plan for",
+  "write a plan", "plan out", "implementation plan", "technical plan", or
+  "design plan" (including buried in a longer prompt). In Cursor: CreatePlan
+  (Build UI) + research .md required — never Write-only. Extensive in-repo and
+  external research; no TBD/stubs/deferred work. Read the `create-plan` skill
+  for the full workflow.
+alwaysApply: false
+---
+
+# Create a plan
+
+When asked to create a plan for something, produce a **complete, executable
+implementation plan** — not a sketch, not a brainstorm, not a phased wish-list.
+Read the `create-plan` skill for the full workflow and artifact template.
+
+## Completeness bar (non-negotiable)
+
+The plan is done only when a competent engineer who has never seen this codebase
+could implement the change, pass every acceptance criterion, and ship it
+**without asking a single clarifying question**.
+
+Length is not the goal; **resolved decisions** are. Decisions must be informed
+by **both** this repo's reality and **current external practice** — not by
+training-data guesswork alone.
+
+## Absolute bans
+
+These are plan failures — rewrite until none remain:
+
+- `TBD`, `TODO`, `FIXME`, `???`, `TBC`, `later`, `for now`, `temporary`,
+  `placeholder`, `stub`, `noop`, `hack`, `workaround we'll replace`
+- `defer`, `phase 2`, `follow-up PR`, `nice to have later`, `out of scope for
+  now` used to dodge a decision that this plan still depends on
+- `something like`, `probably`, `roughly`, `we could`, `maybe`, `TBD pending
+  research` without completing that research in this planning pass
+- Empty sections, bullet placeholders, or "fill in during implementation"
+- Choosing an approach without naming rejected alternatives and why
+- Leaving error paths, edge cases, migrations, tests, rollout, or rollback
+  unspecified
+- Designing from memory alone when the domain has public docs, RFCs, vendor
+  guides, reference implementations, or widely documented patterns — **skipping
+  external research is a plan failure**
+- Citing "best practice" without a source, or treating a single blog post as
+  settled industry consensus
+
+**Out of scope is allowed.** Deferred-inside-scope is not. If the change
+*depends* on an unanswered question, resolve it (in-repo research, external
+research, or one precise user question) before calling the plan complete.
+
+## Non-negotiables
+
+1. **Ground in the repo first** — live code, tests, docs, `AGENTS.md`, existing
+   primitives. List files read; trace data flow; check the package manifest
+   before new deps. Evidence precedence: live code > project docs > AGENTS.md >
+   labeled assumption.
+2. **Research externally before locking design** — best practices, common
+   practice, state of the art, standards/RFCs, reference implementations,
+   vendor docs. Prefer primary sources. Cite what you used.
+3. **Decide deeply** — ≥2 real alternatives per non-trivial fork (include an
+   external-practice option when one exists); record mini-ADRs with
+   consequences and sources.
+4. **Specify unambiguously** — EARS requirements; Given/When/Then acceptance
+   criteria; happy path + authz/validation + edge/idempotent/concurrent/
+   partial-failure cases.
+5. **Decompose to executable tasks** — files, deps, acceptance, verification;
+   tests/docs/wiring in *this* plan (`definition-of-done`), not follow-ups.
+6. **Topology for nontrivial plans** — include a `task-topology` declaration
+   (single-loop | pipeline | graph) with escalation evidence; graph only when
+   file sets are disjoint and each unit has an independent verifier. Write
+   `.loadout/tasks/<slug>/TASK.md` (minimal OK for single-loop) and link it.
+   See the `create-plan` skill §8b / `task-topology`.
+7. **Do not implement** unless the user clicks **Build** or explicitly asks
+   after the plan. Edits stay unstaged; no commit/push/PR unless asked
+   (`commit-and-pr-conventions`).
+
+## Delivery (Cursor)
+
+1. **Primary:** call **`CreatePlan`** (`name`, `overview`, `plan`, non-empty
+   `todos`). This shows the **Build** button. See
+   `create-plan/references/cursor-native-plan.md`.
+2. **Research:** also write/update `docs/plans/YYYY-MM-DD-<slug>.md` (full
+   skill template); link it from the CreatePlan body.
+3. If not in Plan mode, switch to Plan before CreatePlan.
+4. Never claim done from Write-only markdown.
+
+## Alignment
+
+Extends — and must not weaken — `no-shortcuts`, `definition-of-done`,
+`regression-test`, `testing-conventions`, `db-migration-safety`, and project
+`AGENTS.md` invariants. External "best practice" never overrides a documented
+invariant without an explicit, justified decision in the plan.
+
+Slash shortcut: `/plan`. After drafting, prefer `/review-plan` before **Build**;
+after implementing, exhaust open rows with `/complete-the-build` when needed,
+then close with `/review-build`.

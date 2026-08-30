@@ -1,0 +1,32 @@
+---
+description: >
+  UI claims require UI evidence. Apply whenever building, changing, or verifying
+  anything user-facing (web UI, pages, components, styles, rendered output) — before
+  claiming a UI change works, is fixed, or looks right.
+alwaysApply: false
+---
+
+# UI claims require UI evidence
+
+Backend work verifies itself with tests and exit codes; UI work does not. Close the gap
+deliberately:
+
+- **Render and look.** Before claiming a UI change works, load the real page and read
+  the evidence: the rendered markup for structure, a screenshot for visual truth. Code
+  review of the diff alone is not verification of UI.
+- **Never bypass the interface to make a check pass.** Injecting state (localStorage,
+  direct DB writes, direct API calls) to reach a state you were asked to verify through
+  the UI proves nothing about the UI. If the flow can't be driven through the real
+  interface, that is a finding — report it.
+- **Re-verify after every mutating action.** Failed UI actions often look like
+  successes; re-fetch/re-snapshot after each click, submit, or edit. Never trust the
+  app's own success message as proof.
+- **Check more than one width.** Desktop, mobile, and one in-between width; responsive
+  bugs hide between canonical breakpoints.
+- **Show your work.** Attach or embed the screenshots/artifacts behind any UI claim so
+  a human can validate. Screenshots go stale on edit — re-capture after fixes.
+
+Cheap mechanical checks come first (dead links, missing alts, one h1, placeholder text
+via grep/curl on rendered output); spend vision on judgment, not on what a script can
+prove. For the full procedure and a reusable browser harness, read the `reviewing-ui`
+skill's `references/ui-evidence.md`.

@@ -1,0 +1,794 @@
+import {
+  createHmac,
+  createHash,
+  randomBytes,
+  randomInt,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
+import { decrypt, encrypt } from "../crypto.ts";
+import { last4, normalizeSecretName } from "../ids.ts";
+import { assertSafePublicObject } from "../redact.ts";
+import type {
+  ClientRecord,
+  GrantPolicy,
+  HostedGrantRecord,
+  ItemKind,
+  ItemPublic,
+  MemberRole,
+  VaultEnvName,
+} from "../hosted-types.ts";
+import type { VaultStore } from "../store/types.ts";
+import { HttpError } from "./errors.ts";
+import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
+import { logVaultEvent } from "./observe.ts";
+import { assertAllowedHostname } from "./ssrf.ts";
+
+const SESSION_TTL_MS = 8 * 3600 * 1000;
+const CODE_TTL_MS = 10 * 60 * 1000;
+const MAGIC_TTL_MS = 15 * 60 * 1000;
+const MAX_ITEM_BYTES = 64 * 1024;
+
+export type HostedKernelOpts = {
+  store: VaultStore;
+  kek: Buffer;
+  now?: () => Date;
+  sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
+  publicUrl?: string;
+  approvalHmac?: Buffer;
+  deployPlane?: "staging" | "production";
+};
+
+function nowIso(d: Date): string {
+  return d.toISOString();
+}
+
+function hashSecret(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+function hashCode(code: string, salt: string): string {
+  return createHash("sha256").update(`${salt}:${code}`).digest("hex");
+}
+
+function parseHosts(json: string): string[] {
+  const v: unknown = JSON.parse(json);
+  if (!Array.isArray(v) || v.some((h) => typeof h !== "string")) {
+    throw new HttpError(500, "Corrupt allowed_hosts");
+  }
+  return v as string[];
+}
+
+export class HostedKernel {
+  readonly store: VaultStore;
+  readonly #kek: Buffer;
+  readonly now: () => Date;
+  readonly sendEmail: HostedKernelOpts["sendEmail"];
+  readonly publicUrl: string;
+  readonly approvalHmac: Buffer | undefined;
+  readonly deployPlane: "staging" | "production";
+
+  constructor(opts: HostedKernelOpts) {
+    this.store = opts.store;
+    this.#kek = opts.kek;
+    this.now = opts.now ?? (() => new Date());
+    this.sendEmail = opts.sendEmail;
+    this.publicUrl = opts.publicUrl ?? "http://127.0.0.1:8788";
+    this.approvalHmac = opts.approvalHmac;
+    this.deployPlane = opts.deployPlane ?? "production";
+  }
+
+  async ping(): Promise<void> {
+    await this.store.ping();
+  }
+
+  async createOrg(name: string, userId: string): Promise<{ orgId: string }> {
+    const orgId = `org_${randomUUID()}`;
+    const dek = generateDek();
+    const wrapped = wrapDek(dek, this.#kek, orgId);
+    const at = nowIso(this.now());
+    await this.store.insertOrg({
+      id: orgId,
+      name,
+      wrappedDekIv: wrapped.iv,
+      wrappedDekCiphertext: wrapped.ciphertext,
+      wrappedDekTag: wrapped.tag,
+      createdAt: at,
+    });
+    await this.store.insertMember({ orgId, userId, role: "owner" });
+    const vaultId = `vlt_${randomUUID()}`;
+    await this.store.insertVault({ id: vaultId, orgId, name: "default" });
+    await this.store.insertEnvironment({
+      id: `env_${randomUUID()}`,
+      vaultId,
+      name: "staging",
+    });
+    await this.store.insertEnvironment({
+      id: `env_${randomUUID()}`,
+      vaultId,
+      name: "production",
+    });
+    return { orgId };
+  }
+
+  async addMember(orgId: string, userId: string, role: MemberRole): Promise<void> {
+    await this.store.insertMember({ orgId, userId, role });
+  }
+
+  async createFolder(orgId: string, environment: VaultEnvName, name: string): Promise<{ id: string; name: string }> {
+    const env = await this.envFor(orgId, environment);
+    const existing = await this.store.getFolderByName(env.id, name);
+    if (existing) throw new HttpError(409, "Folder already exists");
+    const id = `fld_${randomUUID()}`;
+    await this.store.insertFolder({ id, environmentId: env.id, name });
+    return { id, name };
+  }
+
+  async requireMember(orgId: string, userId: string): Promise<MemberRole> {
+    const m = await this.store.getMember(orgId, userId);
+    if (!m) throw new HttpError(403, "Not a member of this org");
+    return m.role;
+  }
+
+  async envFor(orgId: string, name: VaultEnvName) {
+    this.#assertPlane(name);
+    const vaults = await this.store.listVaults(orgId);
+    const vault = vaults[0];
+    if (!vault) throw new HttpError(500, "Org has no vault");
+    const env = await this.store.getEnvironmentByName(vault.id, name);
+    if (!env) throw new HttpError(404, "Environment not found");
+    return env;
+  }
+
+  #assertPlane(name: VaultEnvName): void {
+    if (this.deployPlane === "staging" && name === "production") {
+      throw new HttpError(404, "Production items are not available on the staging deploy");
+    }
+  }
+
+  async dekForOrg(orgId: string): Promise<Buffer> {
+    const org = await this.store.getOrg(orgId);
+    if (!org) throw new HttpError(404, "Unknown org");
+    return unwrapDek(
+      {
+        iv: org.wrappedDekIv,
+        ciphertext: org.wrappedDekCiphertext,
+        tag: org.wrappedDekTag,
+      },
+      this.#kek,
+      orgId,
+    );
+  }
+
+  async createItem(input: {
+    orgId: string;
+    actor: string;
+    environment: VaultEnvName;
+    kind: ItemKind;
+    name: string;
+    value: string;
+    username?: string;
+    allowedHosts: string[];
+    inject: string;
+    folderName?: string;
+  }): Promise<ItemPublic> {
+    this.#assertHosts(input.allowedHosts);
+    let name: string;
+    try {
+      name = normalizeSecretName(input.name);
+    } catch (err) {
+      throw new HttpError(400, err instanceof Error ? err.message : "Invalid name");
+    }
+    if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
+    if (Buffer.byteLength(input.value, "utf8") > MAX_ITEM_BYTES) {
+      throw new HttpError(400, "Value exceeds 64KiB");
+    }
+    if (input.kind === "login" && !input.username) {
+      throw new HttpError(400, "login items require username");
+    }
+    const env = await this.envFor(input.orgId, input.environment);
+    const existing = await this.store.getItemByName(env.id, name);
+    if (existing) throw new HttpError(409, "Item name already exists in this environment");
+    let folderId: string | null = null;
+    if (input.folderName) {
+      const folder = await this.store.getFolderByName(env.id, input.folderName);
+      if (!folder) throw new HttpError(404, "Unknown folder");
+      folderId = folder.id;
+    }
+    const dek = await this.dekForOrg(input.orgId);
+    const payload =
+      input.kind === "login"
+        ? JSON.stringify({ username: input.username, password: input.value })
+        : input.value;
+    const envelope = encrypt(payload, dek, input.orgId);
+    const at = nowIso(this.now());
+    const itemId = `itm_${randomUUID()}`;
+    await this.store.insertItem({
+      id: itemId,
+      environmentId: env.id,
+      folderId,
+      kind: input.kind,
+      name,
+      last4: last4(input.value),
+      username: input.kind === "login" ? (input.username ?? null) : null,
+      allowedHostsJson: JSON.stringify(input.allowedHosts),
+      inject: input.inject,
+      iv: envelope.iv,
+      ciphertext: envelope.ciphertext,
+      tag: envelope.tag,
+      createdAt: at,
+      updatedAt: at,
+    });
+    await this.#audit(input.orgId, "store", input.actor, name, null);
+    return this.#publicItem(env.name, {
+      id: itemId,
+      name,
+      kind: input.kind,
+      last4: last4(input.value),
+      username: input.kind === "login" ? (input.username ?? null) : null,
+      inject: input.inject,
+      allowedHostsJson: JSON.stringify(input.allowedHosts),
+      folderId,
+    });
+  }
+
+  async rotateItem(input: {
+    orgId: string;
+    actor: string;
+    itemId: string;
+    value: string;
+  }): Promise<ItemPublic> {
+    const item = await this.store.getItem(input.itemId);
+    if (!item) throw new HttpError(404, "Unknown item");
+    const env = await this.store.getEnvironment(item.environmentId);
+    if (!env) throw new HttpError(404, "Unknown environment");
+    await this.#assertItemOrg(input.orgId, env.vaultId);
+    if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
+    const dek = await this.dekForOrg(input.orgId);
+    const payload =
+      item.kind === "login"
+        ? JSON.stringify({ username: item.username, password: input.value })
+        : input.value;
+    const envelope = encrypt(payload, dek, input.orgId);
+    const at = nowIso(this.now());
+    await this.store.updateItemEnvelope(item.id, {
+      iv: envelope.iv,
+      ciphertext: envelope.ciphertext,
+      tag: envelope.tag,
+      last4: last4(input.value),
+      updatedAt: at,
+    });
+    await this.#audit(input.orgId, "rotate", input.actor, item.name, null);
+    const next = await this.store.getItem(item.id);
+    if (!next) throw new HttpError(500, "Rotate failed");
+    return this.#publicItem(env.name, next);
+  }
+
+  async deleteItem(orgId: string, actor: string, itemId: string): Promise<void> {
+    const item = await this.store.getItem(itemId);
+    if (!item) throw new HttpError(404, "Unknown item");
+    const env = await this.store.getEnvironment(item.environmentId);
+    if (!env) throw new HttpError(404, "Unknown environment");
+    await this.#assertItemOrg(orgId, env.vaultId);
+    await this.store.deleteItem(itemId);
+    await this.#audit(orgId, "delete", actor, item.name, null);
+  }
+
+  async listItems(orgId: string, environment: VaultEnvName): Promise<ItemPublic[]> {
+    const env = await this.envFor(orgId, environment);
+    const items = await this.store.listItems(env.id);
+    const pub = items.map((i) => this.#publicItem(env.name, i));
+    assertSafePublicObject("listItems", pub);
+    return pub;
+  }
+
+  async createTrustedClient(input: {
+    orgId: string;
+    name: string;
+    environment: VaultEnvName;
+  }): Promise<{ client: ClientRecord; plaintext: string }> {
+    this.#assertPlane(input.environment);
+    const plaintext = `avt_${randomBytes(24).toString("hex")}`;
+    const id = `cli_${randomUUID()}`;
+    const row: ClientRecord = {
+      id,
+      orgId: input.orgId,
+      kind: "trusted",
+      name: input.name,
+      hashedSecret: hashSecret(plaintext),
+      clerkOauthUserId: null,
+      environment: input.environment,
+    };
+    await this.store.insertClient(row);
+    return { client: row, plaintext };
+  }
+
+  async createModelClient(input: {
+    orgId: string;
+    name: string;
+    environment: VaultEnvName;
+    clerkOauthUserId?: string;
+  }): Promise<ClientRecord> {
+    this.#assertPlane(input.environment);
+    const row: ClientRecord = {
+      id: `cli_${randomUUID()}`,
+      orgId: input.orgId,
+      kind: "model",
+      name: input.name,
+      hashedSecret: null,
+      clerkOauthUserId: input.clerkOauthUserId ?? null,
+      environment: input.environment,
+    };
+    await this.store.insertClient(row);
+    return row;
+  }
+
+  async ensureModelClient(input: {
+    orgId: string;
+    name: string;
+    environment: VaultEnvName;
+    clerkOauthUserId: string;
+  }): Promise<ClientRecord> {
+    const clients = await this.store.listClients(input.orgId);
+    const existing = clients.find(
+      (c) => c.kind === "model" && c.clerkOauthUserId === input.clerkOauthUserId,
+    );
+    if (existing) return existing;
+    return this.createModelClient(input);
+  }
+
+  async lookupTrusted(orgId: string, token: string): Promise<ClientRecord | undefined> {
+    return this.store.getClientByHashedSecret(orgId, hashSecret(token));
+  }
+
+  async lookupTrustedToken(token: string): Promise<ClientRecord | undefined> {
+    return this.store.findClientByHashedSecret(hashSecret(token));
+  }
+
+  async requestGrant(input: {
+    orgId: string;
+    clientId: string;
+    itemName: string;
+    environment: VaultEnvName;
+    taskId?: string;
+    taskDescription?: string;
+    operatorEmail?: string;
+  }): Promise<{ grant: HostedGrantRecord; code?: string; notifyFailed?: boolean }> {
+    const client = await this.#clientInOrg(input.orgId, input.clientId);
+    if (client.environment !== input.environment) {
+      throw new HttpError(403, "Client cannot access this environment");
+    }
+    const env = await this.envFor(input.orgId, input.environment);
+    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    if (!item) throw new HttpError(404, "Unknown item");
+    const standing = await this.#standingFor(input.orgId, client.id, item);
+    const at = nowIso(this.now());
+    const grant: HostedGrantRecord = {
+      id: `grt_${randomUUID()}`,
+      orgId: input.orgId,
+      clientId: client.id,
+      itemId: item.id,
+      folderId: item.folderId,
+      environmentId: env.id,
+      policy: standing ? standing.kind : "prompt",
+      status: standing ? "active" : "pending",
+      expiresAt: null,
+      createdAt: at,
+      approvedAt: standing ? at : null,
+      consumedAt: null,
+      taskId: input.taskId ?? null,
+      taskDescription: input.taskDescription ?? null,
+    };
+    await this.store.insertGrant(grant);
+    await this.#audit(input.orgId, "request_grant", client.id, item.name, client.id);
+    if (standing) {
+      assertSafePublicObject("requestGrant", grant);
+      return { grant };
+    }
+    const code = String(randomInt(0, 100_000_000)).padStart(8, "0");
+    const salt = randomBytes(8).toString("hex");
+    await this.store.insertChallenge({
+      id: `chl_${randomUUID()}`,
+      grantId: grant.id,
+      codeHash: `${salt}:${hashCode(code, salt)}`,
+      expiresAt: new Date(this.now().getTime() + CODE_TTL_MS).toISOString(),
+      attempts: 0,
+      kind: "code",
+    });
+    let magicToken: string | undefined;
+    if (this.approvalHmac) {
+      const exp = this.now().getTime() + MAGIC_TTL_MS;
+      magicToken = mintApprovalToken(this.approvalHmac, grant.id, exp);
+      await this.store.insertChallenge({
+        id: `chl_${randomUUID()}`,
+        grantId: grant.id,
+        codeHash: magicToken,
+        expiresAt: new Date(exp).toISOString(),
+        attempts: 0,
+        kind: "magic",
+      });
+    }
+    let notifyFailed = false;
+    if (this.sendEmail && input.operatorEmail) {
+      try {
+        const link = magicToken
+          ? `${this.publicUrl}/approve?token=${encodeURIComponent(magicToken)}`
+          : `${this.publicUrl}/`;
+        await this.sendEmail(
+          input.operatorEmail,
+          `Grant request ${item.name}`,
+          `<p>Client ${client.name} requested ${item.name} (••••${item.last4}).</p><p>Approve in inbox or use the code in the agent result.</p><p><a href="${link}">Approve</a></p>`,
+        );
+      } catch {
+        notifyFailed = true;
+        await this.#audit(input.orgId, "notify_failed", "system", item.name, client.id);
+      }
+    } else {
+      notifyFailed = true;
+      await this.#audit(input.orgId, "notify_failed", "system", item.name, client.id);
+    }
+    assertSafePublicObject("requestGrant", grant);
+    return { grant, code, notifyFailed };
+  }
+
+  async approveGrant(input: {
+    orgId: string;
+    grantId: string;
+    policy: GrantPolicy;
+    confirmName?: string;
+    role: MemberRole;
+    actor: string;
+  }): Promise<HostedGrantRecord> {
+    const grant = await this.store.getGrant(input.grantId);
+    if (!grant || grant.orgId !== input.orgId) throw new HttpError(404, "Unknown grant");
+    if (grant.status !== "pending") throw new HttpError(409, "Grant is not pending");
+    if (input.policy === "folder_standing" && input.role !== "owner") {
+      throw new HttpError(403, "Only owners may approve folder_standing");
+    }
+    const env = await this.store.getEnvironment(grant.environmentId);
+    if (!env) throw new HttpError(404, "Unknown environment");
+    if (input.policy === "folder_standing") {
+      const folder = grant.folderId ? await this.store.getFolder(grant.folderId) : undefined;
+      const expected = folder?.name ?? env.name;
+      if (input.confirmName !== expected) {
+        throw new HttpError(400, "confirm_name does not match folder or environment");
+      }
+    }
+    const at = nowIso(this.now());
+    const expiresAt =
+      input.policy === "session"
+        ? new Date(this.now().getTime() + SESSION_TTL_MS).toISOString()
+        : null;
+    const next: HostedGrantRecord = {
+      ...grant,
+      policy: input.policy,
+      status: "active",
+      approvedAt: at,
+      expiresAt,
+    };
+    await this.store.updateGrant(next);
+    if (input.policy === "item_standing" && grant.itemId) {
+      await this.store.insertPolicy({
+        id: `pol_${randomUUID()}`,
+        orgId: input.orgId,
+        clientId: grant.clientId,
+        itemId: grant.itemId,
+        folderId: null,
+        environmentId: grant.environmentId,
+        kind: "item_standing",
+        createdAt: at,
+      });
+    }
+    if (input.policy === "folder_standing") {
+      await this.store.insertPolicy({
+        id: `pol_${randomUUID()}`,
+        orgId: input.orgId,
+        clientId: grant.clientId,
+        itemId: null,
+        folderId: grant.folderId,
+        environmentId: grant.environmentId,
+        kind: "folder_standing",
+        createdAt: at,
+      });
+    }
+    const item = grant.itemId ? await this.store.getItem(grant.itemId) : undefined;
+    await this.#audit(input.orgId, "grant", input.actor, item?.name ?? null, grant.clientId);
+    assertSafePublicObject("approveGrant", next);
+    return next;
+  }
+
+  async approveByCode(orgId: string, actor: string, role: MemberRole, code: string): Promise<HostedGrantRecord> {
+    const pending = await this.store.listPendingGrants(orgId);
+    let sawExpiredMatch = false;
+    for (const grant of pending) {
+      const ch = await this.store.getChallengeByGrantKind(grant.id, "code");
+      if (!ch || ch.kind !== "code") continue;
+      const [salt, expected] = ch.codeHash.split(":");
+      if (!salt || !expected) continue;
+      const actual = hashCode(code, salt);
+      const ok =
+        actual.length === expected.length &&
+        timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+      if (!ok) {
+        if (new Date(ch.expiresAt).getTime() >= this.now().getTime() && ch.attempts < 5) {
+          ch.attempts += 1;
+          await this.store.updateChallenge(ch);
+        }
+        continue;
+      }
+      if (new Date(ch.expiresAt).getTime() < this.now().getTime()) {
+        sawExpiredMatch = true;
+        continue;
+      }
+      if (ch.attempts >= 5) continue;
+      await this.store.deleteChallenge(ch.id);
+      return this.approveGrant({
+        orgId,
+        grantId: grant.id,
+        policy: "prompt",
+        role,
+        actor,
+      });
+    }
+    if (sawExpiredMatch) throw new HttpError(410, "Expired code");
+    throw new HttpError(409, "Invalid or reused code");
+  }
+
+  async deleteOrg(orgId: string, actor: string, role: MemberRole, confirmName: string): Promise<void> {
+    if (role !== "owner") throw new HttpError(403, "Only owners may delete the org");
+    const org = await this.store.getOrg(orgId);
+    if (!org) throw new HttpError(404, "Unknown org");
+    const prod = await this.store.countProductionItems(orgId);
+    if (prod > 0 && confirmName !== org.name) {
+      throw new HttpError(400, "confirm_name must match the org name when production items exist");
+    }
+    logVaultEvent("delete_org", { orgId, actor });
+    await this.store.deleteOrg(orgId);
+  }
+
+  async revokeGrant(orgId: string, actor: string, grantId: string): Promise<HostedGrantRecord> {
+    const grant = await this.store.getGrant(grantId);
+    if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
+    const at = nowIso(this.now());
+    const next = { ...grant, status: "revoked" as const };
+    await this.store.updateGrant(next);
+    const policies = await this.store.listPoliciesForClient(orgId, grant.clientId);
+    for (const p of policies) {
+      if (grant.itemId && p.itemId === grant.itemId) await this.store.deletePolicy(p.id);
+      if (p.kind === "folder_standing" && p.environmentId === grant.environmentId) {
+        if (p.folderId === grant.folderId) await this.store.deletePolicy(p.id);
+      }
+    }
+    const item = grant.itemId ? await this.store.getItem(grant.itemId) : undefined;
+    await this.#audit(orgId, "revoke", actor, item?.name ?? null, grant.clientId);
+    return next;
+  }
+
+  async inbox(orgId: string): Promise<HostedGrantRecord[]> {
+    return this.store.listPendingGrants(orgId);
+  }
+
+  async listClientGrants(orgId: string, clientId: string): Promise<HostedGrantRecord[]> {
+    const all = await this.store.listGrants(orgId);
+    return all.filter((g) => g.clientId === clientId);
+  }
+
+  async resolveTrusted(input: {
+    orgId: string;
+    clientId: string;
+    itemName: string;
+    environment: VaultEnvName;
+  }): Promise<{ username: string | null; value: string; inject: string; name: string }> {
+    const client = await this.#clientInOrg(input.orgId, input.clientId);
+    if (client.kind !== "trusted") {
+      throw new HttpError(403, "model tokens cannot resolve");
+    }
+    if (client.environment !== input.environment) {
+      throw new HttpError(403, "Client cannot access this environment");
+    }
+    const env = await this.envFor(input.orgId, input.environment);
+    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    if (!item) throw new HttpError(404, "Unknown item");
+    await this.consumeActiveGrant(input.orgId, client.id, item.id);
+    const decrypted = await this.decryptItem(input.orgId, item.id);
+    return {
+      username: decrypted.username,
+      value: decrypted.secret,
+      inject: decrypted.inject,
+      name: decrypted.name,
+    };
+  }
+
+  async prepareConnector(input: {
+    orgId: string;
+    clientId: string;
+    itemName: string;
+    environment: VaultEnvName;
+  }): Promise<{
+    secret: string;
+    username: string | null;
+    last4: string;
+    inject: string;
+    allowedHosts: string[];
+    name: string;
+    kind: ItemKind;
+  }> {
+    const client = await this.#clientInOrg(input.orgId, input.clientId);
+    if (client.environment !== input.environment) {
+      throw new HttpError(403, "Client cannot access this environment");
+    }
+    const env = await this.envFor(input.orgId, input.environment);
+    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    if (!item) throw new HttpError(404, "Unknown item");
+    await this.consumeActiveGrant(input.orgId, client.id, item.id);
+    return this.decryptItem(input.orgId, item.id);
+  }
+
+  async approveMagic(orgId: string, actor: string, role: MemberRole, token: string): Promise<HostedGrantRecord> {
+    if (!this.approvalHmac) throw new HttpError(500, "Magic links are not configured");
+    const grantId = verifyApprovalToken(this.approvalHmac, token, this.now().getTime());
+    const grant = await this.store.getGrant(grantId);
+    if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
+    const pending = await this.store.listPendingGrants(orgId);
+    const still = pending.find((g) => g.id === grantId);
+    if (!still) throw new HttpError(410, "Expired link");
+    const magic = await this.store.getChallengeByGrantKind(grantId, "magic");
+    if (!magic || magic.codeHash !== token) throw new HttpError(410, "Expired link");
+    await this.store.deleteChallenge(magic.id);
+    return this.approveGrant({ orgId, grantId, policy: "prompt", role, actor });
+  }
+
+  async consumeActiveGrant(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord> {
+    const grants = await this.store.listGrants(orgId);
+    const at = this.now();
+    const match = grants.find((g) => {
+      if (g.clientId !== clientId || g.itemId !== itemId) return false;
+      if (g.status !== "active") return false;
+      if (g.expiresAt && new Date(g.expiresAt).getTime() < at.getTime()) return false;
+      return true;
+    });
+    if (!match) throw new HttpError(403, "inject_denied");
+    if (match.policy === "prompt") {
+      const ok = await this.store.consumeGrant(match.id, nowIso(at));
+      if (!ok) throw new HttpError(403, "inject_denied");
+      return { ...match, status: "consumed", consumedAt: nowIso(at) };
+    }
+    return match;
+  }
+
+  async decryptItem(orgId: string, itemId: string): Promise<{ secret: string; username: string | null; last4: string; inject: string; allowedHosts: string[]; name: string; kind: ItemKind }> {
+    const item = await this.store.getItem(itemId);
+    if (!item) throw new HttpError(404, "Unknown item");
+    const dek = await this.dekForOrg(orgId);
+    const plain = decrypt(
+      { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag },
+      dek,
+      orgId,
+    );
+    if (item.kind === "login") {
+      const parsed: unknown = JSON.parse(plain);
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        typeof (parsed as { password?: unknown }).password !== "string"
+      ) {
+        throw new HttpError(500, "Corrupt login item");
+      }
+      const password = (parsed as { password: string }).password;
+      return {
+        secret: password,
+        username: item.username,
+        last4: item.last4,
+        inject: item.inject,
+        allowedHosts: parseHosts(item.allowedHostsJson),
+        name: item.name,
+        kind: item.kind,
+      };
+    }
+    return {
+      secret: plain,
+      username: null,
+      last4: item.last4,
+      inject: item.inject,
+      allowedHosts: parseHosts(item.allowedHostsJson),
+      name: item.name,
+      kind: item.kind,
+    };
+  }
+
+  #assertHosts(hosts: string[]): void {
+    if (hosts.length === 0) throw new HttpError(400, "allowed_hosts is required");
+    for (const h of hosts) {
+      assertAllowedHostname(h, [h]);
+    }
+  }
+
+  async #assertItemOrg(orgId: string, vaultId: string): Promise<void> {
+    const vaults = await this.store.listVaults(orgId);
+    if (!vaults.some((v) => v.id === vaultId)) throw new HttpError(404, "Unknown item");
+  }
+
+  async #clientInOrg(orgId: string, clientId: string): Promise<ClientRecord> {
+    const c = await this.store.getClient(clientId);
+    if (!c || c.orgId !== orgId) throw new HttpError(404, "Unknown client");
+    return c;
+  }
+
+  async #standingFor(
+    orgId: string,
+    clientId: string,
+    item: { id: string; folderId: string | null; environmentId: string },
+  ) {
+    const itemPol = await this.store.findItemPolicy(orgId, clientId, item.id);
+    if (itemPol) return itemPol;
+    return this.store.findFolderPolicy(orgId, clientId, item.folderId, item.environmentId);
+  }
+
+  #publicItem(environment: VaultEnvName, item: {
+    id: string;
+    name: string;
+    kind: ItemKind;
+    last4: string;
+    username: string | null;
+    inject: string;
+    allowedHostsJson: string;
+    folderId: string | null;
+  }): ItemPublic {
+    const pub: ItemPublic = {
+      id: item.id,
+      name: item.name,
+      kind: item.kind,
+      last4: item.last4,
+      username: item.username,
+      environment,
+      inject: item.inject,
+      allowedHosts: parseHosts(item.allowedHostsJson),
+      folderId: item.folderId,
+    };
+    assertSafePublicObject("item", pub);
+    return pub;
+  }
+
+  async #audit(
+    orgId: string,
+    action: string,
+    actor: string,
+    itemName: string | null,
+    clientId: string | null,
+  ): Promise<void> {
+    await this.store.insertAudit({
+      id: `aud_${randomUUID()}`,
+      orgId,
+      action,
+      actor,
+      itemName,
+      clientId,
+      at: nowIso(this.now()),
+    });
+  }
+}
+
+export function mintApprovalToken(hmac: Buffer, grantId: string, expMs: number): string {
+  const body = Buffer.from(JSON.stringify({ grantId, exp: expMs })).toString("base64url");
+  const sig = createHmac("sha256", hmac).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+export function verifyApprovalToken(hmac: Buffer, token: string, nowMs: number): string {
+  const [body, sig] = token.split(".");
+  if (!body || !sig) throw new HttpError(410, "Invalid link");
+  const expected = createHmac("sha256", hmac).update(body).digest("base64url");
+  if (expected.length !== sig.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) {
+    throw new HttpError(410, "Invalid link");
+  }
+  const parsed: unknown = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  if (!parsed || typeof parsed !== "object") throw new HttpError(410, "Invalid link");
+  const rec = parsed as { grantId?: unknown; exp?: unknown };
+  if (typeof rec.grantId !== "string" || typeof rec.exp !== "number") {
+    throw new HttpError(410, "Invalid link");
+  }
+  if (rec.exp < nowMs) throw new HttpError(410, "Expired link");
+  return rec.grantId;
+}
+
+export { MAGIC_TTL_MS };

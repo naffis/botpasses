@@ -1,0 +1,11 @@
+---
+description: Never hand-merge dependency lockfiles. Resolve the manifest, then regenerate the lockfile.
+alwaysApply: false
+---
+
+# Lockfile conflicts
+
+- Never resolve merge conflicts inside a lockfile (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Gemfile.lock`, `poetry.lock`, `Cargo.lock`) by hand.
+- Resolve conflicts in the manifest (`package.json`, `Gemfile`, etc.) first, then regenerate the lockfile with the package manager (`pnpm install`, `bundle install`, …).
+- Commit the regenerated lockfile as-is; don't cherry-pick lines.
+- Verify install succeeds and the app builds before committing.

@@ -1,0 +1,56 @@
+---
+description: >
+  Don't use regex or keyword lists to classify meaning; use an LLM. Regex is structural, LLMs
+  are semantic. Applies when code classifies user-generated text, detects intent, infers a
+  category, or routes on text meaning. Triggers on "keyword list", "word list", "pattern
+  match", "detect if", "classify by regex", "infer from text", "is it a ...", "contains ...".
+alwaysApply: false
+---
+
+# No regex or keyword lists for semantic classification
+
+**Regex is structural. LLMs are semantic. Use each for what it is.**
+
+Regex may only be used when the pattern is:
+
+1. **Format validation** — URL syntax, UUID, email, phone, MIME type, a key format.
+2. **Fixed finite syntax the system itself produces** — extracting a number from `item-3`,
+   splitting `16:9` into width/height, matching a literal marker your code emits.
+3. **Whitespace / tokenization** — splitting on whitespace, stripping punctuation.
+4. **Capitalization shape** — detecting if a string *starts* uppercase (structural).
+
+Regex must NOT be used when the decision requires understanding what words *mean*:
+
+| Wrong | Right |
+| --- | --- |
+| Contains "urgent"/"asap" to detect priority | LLM classifier: "What priority is this request?" |
+| Word list to classify a subject type | LLM classifier: "What type of thing is this?" |
+| Regex on a message to detect "retry" intent | An intent classifier (or a structured field from upstream) |
+| Keyword list for industry/category detection | LLM classifier on the text |
+
+## The test
+
+Before writing a regex or word/string set for classification, ask:
+
+1. **Could someone express the same meaning in a way that wouldn't match?** If yes -> LLM.
+2. **Is the set of possible inputs bounded and system-controlled?** If no -> LLM.
+3. **Would another language break the pattern?** If yes -> LLM.
+4. **Am I inferring intent or meaning from prose?** If yes -> LLM.
+
+## The pattern
+
+When you'd have written a regex/word list for classification, emit a **structured field from
+the upstream producer** and read it deterministically downstream. If no upstream field exists,
+call a small/cheap model to classify and validate its output against an enum, failing safe on
+error. A regex that scrapes an LLM's free-text OUTPUT to recover a fact the model should have
+emitted structurally is the worst case — it can only fire when the model already surfaced the
+fact in prose, which is exactly when it is least reliable.
+
+## Acceptable exceptions (structural, not semantic)
+
+```ts
+const URL_RE = /https?:\/\/[^\s]+/;            // URL format — structural
+const n = parseInt(id.replace(/^item-/, ""));  // fixed system format
+if (!/^[A-Z]/.test(name)) return false;        // capitalization shape
+const VALID = new Set(["a", "b", "c"]);         // finite, system-produced, validated enum
+```

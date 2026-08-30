@@ -1,9 +1,10 @@
+import { MCP_INSTRUCTIONS_LOCAL, MCP_SERVER_NAME } from "./brand.ts";
 import { assertSafePublicObject } from "./redact.ts";
 import type { Vault } from "./vault.ts";
 import type { GrantScope } from "./types.ts";
 
 export const MCP_SERVER_INFO = {
-  name: "agent-vault",
+  name: MCP_SERVER_NAME,
   version: "0.1.0",
 } as const;
 
@@ -13,7 +14,6 @@ export const MCP_TOOL_NAMES = [
   "list_secrets",
   "request_grant",
   "list_grants",
-  "revoke_grant",
 ] as const;
 
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
@@ -84,19 +84,6 @@ export const MCP_TOOLS: McpToolDefinition[] = [
       additionalProperties: false,
     },
   },
-  {
-    name: "revoke_grant",
-    description:
-      "Revoke a grant by id. Stops future injects. Never returns the secret value.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        grant_id: { type: "string" },
-      },
-      required: ["grant_id"],
-      additionalProperties: false,
-    },
-  },
 ];
 
 export type McpCallResult = {
@@ -118,8 +105,8 @@ export function callMcpTool(
   name: string,
   args: Record<string, unknown> = {},
 ): McpCallResult {
-  if (FORBIDDEN_TOOL_NAMES.includes(name) || name.includes("value") || name.includes("decrypt")) {
-    return fail(`Tool ${name} is not available. Vault MCP never returns secret values.`);
+  if (FORBIDDEN_TOOL_NAMES.includes(name) || name.includes("value") || name.includes("decrypt") || name === "revoke_grant") {
+    return fail(`Tool ${name} is not available. Vault MCP never returns secret values. Revoke is operator-only.`);
   }
   try {
     const payload = dispatch(vault, name, args);
@@ -161,11 +148,9 @@ function dispatch(vault: Vault, name: string, args: Record<string, unknown>): un
       }
       return { grants: grants.map(publicGrant) };
     }
-    case "revoke_grant":
-      return { grants: vault.revokeGrant({ grantId: str(args, "grant_id") }).map(publicGrant) };
     default:
       throw new Error(
-        `Unknown tool ${name}. Available: ${MCP_TOOL_NAMES.join(", ")}. There is no tool that reads secret values.`,
+        `Unknown tool ${name}. Available: ${MCP_TOOL_NAMES.join(", ")}. There is no tool that reads secret values. Revoke is operator-only.`,
       );
   }
 }
@@ -243,8 +228,7 @@ export function handleMcpRpc(vault: Vault, req: JsonRpcRequest): JsonRpcResponse
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: MCP_SERVER_INFO,
-          instructions:
-            "Agent grant vault. Tools return names and grant status only. Secret values are injected into tool processes, never into this conversation.",
+          instructions: MCP_INSTRUCTIONS_LOCAL,
         });
       case "ping":
         return ok(id, {});

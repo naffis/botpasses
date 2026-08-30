@@ -1,0 +1,38 @@
+---
+description: Parallel agents share one local trunk working tree — no per-agent branches, worktrees, or stashes
+alwaysApply: true
+---
+
+# Shared working tree (parallel agents)
+
+Multiple agents run in parallel against **one** local checkout of the integration trunk
+(name it in `AGENTS.md`, e.g. `dev` or `main`). They do not get private branches or
+worktrees unless the user explicitly asks.
+
+## Operating model
+
+- Every agent reads and writes the same working tree.
+- Edits stay unstaged until the user asks to commit.
+- When the user asks to commit, land **all** dirty eligible files — including work from
+  other chats/agents — via `committing-on-shared-trunk`.
+- Coordination is social (don't wipe, don't stash, don't branch), not isolation via git.
+
+## Never do (isolation anti-patterns)
+
+| Urge | Forbidden response |
+| --- | --- |
+| "Clean tree for pull" | `git stash`, move files to `/tmp` |
+| "Keep my commit focused" | Stage only this session's files |
+| "Avoid collisions" | `git checkout -b …`, `git worktree add …` |
+| "Undo my mistakes" | `git reset --hard`, `git clean -fd`, restore whole tree |
+
+## When files collide
+
+If another agent touched the same files or the tree looks mid-edit / conflicted: **stop,
+leave the tree intact, ask the user**. Do not resolve by stashing or branching.
+
+## Precedence
+
+When this rule is installed, it wins over skills that default to per-agent worktrees
+(`orchestrating-parallel-agents`, `clear-the-queue`, `build-as-graph`, best-of-N) unless
+the user explicitly requests isolation. Disjoint allowlists required for parallel edits.
