@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.vault/
+*.sqlite
+*.sqlite-journal
+*.db
+master.key
+coverage/
+.DS_Store
+npm-debug.log*
