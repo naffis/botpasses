@@ -1,7 +1,6 @@
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { stdin as input } from "node:process";
 import { maskLast4 } from "./ids.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
@@ -326,14 +325,11 @@ function splitRun(argv: string[]): { vaultArgs: string[]; childArgs: string[] } 
 
 async function readStdin(): Promise<string> {
   if (input.isTTY) return "";
-  const chunks: string[] = [];
-  const rl = createInterface({ input, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) chunks.push(line);
-  } finally {
-    rl.close();
+  const chunks: Buffer[] = [];
+  for await (const chunk of input) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
   }
-  return chunks.join("\n");
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 const invoked = process.argv[1] ? resolve(process.argv[1]) : "";

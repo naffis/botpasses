@@ -41,15 +41,15 @@ export function operatorHtml(): string {
     <p id="flash"></p>
 
     <h2>Store a named secret</h2>
-    <form id="store">
+    <form id="store" novalidate>
       <div class="row">
         <div>
           <label for="name">Name</label>
-          <input id="name" name="name" placeholder="STRIPE_KEY" autocomplete="off" required />
+          <input id="name" name="name" placeholder="STRIPE_KEY" autocomplete="off" />
         </div>
         <div>
           <label for="value">Value (cleared after submit)</label>
-          <input id="value" name="value" type="password" autocomplete="off" required />
+          <input id="value" name="value" type="password" autocomplete="new-password" />
         </div>
       </div>
       <p><button class="primary" type="submit">Store encrypted</button></p>
@@ -62,23 +62,23 @@ export function operatorHtml(): string {
     </table>
 
     <h2>Approve a grant</h2>
-    <form id="grant">
+    <form id="grant" novalidate>
       <div class="row">
         <div>
           <label for="g-secret">Secret</label>
-          <input id="g-secret" required placeholder="STRIPE_KEY" />
+          <input id="g-secret" name="secretName" placeholder="STRIPE_KEY" autocomplete="off" />
         </div>
         <div>
           <label for="g-agent">Agent</label>
-          <input id="g-agent" required placeholder="invoicer" />
+          <input id="g-agent" name="agentId" placeholder="invoicer" autocomplete="off" />
         </div>
         <div>
           <label for="g-tool">Tool</label>
-          <input id="g-tool" required placeholder="stripe" />
+          <input id="g-tool" name="toolId" placeholder="stripe" autocomplete="off" />
         </div>
         <div>
           <label for="g-scope">Scope</label>
-          <select id="g-scope">
+          <select id="g-scope" name="scope">
             <option value="once">once</option>
             <option value="session">session</option>
           </select>
@@ -132,8 +132,9 @@ export function operatorHtml(): string {
     }
     document.getElementById("store").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const name = document.getElementById("name").value;
+      const name = document.getElementById("name").value.trim();
       const value = document.getElementById("value").value;
+      if (!name || !value) { flash("Name and value are required", false); return; }
       document.getElementById("value").value = "";
       try {
         const res = await j("/api/secrets", {
@@ -147,14 +148,21 @@ export function operatorHtml(): string {
     });
     document.getElementById("grant").addEventListener("submit", async (e) => {
       e.preventDefault();
+      const secretName = document.getElementById("g-secret").value.trim();
+      const agentId = document.getElementById("g-agent").value.trim();
+      const toolId = document.getElementById("g-tool").value.trim();
+      if (!secretName || !agentId || !toolId) {
+        flash("Secret, agent, and tool are required to approve a grant", false);
+        return;
+      }
       try {
         const res = await j("/api/grants", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            secretName: document.getElementById("g-secret").value,
-            agentId: document.getElementById("g-agent").value,
-            toolId: document.getElementById("g-tool").value,
+            secretName,
+            agentId,
+            toolId,
             scope: document.getElementById("g-scope").value,
           }),
         });

@@ -14,7 +14,7 @@ test("HTTP operator API never returns secret values", async () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "STRIPE_KEY", value: CANARY }),
     });
-    const storedBody = await stored.json();
+    const storedBody = (await stored.json()) as { secret: { last4: string } };
     assert.equal(stored.ok, true);
     assert.equal(storedBody.secret.last4, CANARY.slice(-4));
     assert.ok(!JSON.stringify(storedBody).includes(CANARY));
@@ -37,7 +37,7 @@ test("HTTP operator API never returns secret values", async () => {
         scope: "once",
       }),
     });
-    const grantBody = await granted.json();
+    const grantBody = (await granted.json()) as { grant: { status: string } };
     assert.equal(grantBody.grant.status, "active");
     assert.ok(!JSON.stringify(grantBody).includes(CANARY));
 
@@ -54,9 +54,11 @@ test("HTTP operator API never returns secret values", async () => {
     const mcpBody = await mcp.json();
     assert.ok(!JSON.stringify(mcpBody).includes(CANARY));
 
-    const audit = await (await fetch(`${base}/api/audit`)).json();
+    const audit = (await (await fetch(`${base}/api/audit`)).json()) as {
+      audit: { action: string }[];
+    };
     assert.ok(!JSON.stringify(audit).includes(CANARY));
-    assert.ok(audit.audit.some((row: { action: string }) => row.action === "grant"));
+    assert.ok(audit.audit.some((row) => row.action === "grant"));
   } finally {
     await http.close();
     vault.close();

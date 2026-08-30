@@ -54,7 +54,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   {
     name: "request_grant",
     description:
-      "Ask the operator to grant a named secret to this agent for a named tool. Creates a pending grant. Does not return the secret value. The operator must approve via `vault grant` or the operator console.",
+      "Ask the operator to grant a named secret to this agent for a named tool. Creates a pending grant. Never returns the secret value. The operator must approve via `vault grant` or the operator console.",
     inputSchema: {
       type: "object",
       properties: {
@@ -87,7 +87,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   {
     name: "revoke_grant",
     description:
-      "Revoke a grant by id. Stops future injects. Does not return the secret value.",
+      "Revoke a grant by id. Stops future injects. Never returns the secret value.",
     inputSchema: {
       type: "object",
       properties: {
