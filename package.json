@@ -1,0 +1,29 @@
+{
+  "name": "agent-vault",
+  "version": "0.1.0",
+  "description": "Agent grant vault: named secrets injected into tools, never into the model or transcript.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "bin": {
+    "vault": "./bin/vault.js"
+  },
+  "scripts": {
+    "vault": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=spec test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "agent",
+    "vault",
+    "grants",
+    "mcp",
+    "secrets"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2"
+  }
+}
