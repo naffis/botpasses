@@ -1,0 +1,13 @@
+---
+description: In-code docs (docstrings, JSDoc, public API comments) reflect current behavior; comments explain why, not what.
+globs: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.rb", "**/*.go", "**/*.rs", "**/*.java"]
+alwaysApply: false
+---
+
+# Docstrings stay current
+
+- When you change a function's signature, parameters, return, errors, or behavior, update its docstring/JSDoc/comment in the same edit. A stale docstring is a lie the next reader trusts.
+- Document the public surface (exported functions, classes, modules) with what it does, inputs/outputs, and non-obvious constraints — skip the obvious.
+- Comments explain **why** (intent, trade-off, gotcha), not **what** the code already says. Delete comments that just narrate the code.
+- Don't leave outdated TODO/FIXME or commented-out code; resolve, ticket, or remove it.
+- Keep doc examples in comments runnable and correct; update them with the code.

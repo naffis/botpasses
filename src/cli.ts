@@ -2,11 +2,14 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { stdin as input } from "node:process";
+import { DEFAULT_HOME_DIRNAME, PRODUCT_NAME, STAGING_ORIGIN } from "./brand.ts";
 import { maskLast4 } from "./ids.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
 import { defaultHome, initVaultHome, loadMasterKey, Vault } from "./vault.ts";
 import type { GrantScope } from "./types.ts";
+import { startHosted } from "./hosted/main.ts";
+import { runRemoteMcpStdio } from "./hosted/mcp-stdio-remote.ts";
 
 export type Io = {
   log: (...args: unknown[]) => void;
@@ -20,7 +23,7 @@ const defaultIo: Io = {
   readStdin: readStdin,
 };
 
-const USAGE = `Agent Grant Vault — named secrets for agents and tools, never for the model.
+const USAGE = `${PRODUCT_NAME} — named secrets for agents and tools, never for the model.
 
 Usage:
   vault init
@@ -32,13 +35,16 @@ Usage:
   vault revoke --secret NAME --agent AGENT --tool TOOL
   vault audit
   vault run --with NAME [--with NAME] --agent AGENT --tool TOOL -- COMMAND
-  vault serve [--host 127.0.0.1] [--port 8787]
-  vault mcp
+  vault serve [--host 127.0.0.1] [--port 8788]
+  vault login
+  vault mcp [--user-jwt JWT]
 
 Env:
   VAULT_MASTER_KEY   32-byte key as 64 hex chars (preferred) or base64
-  VAULT_HOME         data dir (default ~/.agent-vault)
+  VAULT_HOME         data dir (default ~/${DEFAULT_HOME_DIRNAME})
   VAULT_ACTOR        audit actor (default $USER)
+  VAULT_PUBLIC_URL   hosted origin for vault mcp --user-jwt
+  VAULT_USER_JWT     Clerk session JWT (never the Clerk secret)
 `;
 
 export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Promise<number> {
@@ -64,8 +70,10 @@ export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Pr
       return cmdRun(rest, io);
     case "serve":
       return cmdServe(rest, io);
+    case "login":
+      return cmdLogin(io);
     case "mcp":
-      return cmdMcp();
+      return cmdMcp(rest, io);
     default:
       io.error(`Unknown command: ${command}`);
       io.error(USAGE);
@@ -274,11 +282,15 @@ async function cmdRun(argv: string[], io: Io): Promise<number> {
 }
 
 async function cmdServe(argv: string[], io: Io): Promise<number> {
+  if (process.env.VAULT_MODE === "hosted") {
+    await startHosted();
+    return 0;
+  }
   const { values } = parseArgs({
     args: argv,
     options: {
       host: { type: "string", default: "127.0.0.1" },
-      port: { type: "string", default: "8787" },
+      port: { type: "string", default: "8788" },
     },
     allowPositionals: false,
   });
@@ -286,7 +298,7 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   const port = Number(values.port);
   const http = createVaultServer({ vault, host: values.host, port });
   const addr = await http.listen();
-  io.error(`Agent grant vault listening on http://${addr.host}:${addr.port}`);
+  io.error(`${PRODUCT_NAME} listening on http://${addr.host}:${addr.port}`);
   io.error("Operator console shows names + last-4 only. MCP is POST /mcp. Bind is loopback by default.");
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -301,7 +313,38 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   return 0;
 }
 
-async function cmdMcp(): Promise<number> {
+function cmdLogin(io: Io): number {
+  const url = process.env.VAULT_PUBLIC_URL ?? STAGING_ORIGIN;
+  io.log("Hosted MCP stdio uses your Clerk session JWT, never CLERK_SECRET_KEY.");
+  io.log(`1. Sign in at ${url} (Clerk Organizations must be enabled).`);
+  io.log("2. Copy the session JWT from the Clerk dashboard session or browser cookie.");
+  io.log("3. Export it and start stdio MCP:");
+  io.log("     export VAULT_PUBLIC_URL=" + url);
+  io.log("     export VAULT_USER_JWT=eyJ...");
+  io.log("     vault mcp --user-jwt");
+  io.log("Do not put the Clerk secret in mcp.json.");
+  return 0;
+}
+
+async function cmdMcp(argv: string[], io: Io): Promise<number> {
+  const jwtIdx = argv.indexOf("--user-jwt");
+  const wantsJwt = jwtIdx >= 0 || Boolean(process.env.VAULT_USER_JWT);
+  if (wantsJwt) {
+    const next = jwtIdx >= 0 ? argv[jwtIdx + 1] : undefined;
+    const token =
+      next && !next.startsWith("-") ? next : process.env.VAULT_USER_JWT;
+    const publicUrl = process.env.VAULT_PUBLIC_URL;
+    if (!publicUrl) {
+      io.error("VAULT_PUBLIC_URL is required for hosted stdio MCP.");
+      return 1;
+    }
+    if (!token) {
+      io.error("Pass --user-jwt <token> or set VAULT_USER_JWT. Run `vault login`.");
+      return 1;
+    }
+    await runRemoteMcpStdio({ publicUrl, userJwt: token });
+    return 0;
+  }
   const vault = open();
   try {
     await runMcpStdio(vault);

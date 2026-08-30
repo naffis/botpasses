@@ -1,0 +1,1158 @@
+{
+  "source": "github:naffis/loadout",
+  "ref": "registry-1.1.0",
+  "installed": {
+    "getting-started": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/getting-started",
+      "baseHash": "sha256:2f226af7353b125a020b8319f5bf0802c3316e59cd55fbd486c2320d4c7f87bd",
+      "localHash": "sha256:2f226af7353b125a020b8319f5bf0802c3316e59cd55fbd486c2320d4c7f87bd"
+    },
+    "deep-dive": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/deep-dive",
+      "baseHash": "sha256:96101cf118e9c0fd6d46cae45dd3e05f58017a84f69ca5ceb7e67d8ac966ac91",
+      "localHash": "sha256:96101cf118e9c0fd6d46cae45dd3e05f58017a84f69ca5ceb7e67d8ac966ac91"
+    },
+    "planning-a-change": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/planning-a-change",
+      "baseHash": "sha256:c5d9cf9744d4e5e6c32585c85c6784be1d9f73f4ce740b6ccc31340a6d146ca0",
+      "localHash": "sha256:c5d9cf9744d4e5e6c32585c85c6784be1d9f73f4ce740b6ccc31340a6d146ca0"
+    },
+    "create-plan": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/create-plan",
+      "baseHash": "sha256:71ad243e5c44539e2ab88f14f1187bc05eaaaf4ac01ba49088450b3d6874a566",
+      "localHash": "sha256:71ad243e5c44539e2ab88f14f1187bc05eaaaf4ac01ba49088450b3d6874a566"
+    },
+    "plan-checker": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/plan-checker.md",
+      "baseHash": "sha256:1c795cbbbcd0ccafa122afd1f0db32b54021197d5a484897f9691fb486329c58",
+      "localHash": "sha256:1c795cbbbcd0ccafa122afd1f0db32b54021197d5a484897f9691fb486329c58"
+    },
+    "review-plan": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/review-plan",
+      "baseHash": "sha256:8181c8c1c4afff851ee1ea1a2f080df1a0015abf11ae7d038d3f0ab8be6e4ec8",
+      "localHash": "sha256:8181c8c1c4afff851ee1ea1a2f080df1a0015abf11ae7d038d3f0ab8be6e4ec8"
+    },
+    "review-build": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/review-build",
+      "baseHash": "sha256:ff70a17bd6345d6faaca119c5a6e75d29aca859fafd666652a629a28b51b7bf9",
+      "localHash": "sha256:ff70a17bd6345d6faaca119c5a6e75d29aca859fafd666652a629a28b51b7bf9"
+    },
+    "post-flight": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/post-flight",
+      "baseHash": "sha256:c948e6bca2b34bc94c1a2c045fc15c1619d19454365334434c0ead23bfd58a36",
+      "localHash": "sha256:c948e6bca2b34bc94c1a2c045fc15c1619d19454365334434c0ead23bfd58a36"
+    },
+    "do-it-right": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/do-it-right",
+      "baseHash": "sha256:76bd6a50afc214301812d758f2191d48bd5cc8faf4f3a10d04062e239c193408",
+      "localHash": "sha256:76bd6a50afc214301812d758f2191d48bd5cc8faf4f3a10d04062e239c193408"
+    },
+    "flight-checker": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/flight-checker.md",
+      "baseHash": "sha256:ed4ea4fadb1a0b2651454b7f615509a79a27d360b3078a9837d2f6e7a19a241a",
+      "localHash": "sha256:ed4ea4fadb1a0b2651454b7f615509a79a27d360b3078a9837d2f6e7a19a241a"
+    },
+    "deep-flight-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/deep-flight-rule.mdc",
+      "baseHash": "sha256:fb9469fd7b1eb46149ceda647f530d60e3d2b3e7f81db06f10e55fb04b23df67",
+      "localHash": "sha256:fb9469fd7b1eb46149ceda647f530d60e3d2b3e7f81db06f10e55fb04b23df67"
+    },
+    "deep-flight-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/deep-flight.md",
+      "baseHash": "sha256:146967fec2d0b8dc97a3439c0c4210192b880c5efb1d31b1aee6968c48c62c43",
+      "localHash": "sha256:146967fec2d0b8dc97a3439c0c4210192b880c5efb1d31b1aee6968c48c62c43"
+    },
+    "deep-flight": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/deep-flight",
+      "baseHash": "sha256:17d79a3d073150cc50ac3a767a315e8ee676fa6ba5afdfa50daf01666542af67",
+      "localHash": "sha256:17d79a3d073150cc50ac3a767a315e8ee676fa6ba5afdfa50daf01666542af67"
+    },
+    "test-driven": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/test-driven",
+      "baseHash": "sha256:e18cc479447d62fcbe1931681113b76dd2be0cd45c668e46937e6bd018724c89",
+      "localHash": "sha256:e18cc479447d62fcbe1931681113b76dd2be0cd45c668e46937e6bd018724c89"
+    },
+    "simplifying-code": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/simplifying-code",
+      "baseHash": "sha256:fdbf6949fcc4a07e4ad0fedc4b6f3e477dcbbe02f363725699067345c0575d0b",
+      "localHash": "sha256:fdbf6949fcc4a07e4ad0fedc4b6f3e477dcbbe02f363725699067345c0575d0b"
+    },
+    "session-handoff": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/session-handoff",
+      "baseHash": "sha256:2166057ca68b273100bc9c0002330885b158257c36e728f310d1553c63f0eda0",
+      "localHash": "sha256:2166057ca68b273100bc9c0002330885b158257c36e728f310d1553c63f0eda0"
+    },
+    "complete-the-build": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/complete-the-build",
+      "baseHash": "sha256:fdc5f33126a546141c4cb91d389aa49c1f043b307ee90520598cc779479b7145",
+      "localHash": "sha256:fdc5f33126a546141c4cb91d389aa49c1f043b307ee90520598cc779479b7145"
+    },
+    "reviewing-and-shipping": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/reviewing-and-shipping",
+      "baseHash": "sha256:ebcdc9b562e0f676f63db51716c3604fc013ac2f2c8c62942a50b3c57a7fcda6",
+      "localHash": "sha256:ebcdc9b562e0f676f63db51716c3604fc013ac2f2c8c62942a50b3c57a7fcda6"
+    },
+    "writing-commit-messages": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/writing-commit-messages",
+      "baseHash": "sha256:2ae239cea73becffb0ed431e903c275dbde0e4cb52b7c84e7a4b31d3b4d46c6a",
+      "localHash": "sha256:2ae239cea73becffb0ed431e903c275dbde0e4cb52b7c84e7a4b31d3b4d46c6a"
+    },
+    "committing-on-shared-trunk": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/committing-on-shared-trunk",
+      "baseHash": "sha256:64b7c289ae8ca869b8f77383dd60b507ac2ec2bd63f1f17876fe59952d460a3a",
+      "localHash": "sha256:64b7c289ae8ca869b8f77383dd60b507ac2ec2bd63f1f17876fe59952d460a3a"
+    },
+    "opening-a-pr": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/opening-a-pr",
+      "baseHash": "sha256:47e5c4737a4cf449ab9f98b184920d77d6300467f99ffc93d7ea80b6c04d4ef5",
+      "localHash": "sha256:47e5c4737a4cf449ab9f98b184920d77d6300467f99ffc93d7ea80b6c04d4ef5"
+    },
+    "debugging-an-issue": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/debugging-an-issue",
+      "baseHash": "sha256:19266059a2ade099fc688e0b709cc8892995c033cdb84ea2fa2ad1f986b7de4d",
+      "localHash": "sha256:19266059a2ade099fc688e0b709cc8892995c033cdb84ea2fa2ad1f986b7de4d"
+    },
+    "fixing-ci": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/fixing-ci",
+      "baseHash": "sha256:0ae3f638d5add646858dcc4b48b82584958688de9c29e9f7eb98a6385cb5a056",
+      "localHash": "sha256:0ae3f638d5add646858dcc4b48b82584958688de9c29e9f7eb98a6385cb5a056"
+    },
+    "triaging-flaky-tests": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/triaging-flaky-tests",
+      "baseHash": "sha256:704d22e43b85d8d4cd44faac7ac1ea469ae9288ce710c60f92f0e116c079e270",
+      "localHash": "sha256:704d22e43b85d8d4cd44faac7ac1ea469ae9288ce710c60f92f0e116c079e270"
+    },
+    "rebasing-a-branch": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/rebasing-a-branch",
+      "baseHash": "sha256:f95f5da9499b360b588d8991e0cd2469c71b37d984626d0937d0fdd761d7311c",
+      "localHash": "sha256:f95f5da9499b360b588d8991e0cd2469c71b37d984626d0937d0fdd761d7311c"
+    },
+    "reviewing-dependencies": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/reviewing-dependencies",
+      "baseHash": "sha256:9f39c79ae7cca30120d02e1cd897ca973091b1ca4cda2e9054cebcac59874163",
+      "localHash": "sha256:9f39c79ae7cca30120d02e1cd897ca973091b1ca4cda2e9054cebcac59874163"
+    },
+    "deslopping": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/deslopping",
+      "baseHash": "sha256:6074e7915be48ed26d7b799c75150e11c5042603ec8901e5c47a8e7f856a46f8",
+      "localHash": "sha256:6074e7915be48ed26d7b799c75150e11c5042603ec8901e5c47a8e7f856a46f8"
+    },
+    "writing-a-migration": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/writing-a-migration",
+      "baseHash": "sha256:5fbb7ca4eab9c79bcc42d5e4aa5c4ce3e40bd43d85c367a96f7a65efc9031bd7",
+      "localHash": "sha256:5fbb7ca4eab9c79bcc42d5e4aa5c4ce3e40bd43d85c367a96f7a65efc9031bd7"
+    },
+    "reviewing-code-quality": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/reviewing-code-quality",
+      "baseHash": "sha256:d81854896613162c74a6c18ba68143b451473ce40757cd03003aa837a8b858c8",
+      "localHash": "sha256:d81854896613162c74a6c18ba68143b451473ce40757cd03003aa837a8b858c8"
+    },
+    "refactoring-code": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/refactoring-code",
+      "baseHash": "sha256:d02909474a2c308d7612576be45a2d0e0e4d8ad91d5f2f845693c80fa33059ed",
+      "localHash": "sha256:d02909474a2c308d7612576be45a2d0e0e4d8ad91d5f2f845693c80fa33059ed"
+    },
+    "updating-docs": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/updating-docs",
+      "baseHash": "sha256:aa22869959f1c5ed759770e8575f1858b079008565fe8c76647347552f02e115",
+      "localHash": "sha256:aa22869959f1c5ed759770e8575f1858b079008565fe8c76647347552f02e115"
+    },
+    "writing-an-adr": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/writing-an-adr",
+      "baseHash": "sha256:62f45ef32dfeb56ddef30a582913b2b4a9c854749fbebf43f68fb4ff53621fc4",
+      "localHash": "sha256:62f45ef32dfeb56ddef30a582913b2b4a9c854749fbebf43f68fb4ff53621fc4"
+    },
+    "auditing-doc-freshness": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/auditing-doc-freshness",
+      "baseHash": "sha256:b27cb836c2a03e08cbbcdd1bc29fe455631c86f85c2d2b174990494de3248b88",
+      "localHash": "sha256:b27cb836c2a03e08cbbcdd1bc29fe455631c86f85c2d2b174990494de3248b88"
+    },
+    "writing-tests": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/writing-tests",
+      "baseHash": "sha256:d1f38ffed21573f1d12b44f20d36d379fc81a06339e06a7f87f07e7b758c5e86",
+      "localHash": "sha256:d1f38ffed21573f1d12b44f20d36d379fc81a06339e06a7f87f07e7b758c5e86"
+    },
+    "improving-test-coverage": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/improving-test-coverage",
+      "baseHash": "sha256:b48b3a7723bf49e59ee656879afde7f298b43e27e6fe337a2ee58526b21833f8",
+      "localHash": "sha256:b48b3a7723bf49e59ee656879afde7f298b43e27e6fe337a2ee58526b21833f8"
+    },
+    "triaging-review-feedback": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/triaging-review-feedback",
+      "baseHash": "sha256:1c14c60fbe20427d54fffe8659c426722b6cb49f934d55ff59a80423ef143f3b",
+      "localHash": "sha256:1c14c60fbe20427d54fffe8659c426722b6cb49f934d55ff59a80423ef143f3b"
+    },
+    "assessing-release-readiness": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/assessing-release-readiness",
+      "baseHash": "sha256:0045cdfb763fae49279e0d304d547dbefe9e6873230d41ee0413d35081240e76",
+      "localHash": "sha256:0045cdfb763fae49279e0d304d547dbefe9e6873230d41ee0413d35081240e76"
+    },
+    "making-a-pr-reviewable": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/making-a-pr-reviewable",
+      "baseHash": "sha256:3923960a9d64256da88c1016c9cb79d3d7da657ca1ff17ba209356cce9a05a69",
+      "localHash": "sha256:3923960a9d64256da88c1016c9cb79d3d7da657ca1ff17ba209356cce9a05a69"
+    },
+    "summarizing-my-work": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/summarizing-my-work",
+      "baseHash": "sha256:6a7fba3517fdbf9b2c85e9fc26f4154f6149c5ec54eaaeacf1278f97e0e5a812",
+      "localHash": "sha256:6a7fba3517fdbf9b2c85e9fc26f4154f6149c5ec54eaaeacf1278f97e0e5a812"
+    },
+    "weekly-review": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/weekly-review",
+      "baseHash": "sha256:f8b9b937bc5413c0b370a173a04b03081010f2948c9c8a3b174ebd5f6f9d00ab",
+      "localHash": "sha256:f8b9b937bc5413c0b370a173a04b03081010f2948c9c8a3b174ebd5f6f9d00ab"
+    },
+    "agentic-loop": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/agentic-loop",
+      "baseHash": "sha256:d3fe295626401b6aea1844f5c6557548446d89fc6c33c4d03f96039b43bc9482",
+      "localHash": "sha256:d3fe295626401b6aea1844f5c6557548446d89fc6c33c4d03f96039b43bc9482"
+    },
+    "root-cause-fix": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/root-cause-fix",
+      "baseHash": "sha256:1d5a8bbeafbc4d20ccb62653cad8abf8207dbd53fa886a3b3b2bd5c2c902a431",
+      "localHash": "sha256:1d5a8bbeafbc4d20ccb62653cad8abf8207dbd53fa886a3b3b2bd5c2c902a431"
+    },
+    "agent-tool-design": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/agent-tool-design",
+      "baseHash": "sha256:0379b8fe539e65bbdad2afe4b9013be2194497b8bc94548b1aa782f3b953bc08",
+      "localHash": "sha256:0379b8fe539e65bbdad2afe4b9013be2194497b8bc94548b1aa782f3b953bc08"
+    },
+    "running-a-dev-cycle": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/running-a-dev-cycle",
+      "baseHash": "sha256:6d89faf3f985826a3c839cb1f0e7b63f1d92ca6f5de33980ef292dc7ed5754ea",
+      "localHash": "sha256:6d89faf3f985826a3c839cb1f0e7b63f1d92ca6f5de33980ef292dc7ed5754ea"
+    },
+    "orchestrating-parallel-agents": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/orchestrating-parallel-agents",
+      "baseHash": "sha256:aeaf2b028556bc0396761e9c7035e4011508019cacab0111891d1d51a14ce4f4",
+      "localHash": "sha256:aeaf2b028556bc0396761e9c7035e4011508019cacab0111891d1d51a14ce4f4"
+    },
+    "task-topology": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/task-topology",
+      "baseHash": "sha256:b355ae4260e2e761af7ce88f2298837444b5c6c0052727943f9280575105a4e4",
+      "localHash": "sha256:b355ae4260e2e761af7ce88f2298837444b5c6c0052727943f9280575105a4e4"
+    },
+    "decompose": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/decompose",
+      "baseHash": "sha256:eef6b6de3d783a094450983a07f16ecaa2c9f9dbc53c79447dd54cb490b8df10",
+      "localHash": "sha256:eef6b6de3d783a094450983a07f16ecaa2c9f9dbc53c79447dd54cb490b8df10"
+    },
+    "integrate": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/integrate",
+      "baseHash": "sha256:f8546c88127144bfafcc0f5332b7bdbd942f0947bbdfe12774c2002dac39b1ee",
+      "localHash": "sha256:f8546c88127144bfafcc0f5332b7bdbd942f0947bbdfe12774c2002dac39b1ee"
+    },
+    "debugging-with-observability": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/debugging-with-observability",
+      "baseHash": "sha256:2833b389bace79f7a04ec606c2724d1dc85491c7e7083b4fdb11a50d9bef13df",
+      "localHash": "sha256:2833b389bace79f7a04ec606c2724d1dc85491c7e7083b4fdb11a50d9bef13df"
+    },
+    "researching-a-dependency": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/researching-a-dependency",
+      "baseHash": "sha256:45412f3d11dae77771f44a8ee5e09d088813810e3f687e9659dcca8bcc5902c7",
+      "localHash": "sha256:45412f3d11dae77771f44a8ee5e09d088813810e3f687e9659dcca8bcc5902c7"
+    },
+    "reviewing-ui": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/reviewing-ui",
+      "baseHash": "sha256:1a9eb1307fa63ad175a23def569dd8eb2976b32a55d9798911521ac8380f0a1d",
+      "localHash": "sha256:1a9eb1307fa63ad175a23def569dd8eb2976b32a55d9798911521ac8380f0a1d"
+    },
+    "exercising-the-product": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/exercising-the-product",
+      "baseHash": "sha256:f4533aca0ca9eefa273cdb6eb61ec23dd8186d4225ab64dc5cbbe8af4651d65b",
+      "localHash": "sha256:f4533aca0ca9eefa273cdb6eb61ec23dd8186d4225ab64dc5cbbe8af4651d65b"
+    },
+    "verifying-session-surfaces": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/verifying-session-surfaces",
+      "baseHash": "sha256:2e88cc2be70aee624334f0f7c81769b379b7b86b752b53466891aa5e0762a057",
+      "localHash": "sha256:2e88cc2be70aee624334f0f7c81769b379b7b86b752b53466891aa5e0762a057"
+    },
+    "recreating-a-design": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/recreating-a-design",
+      "baseHash": "sha256:f89894d17af974fdd2f1cdc99aff435be50ef06c4f030b6b50c8ad539b46feff",
+      "localHash": "sha256:f89894d17af974fdd2f1cdc99aff435be50ef06c4f030b6b50c8ad539b46feff"
+    },
+    "skill-author": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/skill-author",
+      "baseHash": "sha256:1f4c23526715c690339fa846aec230e3efd5cc9abe20804fca78cd8b16d1efbb",
+      "localHash": "sha256:1f4c23526715c690339fa846aec230e3efd5cc9abe20804fca78cd8b16d1efbb"
+    },
+    "rule-author": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/rule-author",
+      "baseHash": "sha256:85eab1feb179934741e95cae27b0b69281b781e8e5cd9bb1e1575feb72bd2cd7",
+      "localHash": "sha256:85eab1feb179934741e95cae27b0b69281b781e8e5cd9bb1e1575feb72bd2cd7"
+    },
+    "learning-from-chats": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/learning-from-chats",
+      "baseHash": "sha256:b289e97b2a70544a9ce820f970ee5ea6db76590f475430a92c6fed04c5c64b07",
+      "localHash": "sha256:b289e97b2a70544a9ce820f970ee5ea6db76590f475430a92c6fed04c5c64b07"
+    },
+    "hardening-the-harness": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/hardening-the-harness",
+      "baseHash": "sha256:54f2be6e400665ac42083ff0f1ecfd00f221e72565eab433b6bf5f6975d38d08",
+      "localHash": "sha256:54f2be6e400665ac42083ff0f1ecfd00f221e72565eab433b6bf5f6975d38d08"
+    },
+    "equipping-loadout": {
+      "type": "skill",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/skills/equipping-loadout",
+      "baseHash": "sha256:e689f6a98bed2aa7bb2f2b7b7f5da93eebe7c3fe3064fdc1101a13ad1ed52b73",
+      "localHash": "sha256:e689f6a98bed2aa7bb2f2b7b7f5da93eebe7c3fe3064fdc1101a13ad1ed52b73"
+    },
+    "changelog": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/changelog.md",
+      "baseHash": "sha256:888eb626fa5e669b15ca271e9710910eb3dbf6facba29ba92dbacfd176da22aa",
+      "localHash": "sha256:888eb626fa5e669b15ca271e9710910eb3dbf6facba29ba92dbacfd176da22aa"
+    },
+    "start": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/start.md",
+      "baseHash": "sha256:0006b9564b507fc0e405e2170224bdcad51bc0ac27607313d419d4ab141c1dd5",
+      "localHash": "sha256:0006b9564b507fc0e405e2170224bdcad51bc0ac27607313d419d4ab141c1dd5"
+    },
+    "quality-loop": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/quality-loop.md",
+      "baseHash": "sha256:08794ef7f02b5e59be94628196f5cd6a0ed032d38457f2bbc4f9ea12ec88f1b8",
+      "localHash": "sha256:08794ef7f02b5e59be94628196f5cd6a0ed032d38457f2bbc4f9ea12ec88f1b8"
+    },
+    "plan": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/plan.md",
+      "baseHash": "sha256:73d6a13a65347a040b330c4732372dc647021ed07daabf61e5b866946cd779e0",
+      "localHash": "sha256:73d6a13a65347a040b330c4732372dc647021ed07daabf61e5b866946cd779e0"
+    },
+    "build-as-graph-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/build-as-graph.md",
+      "baseHash": "sha256:221474b73786ea71386dcbd7256ed59ac38fd032cf15e9bbb0954af8cb0bdea9",
+      "localHash": "sha256:221474b73786ea71386dcbd7256ed59ac38fd032cf15e9bbb0954af8cb0bdea9"
+    },
+    "review-plan-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/review-plan.md",
+      "baseHash": "sha256:01eba1e7f6c0ad96ecd486cbff4f2a03e1a765ed5407f42c5e2db80ab24138f1",
+      "localHash": "sha256:01eba1e7f6c0ad96ecd486cbff4f2a03e1a765ed5407f42c5e2db80ab24138f1"
+    },
+    "review-build-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/review-build.md",
+      "baseHash": "sha256:a46bab99c22a8e16c1331f6470b1f3eca8765a48649ab5b66e06103251651a8c",
+      "localHash": "sha256:a46bab99c22a8e16c1331f6470b1f3eca8765a48649ab5b66e06103251651a8c"
+    },
+    "post-flight-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/post-flight.md",
+      "baseHash": "sha256:a1c473727b92c78a828152b264b39415ab206a91ad23bdd1f1ec934dff137493",
+      "localHash": "sha256:a1c473727b92c78a828152b264b39415ab206a91ad23bdd1f1ec934dff137493"
+    },
+    "verifying-session-surfaces-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/verify-surfaces.md",
+      "baseHash": "sha256:be76c100d8580dfdd9fd3256dd75f08a44dc0c662cfb6a4f043996ff5fbe67ff",
+      "localHash": "sha256:be76c100d8580dfdd9fd3256dd75f08a44dc0c662cfb6a4f043996ff5fbe67ff"
+    },
+    "do-it-right-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/do-it-right.md",
+      "baseHash": "sha256:9a96438c91b022d27730c266f2632dafb377e2f29329044762e06928eca788ee",
+      "localHash": "sha256:9a96438c91b022d27730c266f2632dafb377e2f29329044762e06928eca788ee"
+    },
+    "tdd-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/tdd.md",
+      "baseHash": "sha256:2f0d502b31c2cda34133a3ff3489ac49c2b0f34f669aa3daf19ead6b9c451f23",
+      "localHash": "sha256:2f0d502b31c2cda34133a3ff3489ac49c2b0f34f669aa3daf19ead6b9c451f23"
+    },
+    "simplify-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/simplify.md",
+      "baseHash": "sha256:8f521b998a62c8aebebc03ce4a5b8d277ec588fac2e3b976776866a31191786c",
+      "localHash": "sha256:8f521b998a62c8aebebc03ce4a5b8d277ec588fac2e3b976776866a31191786c"
+    },
+    "session-handoff-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/session-handoff.md",
+      "baseHash": "sha256:d257b35a0f4ae58d3f76fd10889c9b0480e49847032b654f36584f1d322324ac",
+      "localHash": "sha256:d257b35a0f4ae58d3f76fd10889c9b0480e49847032b654f36584f1d322324ac"
+    },
+    "complete-the-build-cmd": {
+      "type": "command",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/commands/complete-the-build.md",
+      "baseHash": "sha256:10993f2799387e57e12f5464c9a61f4fe34d1d3815973cf04ee82f26e5ed05c6",
+      "localHash": "sha256:10993f2799387e57e12f5464c9a61f4fe34d1d3815973cf04ee82f26e5ed05c6"
+    },
+    "reviewer": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/reviewer.md",
+      "baseHash": "sha256:d36c8a41e800b9fd1019a53e3e276ef697c995d66c5f98ece20cc161ba0ecaa9",
+      "localHash": "sha256:d36c8a41e800b9fd1019a53e3e276ef697c995d66c5f98ece20cc161ba0ecaa9"
+    },
+    "implement-node": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/implement-node.md",
+      "baseHash": "sha256:eaea49c63732a98817e218a8925803df0314e99f53ebadd3e9e96a26e9b3a393",
+      "localHash": "sha256:eaea49c63732a98817e218a8925803df0314e99f53ebadd3e9e96a26e9b3a393"
+    },
+    "security-reviewer": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/security-reviewer.md",
+      "baseHash": "sha256:3843443984b28ccfc0d15faf9ea5949db1ef23d11f022ca5ccc52417e6dc7a35",
+      "localHash": "sha256:3843443984b28ccfc0d15faf9ea5949db1ef23d11f022ca5ccc52417e6dc7a35"
+    },
+    "explorer": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/explorer.md",
+      "baseHash": "sha256:23b2bda7d1345fcd0a194a4d5f661d009ba4fd7eca8bcd8168be1f587f651817",
+      "localHash": "sha256:23b2bda7d1345fcd0a194a4d5f661d009ba4fd7eca8bcd8168be1f587f651817"
+    },
+    "ci-watcher": {
+      "type": "agent",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/agents/ci-watcher.md",
+      "baseHash": "sha256:4e15894ca8416cfae78f4587dede1ad3cc2b64d4bb600e5f70bac495d719bafe",
+      "localHash": "sha256:4e15894ca8416cfae78f4587dede1ad3cc2b64d4bb600e5f70bac495d719bafe"
+    },
+    "git-safety": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/git-safety.mdc",
+      "baseHash": "sha256:2716a0d537081909a3b68f399b80215662f8dc659b793e18ae1b6a128f340eda",
+      "localHash": "sha256:2716a0d537081909a3b68f399b80215662f8dc659b793e18ae1b6a128f340eda"
+    },
+    "no-stash": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-stash.mdc",
+      "baseHash": "sha256:fe3a32184fa754610bc58b6afd772c6c53d26513147f95dd88abb3b554a66186",
+      "localHash": "sha256:fe3a32184fa754610bc58b6afd772c6c53d26513147f95dd88abb3b554a66186"
+    },
+    "shared-working-tree": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/shared-working-tree.mdc",
+      "baseHash": "sha256:0340915277d3cb5a9c6df6953716893ce51ada50b0f7ea9b14c5c022a7b88402",
+      "localHash": "sha256:0340915277d3cb5a9c6df6953716893ce51ada50b0f7ea9b14c5c022a7b88402"
+    },
+    "no-any": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-any.mdc",
+      "baseHash": "sha256:b026b23eab09a304e16800d9bf4fe098049d2e79ae7006a37b94aed4eb43a5b5",
+      "localHash": "sha256:b026b23eab09a304e16800d9bf4fe098049d2e79ae7006a37b94aed4eb43a5b5"
+    },
+    "no-floating-promises": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-floating-promises.mdc",
+      "baseHash": "sha256:71e24bc6ae8eeaf1eaa34d8bc487f6a225cec5c9f019adb01159bd199d3722f3",
+      "localHash": "sha256:71e24bc6ae8eeaf1eaa34d8bc487f6a225cec5c9f019adb01159bd199d3722f3"
+    },
+    "no-shortcuts": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-shortcuts.mdc",
+      "baseHash": "sha256:66ebbe05f1a2d2fa6fa4426931a8d267dd23b5e0e8330037b39fbbaf8e7a186b",
+      "localHash": "sha256:66ebbe05f1a2d2fa6fa4426931a8d267dd23b5e0e8330037b39fbbaf8e7a186b"
+    },
+    "size-limits": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/size-limits.mdc",
+      "baseHash": "sha256:ef2132f03fd7d21f3ebb1a22233e4dca653df264201aeb6235c097b29431a9fc",
+      "localHash": "sha256:ef2132f03fd7d21f3ebb1a22233e4dca653df264201aeb6235c097b29431a9fc"
+    },
+    "prompt-extraction": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/prompt-extraction.mdc",
+      "baseHash": "sha256:c0dbcd151a152bdcc1a53d0e6a101459da781712653cb6e655f75dcac01ad43e",
+      "localHash": "sha256:c0dbcd151a152bdcc1a53d0e6a101459da781712653cb6e655f75dcac01ad43e"
+    },
+    "regression-test": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/regression-test.mdc",
+      "baseHash": "sha256:56cffec1c1a0429d88769d2e062cff4d80584acd1643d083419b0fe1d88eb4e2",
+      "localHash": "sha256:56cffec1c1a0429d88769d2e062cff4d80584acd1643d083419b0fe1d88eb4e2"
+    },
+    "refactor-discipline": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/refactor-discipline.mdc",
+      "baseHash": "sha256:229d2254117bd77f1550c64ae2c67badfa49cd7081d513c02b0028a96c2c5978",
+      "localHash": "sha256:229d2254117bd77f1550c64ae2c67badfa49cd7081d513c02b0028a96c2c5978"
+    },
+    "testing-conventions": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/testing-conventions.mdc",
+      "baseHash": "sha256:1be50cc3f3d6c60f720758dbbdfbf0bc5e6972178d4722b2598b64e4009a5489",
+      "localHash": "sha256:1be50cc3f3d6c60f720758dbbdfbf0bc5e6972178d4722b2598b64e4009a5489"
+    },
+    "test-coverage": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/test-coverage.mdc",
+      "baseHash": "sha256:5258fbc49e08fdf7d67edc08593e6fbaaf5b7f6146c6144e8d94b7369fd2afdc",
+      "localHash": "sha256:5258fbc49e08fdf7d67edc08593e6fbaaf5b7f6146c6144e8d94b7369fd2afdc"
+    },
+    "observability-first": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/observability-first.mdc",
+      "baseHash": "sha256:5f5292a22febcd5dc22647c4fdda9b7483fc3efae2377440e30c04197398768a",
+      "localHash": "sha256:5f5292a22febcd5dc22647c4fdda9b7483fc3efae2377440e30c04197398768a"
+    },
+    "documentation-updates": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/documentation-updates.mdc",
+      "baseHash": "sha256:cdc5534e3b697fe05d147ee575245d306feb07ef6842997500e9b32a68ccc617",
+      "localHash": "sha256:cdc5534e3b697fe05d147ee575245d306feb07ef6842997500e9b32a68ccc617"
+    },
+    "docstrings-current": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/docstrings-current.mdc",
+      "baseHash": "sha256:f5a89f905972015971cff3a0d2e15ff8481bc237857db020deda0fdd50bc473c",
+      "localHash": "sha256:f5a89f905972015971cff3a0d2e15ff8481bc237857db020deda0fdd50bc473c"
+    },
+    "commit-and-pr-conventions": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/commit-and-pr-conventions.mdc",
+      "baseHash": "sha256:ea5c8699cfb7308d5420c829a74ab46fc476f7fc5b541352519754ff04fd06af",
+      "localHash": "sha256:ea5c8699cfb7308d5420c829a74ab46fc476f7fc5b541352519754ff04fd06af"
+    },
+    "copy-voice": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/copy-voice.mdc",
+      "baseHash": "sha256:e89b5181d2b0fd4324d1ee6d56b235d683690eb4454f081ce3b74cec2cff0aa4",
+      "localHash": "sha256:e89b5181d2b0fd4324d1ee6d56b235d683690eb4454f081ce3b74cec2cff0aa4"
+    },
+    "no-inline-imports": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-inline-imports.mdc",
+      "baseHash": "sha256:c3d4c0a5f406ac3c618059930dfe74dbbd454f0f45f16769f8ecae62b828d144",
+      "localHash": "sha256:c3d4c0a5f406ac3c618059930dfe74dbbd454f0f45f16769f8ecae62b828d144"
+    },
+    "typescript-exhaustive-switch": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/typescript-exhaustive-switch.mdc",
+      "baseHash": "sha256:1fbf648dc199292f10a70d3c8b71fe987c7ff17b00f0e14a7d57d99e21cb17ff",
+      "localHash": "sha256:1fbf648dc199292f10a70d3c8b71fe987c7ff17b00f0e14a7d57d99e21cb17ff"
+    },
+    "no-secrets-in-code": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-secrets-in-code.mdc",
+      "baseHash": "sha256:19907ebb93d77ff2574b51862afe5bb68ff937e699844850ec09d1fef9c832aa",
+      "localHash": "sha256:19907ebb93d77ff2574b51862afe5bb68ff937e699844850ec09d1fef9c832aa"
+    },
+    "audit-external-skills": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/audit-external-skills.mdc",
+      "baseHash": "sha256:6dce66b4bfa715ff5c610f267384ae967dea4d17955344111f83f4da43ab0cd6",
+      "localHash": "sha256:6dce66b4bfa715ff5c610f267384ae967dea4d17955344111f83f4da43ab0cd6"
+    },
+    "lockfile-conflicts": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/lockfile-conflicts.mdc",
+      "baseHash": "sha256:d804ad190a66f81bd177de57d58cd496484bc8f0b57ae4042c3ee0a87630620d",
+      "localHash": "sha256:d804ad190a66f81bd177de57d58cd496484bc8f0b57ae4042c3ee0a87630620d"
+    },
+    "dependency-version-management": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/dependency-version-management.mdc",
+      "baseHash": "sha256:671ce6dc3a8b05b6e58e1565a51d6a63604f5c855a1e96f50d7e100a4fd64230",
+      "localHash": "sha256:671ce6dc3a8b05b6e58e1565a51d6a63604f5c855a1e96f50d7e100a4fd64230"
+    },
+    "db-migration-safety": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/db-migration-safety.mdc",
+      "baseHash": "sha256:f24248cb1aae1fa69d4db1fdfe272e4e1eb2cb6225354b09edc68582763507b5",
+      "localHash": "sha256:f24248cb1aae1fa69d4db1fdfe272e4e1eb2cb6225354b09edc68582763507b5"
+    },
+    "agentic-loop-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/agentic-loop-rule.mdc",
+      "baseHash": "sha256:963929ba2d9e2e27261b38fe54aad9f99cc7a68a2cae1dfa781f23e6a14c1fae",
+      "localHash": "sha256:963929ba2d9e2e27261b38fe54aad9f99cc7a68a2cae1dfa781f23e6a14c1fae"
+    },
+    "no-regex-for-semantics": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/no-regex-for-semantics.mdc",
+      "baseHash": "sha256:629d5683469d1364102c87a8ee85a3dacad57d7a12f1ba988a546d37bc38d71c",
+      "localHash": "sha256:629d5683469d1364102c87a8ee85a3dacad57d7a12f1ba988a546d37bc38d71c"
+    },
+    "definition-of-done": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/definition-of-done.mdc",
+      "baseHash": "sha256:ba54554439b5f9084289a0ea8bb814affa495c4094fa01da07c97ea1c23aee0c",
+      "localHash": "sha256:ba54554439b5f9084289a0ea8bb814affa495c4094fa01da07c97ea1c23aee0c"
+    },
+    "create-plan-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/create-plan-rule.mdc",
+      "baseHash": "sha256:fc522542888edc1963d0c44279439c0cec241dc3180dc6fd1d9b0764713e9ce8",
+      "localHash": "sha256:fc522542888edc1963d0c44279439c0cec241dc3180dc6fd1d9b0764713e9ce8"
+    },
+    "deep-dive-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/deep-dive-rule.mdc",
+      "baseHash": "sha256:220c1813695fd92be4e4f13422bfceec01f936691eca5dc5d6db360639523110",
+      "localHash": "sha256:220c1813695fd92be4e4f13422bfceec01f936691eca5dc5d6db360639523110"
+    },
+    "review-plan-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/review-plan-rule.mdc",
+      "baseHash": "sha256:a36630f0de6da2f82740212879fcc8ac8907791963cff65db8dedf0fa7196326",
+      "localHash": "sha256:a36630f0de6da2f82740212879fcc8ac8907791963cff65db8dedf0fa7196326"
+    },
+    "review-build-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/review-build-rule.mdc",
+      "baseHash": "sha256:0878562ae41a3477f74b4338e1960dd9c4041bc9ddf9aa4d2d01d183b161048b",
+      "localHash": "sha256:0878562ae41a3477f74b4338e1960dd9c4041bc9ddf9aa4d2d01d183b161048b"
+    },
+    "implement-node-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/implement-node-rule.mdc",
+      "baseHash": "sha256:c236742d984f20580fdf78428466cc3f2cc76ab565b83cfdb72d40827c7635e9",
+      "localHash": "sha256:c236742d984f20580fdf78428466cc3f2cc76ab565b83cfdb72d40827c7635e9"
+    },
+    "do-it-right-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/do-it-right-rule.mdc",
+      "baseHash": "sha256:920c1766ea73e32a485fa7460df568be2f9494a28aefff355129f3333c451166",
+      "localHash": "sha256:920c1766ea73e32a485fa7460df568be2f9494a28aefff355129f3333c451166"
+    },
+    "complete-the-build-rule": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/complete-the-build-rule.mdc",
+      "baseHash": "sha256:4f5643a9a5b002a927bfcc874742dcfae70df13a8ab7db78449e03bf7a49bceb",
+      "localHash": "sha256:4f5643a9a5b002a927bfcc874742dcfae70df13a8ab7db78449e03bf7a49bceb"
+    },
+    "capability-removal": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/capability-removal.mdc",
+      "baseHash": "sha256:5c77776f39b2ea337a5b06fc37782626b44187bdefb8d38febb92db387f651ed",
+      "localHash": "sha256:5c77776f39b2ea337a5b06fc37782626b44187bdefb8d38febb92db387f651ed"
+    },
+    "ui-evidence": {
+      "type": "cursor-rule",
+      "version": "0.1.0",
+      "managed": true,
+      "target": ".cursor/rules/ui-evidence.mdc",
+      "baseHash": "sha256:83163849f4c20200bac8296923b803b3e3538228c27d3c75933ae8bf58ec9d10",
+      "localHash": "sha256:83163849f4c20200bac8296923b803b3e3538228c27d3c75933ae8bf58ec9d10"
+    },
+    "ship-a-feature": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/ship-a-feature.md",
+      "baseHash": "sha256:460e8b40086a177d2ef35c31243ed943a7d810f89484a7b8bacc99aea524605b",
+      "localHash": "sha256:460e8b40086a177d2ef35c31243ed943a7d810f89484a7b8bacc99aea524605b"
+    },
+    "fix-ci-until-green": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/fix-ci-until-green.md",
+      "baseHash": "sha256:a2b9fba951515c2c99d688f9b4fa645377497ac04d51ec8da78b10c58304a9d3",
+      "localHash": "sha256:a2b9fba951515c2c99d688f9b4fa645377497ac04d51ec8da78b10c58304a9d3"
+    },
+    "cut-a-release": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/cut-a-release.md",
+      "baseHash": "sha256:3f632634deea1660e10cf10811dc9fd2d210f40cff670eb50d8be486a8694734",
+      "localHash": "sha256:3f632634deea1660e10cf10811dc9fd2d210f40cff670eb50d8be486a8694734"
+    },
+    "onboard-to-codebase": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/onboard-to-codebase.md",
+      "baseHash": "sha256:34aede4d6d8e516afe0a2df7fab7a5b9c25f4c88b44337a059fc9e5574005006",
+      "localHash": "sha256:34aede4d6d8e516afe0a2df7fab7a5b9c25f4c88b44337a059fc9e5574005006"
+    },
+    "run-autonomous-loop": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/run-autonomous-loop.md",
+      "baseHash": "sha256:29d7a32fa33422cacc2b1bec5fd66dbf109f7ae302a7269ae2ce1154a8d56aa0",
+      "localHash": "sha256:29d7a32fa33422cacc2b1bec5fd66dbf109f7ae302a7269ae2ce1154a8d56aa0"
+    },
+    "run-quality-loop": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/run-quality-loop.md",
+      "baseHash": "sha256:ada3faa2277e4e50759eb9d5d09aa50ae9cad78ed852e685087b4e61ac938e85",
+      "localHash": "sha256:ada3faa2277e4e50759eb9d5d09aa50ae9cad78ed852e685087b4e61ac938e85"
+    },
+    "debug-production": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/debug-production.md",
+      "baseHash": "sha256:902cddfefa974e000d26b4d55e137cdccb452b203f66ffc61a063cf79cfb9e9b",
+      "localHash": "sha256:902cddfefa974e000d26b4d55e137cdccb452b203f66ffc61a063cf79cfb9e9b"
+    },
+    "security-pass": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/security-pass.md",
+      "baseHash": "sha256:89b406ed0031ad33de610092e145a7f33ed13d2a3c56ba6ebb2bba466a804116",
+      "localHash": "sha256:89b406ed0031ad33de610092e145a7f33ed13d2a3c56ba6ebb2bba466a804116"
+    },
+    "plan-then-build": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/plan-then-build.md",
+      "baseHash": "sha256:9e4a141af51b9729393eb9272e0b198668b8726e9269147db9dbb070884205a3",
+      "localHash": "sha256:9e4a141af51b9729393eb9272e0b198668b8726e9269147db9dbb070884205a3"
+    },
+    "clear-the-queue": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/clear-the-queue.md",
+      "baseHash": "sha256:a96d38732e2c675c2bf6bfa13096f852b2046c39f083f5f2d7f001d63dffead6",
+      "localHash": "sha256:a96d38732e2c675c2bf6bfa13096f852b2046c39f083f5f2d7f001d63dffead6"
+    },
+    "build-as-graph": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/build-as-graph.md",
+      "baseHash": "sha256:d481ea9858764fc67cda6df0db0ac01d771d852492ea4e43d2dc665debad1638",
+      "localHash": "sha256:d481ea9858764fc67cda6df0db0ac01d771d852492ea4e43d2dc665debad1638"
+    },
+    "safe-refactor": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/safe-refactor.md",
+      "baseHash": "sha256:d689e328111609405abfbecfd22232f73993bb6b5186d0e19101e652a1c903bf",
+      "localHash": "sha256:d689e328111609405abfbecfd22232f73993bb6b5186d0e19101e652a1c903bf"
+    },
+    "ship-a-migration": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/ship-a-migration.md",
+      "baseHash": "sha256:7d8b00edc155d7f293abe0c3d579e5c344782522fce98f6946c84a756228dad2",
+      "localHash": "sha256:7d8b00edc155d7f293abe0c3d579e5c344782522fce98f6946c84a756228dad2"
+    },
+    "dependency-bump": {
+      "type": "workflow",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/workflows/dependency-bump.md",
+      "baseHash": "sha256:6b5b463fd16f39508098f180087cfb4aecb5b1d1861c51c3d104949cc275c803",
+      "localHash": "sha256:6b5b463fd16f39508098f180087cfb4aecb5b1d1861c51c3d104949cc275c803"
+    },
+    "loop-preflight": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/runbooks/loop-preflight.md",
+      "baseHash": "sha256:eb9a044c3af6de3ce6f99321715b1acafcc92666931849c5117a8792df1cae5e",
+      "localHash": "sha256:eb9a044c3af6de3ce6f99321715b1acafcc92666931849c5117a8792df1cae5e"
+    },
+    "multi-plane-deploy": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/runbooks/multi-plane-deploy.md",
+      "baseHash": "sha256:9a938d140f53781d3251c93dd40dd1c2b903b9270676f7634dfe67c41e840bc5",
+      "localHash": "sha256:9a938d140f53781d3251c93dd40dd1c2b903b9270676f7634dfe67c41e840bc5"
+    },
+    "harness-setup": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/runbooks/harness-setup.md",
+      "baseHash": "sha256:f7e272312f84e1197530064b0a76300472f6b0f900d9ca4d2ba84f25da1ef2c1",
+      "localHash": "sha256:f7e272312f84e1197530064b0a76300472f6b0f900d9ca4d2ba84f25da1ef2c1"
+    },
+    "harness-hooks": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/runbooks/harness-hooks.md",
+      "baseHash": "sha256:3eab3e343cba93281605b5192fbba4067bf6f4c81c7b3d7a1cec28a66e5e65ea",
+      "localHash": "sha256:3eab3e343cba93281605b5192fbba4067bf6f4c81c7b3d7a1cec28a66e5e65ea"
+    },
+    "hotfix-and-rollback": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/runbooks/hotfix-and-rollback.md",
+      "baseHash": "sha256:e32a1b877366c06cb2f9a846353f312acbb9058d67fc987dfee77e4a107d76bc",
+      "localHash": "sha256:e32a1b877366c06cb2f9a846353f312acbb9058d67fc987dfee77e4a107d76bc"
+    },
+    "bootstrap-project": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "processes/runbooks/bootstrap-project.md",
+      "baseHash": "sha256:2181c5174f3555a90a8a22fa05afa4e7f54e648978204b5fa6dd52491f9cf262",
+      "localHash": "sha256:2181c5174f3555a90a8a22fa05afa4e7f54e648978204b5fa6dd52491f9cf262"
+    },
+    "template-state-file": {
+      "type": "template",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/loadout/STATE.md",
+      "baseHash": "sha256:771516724a1019cdaa2a7e937dde929e834997c9f6d101dbbbc87e7d12e923d5",
+      "localHash": "sha256:771516724a1019cdaa2a7e937dde929e834997c9f6d101dbbbc87e7d12e923d5"
+    },
+    "template-automation-loop": {
+      "type": "template",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/loadout/automation-loop.md",
+      "baseHash": "sha256:f225155284ef15a916d7f276c7f46a74a7ee1fc7368e7d652cf5512b77489446",
+      "localHash": "sha256:f225155284ef15a916d7f276c7f46a74a7ee1fc7368e7d652cf5512b77489446"
+    },
+    "template-mcp": {
+      "type": "mcp",
+      "version": "0.1.0",
+      "managed": false,
+      "target": ".cursor/mcp.json",
+      "baseHash": "sha256:427384cac293c70376b9c2150374e01c9c9b16e1d215415d7d981f1102fe5720",
+      "localHash": "sha256:f8a81025fdf20514c551f40c78adc0ce941ce1d15c892aa6605a56e0bbdebea0"
+    },
+    "doc-external-practices": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/external-practices.md",
+      "baseHash": "sha256:405e1650de41cd989e1938d1a0214dbd5b83753bac0e6322d81b9e1482d441a3",
+      "localHash": "sha256:405e1650de41cd989e1938d1a0214dbd5b83753bac0e6322d81b9e1482d441a3"
+    },
+    "doc-loop-engineering": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/loop-engineering.md",
+      "baseHash": "sha256:a19ba5fcea5fa59d02d92243606242da7f0c973e293bf7ea7107657bb27380c0",
+      "localHash": "sha256:a19ba5fcea5fa59d02d92243606242da7f0c973e293bf7ea7107657bb27380c0"
+    },
+    "doc-agentic-patterns": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/agentic-patterns.md",
+      "baseHash": "sha256:32fa0c8e381f7b4ab54a9e942ed52bed69f9de1356516c8bb527b6cbfc5104cf",
+      "localHash": "sha256:32fa0c8e381f7b4ab54a9e942ed52bed69f9de1356516c8bb527b6cbfc5104cf"
+    },
+    "doc-agent-harness-engineering": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/agent-harness-engineering.md",
+      "baseHash": "sha256:6450a799ec20a15c7f63e9360ca472c339ca79c454c85ed708b34725771c3509",
+      "localHash": "sha256:6450a799ec20a15c7f63e9360ca472c339ca79c454c85ed708b34725771c3509"
+    },
+    "doc-install": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "INSTALL.md",
+      "baseHash": "sha256:7f2c3c4860080ccae0825f2672d456982f2ad77eb1bbbf55cda3d0a74764b4a2",
+      "localHash": "sha256:7f2c3c4860080ccae0825f2672d456982f2ad77eb1bbbf55cda3d0a74764b4a2"
+    },
+    "doc-usage": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/usage.md",
+      "baseHash": "sha256:96932af00e227f3cff101c42b75c8fe24194163fdb901ed91db2cd54b5a6c287",
+      "localHash": "sha256:96932af00e227f3cff101c42b75c8fe24194163fdb901ed91db2cd54b5a6c287"
+    },
+    "doc-catalog": {
+      "type": "doc",
+      "version": "0.1.0",
+      "managed": true,
+      "target": "docs/catalog.md",
+      "baseHash": "sha256:a1e0b9b43a7febe2cf896b91456ea186421a65c00f3fb984816b9a10463e1893",
+      "localHash": "sha256:a1e0b9b43a7febe2cf896b91456ea186421a65c00f3fb984816b9a10463e1893"
+    }
+  }
+}

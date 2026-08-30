@@ -2,7 +2,7 @@
 # Local demo of the grant path. Uses a fake canary, never a real secret.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export VAULT_HOME="${TMPDIR:-/tmp}/agent-vault-demo-$$"
+export VAULT_HOME="${TMPDIR:-/tmp}/botpasses-demo-$$"
 export VAULT_MASTER_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
 export VAULT_ACTOR=operator
 CANARY="sk_live_CANARY_do_not_leak_f47ac10b"

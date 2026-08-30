@@ -126,6 +126,43 @@ test("CLI run injects into the child without printing the secret", async () => {
   }
 });
 
+test("vault login prints hosted stdio steps and never a canary", async () => {
+  const io = captureIo();
+  const prevUrl = process.env.VAULT_PUBLIC_URL;
+  delete process.env.VAULT_PUBLIC_URL;
+  try {
+    assert.equal(await main(["login"], io), 0);
+    const out = [...io.stdout, ...io.stderr].join("\n");
+    assert.match(out, /VAULT_USER_JWT/);
+    assert.match(out, /vault mcp --user-jwt/);
+    assert.match(out, /https:\/\/staging\.botpasses\.ai/);
+    assert.ok(!out.includes(CANARY));
+    assert.ok(!out.includes("sk_live"));
+  } finally {
+    if (prevUrl === undefined) delete process.env.VAULT_PUBLIC_URL;
+    else process.env.VAULT_PUBLIC_URL = prevUrl;
+  }
+});
+
+test("vault mcp --user-jwt without VAULT_PUBLIC_URL exits 1", async () => {
+  const io = captureIo();
+  const prevUrl = process.env.VAULT_PUBLIC_URL;
+  const prevJwt = process.env.VAULT_USER_JWT;
+  delete process.env.VAULT_PUBLIC_URL;
+  delete process.env.VAULT_USER_JWT;
+  try {
+    assert.equal(await main(["mcp", "--user-jwt", "eyJplaceholder"], io), 1);
+    const err = io.stderr.join("\n");
+    assert.match(err, /VAULT_PUBLIC_URL/);
+    assert.ok(!err.includes(CANARY));
+  } finally {
+    if (prevUrl === undefined) delete process.env.VAULT_PUBLIC_URL;
+    else process.env.VAULT_PUBLIC_URL = prevUrl;
+    if (prevJwt === undefined) delete process.env.VAULT_USER_JWT;
+    else process.env.VAULT_USER_JWT = prevJwt;
+  }
+});
+
 function spawnCapture(
   bin: string,
   args: string[],

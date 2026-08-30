@@ -1,0 +1,11 @@
+---
+description: Keep files and functions within sane size limits; extract before they sprawl.
+alwaysApply: true
+---
+
+# Size limits
+
+- Files: aim under ~400 lines, hard ceiling ~1000. Past the soft limit, extract cohesive modules rather than appending.
+- Functions: aim under ~50 lines. Extract helpers when a function grows past one screen or mixes concerns.
+- A `switch`/`match` that grows large is a sign a polymorphic structure or lookup table is wanted.
+- Pre-existing large files are grandfathered — don't rewrite them wholesale to satisfy this rule; split when you're already changing them.

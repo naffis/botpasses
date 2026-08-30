@@ -1,0 +1,12 @@
+---
+description: Database migrations are reversible and expand/contract; never destructive in one step; never reset a remote DB.
+globs: ["**/migrate/**", "**/migrations/**", "**/db/migrate/**"]
+alwaysApply: false
+---
+
+# Database migration safety
+
+- Use expand/contract: add the new column/table and backfill, ship code that reads both, then drop the old shape in a separate later migration. Never alter a column type in place.
+- Every migration is reversible (`up`/`down` or equivalent). Avoid data loss on rollback.
+- Add indexes concurrently / non-blocking on large tables; keep schema and data migrations separate.
+- Never run `db:reset`/drop against a remote or shared database. Ask before resetting even locally if there's pending state.

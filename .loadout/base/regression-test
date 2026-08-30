@@ -1,0 +1,11 @@
+---
+description: Every bug fix ships with a test that fails before the fix and passes after.
+alwaysApply: true
+---
+
+# Regression test on every fix
+
+- For each bug you fix, add a test that reproduces it: it must FAIL on the unfixed code and PASS once fixed.
+- Verify the fail-then-pass by running the test against the old behavior (temporarily revert the fix in the working tree, or assert the prior failure) — a test that never failed proves nothing. Never use `git stash` for this (`no-stash`).
+- Put the test at the tightest layer that captures the bug (unit over integration over e2e) while still reproducing it.
+- If a bug genuinely can't be tested, say why in the PR rather than skipping silently.

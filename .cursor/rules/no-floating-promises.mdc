@@ -1,0 +1,12 @@
+---
+description: Every promise must be awaited, returned, voided, or have a .catch — especially in workers, queues, and request handlers.
+globs: ["**/*.ts", "**/*.tsx"]
+alwaysApply: false
+---
+
+# No floating promises
+
+- `await` a promise, `return` it, or explicitly `void` it with a `.catch` handler. Never leave one dangling.
+- In serverless/edge handlers, background work that must outlive the response goes through the platform's "wait until" mechanism (e.g. `ctx.waitUntil(...)`), not a bare call.
+- Don't fire-and-forget logging, metrics, or webhook calls without catching their rejection — an unhandled rejection can crash the isolate.
+- Sequential awaits in a loop are fine; use `Promise.all` only when the work is truly independent.

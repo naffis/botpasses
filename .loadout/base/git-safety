@@ -1,0 +1,22 @@
+---
+description: Restrict AI git operations — no autonomous commits, branches, pushes, PRs, stashes, or WIP wipes
+alwaysApply: true
+---
+
+# Git safety
+
+Read-only git is always allowed: `status`, `diff`, `log`, `show`, `branch --list`.
+
+**Never (even if convenient):** any `git stash`; discard WIP (`reset --hard`, `clean -f*`,
+restore whole tree); move WIP to `/tmp` to fake a clean tree. See `no-stash`.
+
+**Needs an explicit ask:** stage, commit, create/switch branch, push, open/merge PR.
+"Ship it", "finish the ticket", review-build, ticket `gitBranchName`, or a skill that
+mentions PRs do **not** authorize branch/PR. Making a change ≠ permission to commit it.
+
+**Default:** leave edits unstaged. Do not invent a feature branch "for cleanliness."
+
+**If `shared-working-tree` is installed:** stay on the trunk in `AGENTS.md`; no per-agent
+branches/worktrees; when commit is authorized, land the whole eligible tree via
+`committing-on-shared-trunk` (still refuse secrets). On collision: leave the tree, ask —
+never offer stash; offer branch/worktree only if the user asks.

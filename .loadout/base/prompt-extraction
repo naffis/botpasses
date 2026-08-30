@@ -1,0 +1,11 @@
+---
+description: Long prompt strings belong in dedicated prompt modules, not inline in application logic.
+alwaysApply: false
+---
+
+# Prompt extraction
+
+- Any prompt literal longer than ~50 lines moves into a dedicated module (e.g. `prompts/` or `lib/prompts/`), exported as a named constant or builder.
+- Keep prompt construction (templating, variable interpolation) separate from business logic so prompts can be reviewed, diffed, and versioned on their own.
+- Don't scatter prompt fragments across a file; assemble them in one builder with clearly named parts.
+- Treat prompts like code: no secrets, no hardcoded customer data, consistent terminology.

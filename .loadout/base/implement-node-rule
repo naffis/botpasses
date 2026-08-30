@@ -1,0 +1,71 @@
+---
+description: >
+  Per-unit executor contract for task graphs: read only your unit entry + shared
+  contract, hard file allowlist, run your verifier before done, FAIL with reason
+  instead of done-with-caveats, no cross-unit chat. Use when acting as an
+  implement-node worker, when dispatched for a TASK.md unit, or when implementing
+  inside build-as-graph / decompose output.
+alwaysApply: false
+---
+
+# Implement-node (unit executor)
+
+You are one unit in a pipeline or graph. You are **not** the orchestrator, not
+`decompose`, and not `integrate`. Follow this contract exactly.
+
+Pair with the `implement-node` agent definition when dispatched as a sub-agent.
+Do not restate `task-topology` / `decompose` / `integrate` — read the task file.
+
+## Inputs (only)
+
+1. Your unit id (e.g. `U-02`) and the path to `.loadout/tasks/<slug>/TASK.md`.
+2. The shared contract file path from the task file.
+3. Isolation instruction: shared trunk checkout **or** absolute worktree path.
+
+Read **only** your unit's entry in the task file plus the contract file (and
+files you need inside your allowlist). Do not browse other units' goals to
+"align informally."
+
+## Hard file boundary
+
+- Create/edit only paths on your unit's **file allowlist**.
+- The shared contract is **read-only**. Need a signature change? Stop and
+  declare FAILED: missing interface — return to `decompose`.
+- Touching a path outside the allowlist **fails the unit**, even if tests pass.
+
+## No cross-unit communication
+
+- No asking sibling units for types, helpers, or "quick fixes."
+- If you need something another unit must provide and it is not in the
+  contract, that is a **missing interface**: FAILED → `decompose`.
+- Do not edit another unit's files to unblock yourself.
+
+## Verifier-first done condition
+
+1. Implement toward the unit goal (prefer tests in-allowlist first when the
+   unit owns them).
+2. Run **your** verifier command from the task file.
+3. Declare exactly one terminal state:
+   - **PASSED** — verifier green; allowlist respected; done-condition met.
+   - **FAILED** — with a concrete reason (verifier output, allowlist breach,
+     missing interface, blocked on contract).
+4. Never declare done-with-caveats, "mostly done," or "green except …".
+
+## Git & isolation
+
+- Leave edits unstaged; no commit/push/PR/merge unless the user explicitly
+  asked the *orchestrator* (not you) to land.
+- If `shared-working-tree` applies: work only on the given trunk checkout; no
+  stash; no new branch/worktree.
+- If given a worktree path: all edits there; never the main checkout.
+
+## Report shape (return to orchestrator)
+
+```markdown
+Unit: U-0N
+Status: PASSED | FAILED
+Allowlist: clean | breached (<paths>)
+Verifier: `<command>` → pass | fail
+Evidence: <key output>
+Contract gaps: none | <what belongs in decompose>
+```

@@ -1,0 +1,15 @@
+---
+description: Keep docs in sync with code — update the matching doc/README/changelog/ADR in the same change as the behavior it describes. Docs-as-code.
+alwaysApply: false
+---
+
+# Documentation updates
+
+Docs are part of the change, not a follow-up. A doc that lags the code is worse than no doc.
+
+- **Same-change rule.** A change that alters behavior, a public API, config, CLI flags, env vars, or an operational procedure updates the matching doc IN THE SAME change/PR. If you change the thing, you change its docs. Use the `updating-docs` skill to find every affected surface.
+- **Map change → doc surface:** behavior/usage → README or how-to; API/signature → reference + docstrings; config/env → setup/config doc; ops procedure → runbook; a significant decision → an ADR (use `writing-an-adr`); anything users/operators notice → a changelog entry.
+- **Reference, don't duplicate.** Link to the canonical source (a file, a generated reference) instead of pasting its content; duplicated docs drift. Point at code with paths, don't copy code into prose.
+- **Keep examples runnable.** Commands, code samples, and snippets in docs must reflect current behavior; prefer examples that can be lint/link-checked or executed in CI.
+- **Don't over-document.** Only write what removing would cause a mistake. No restating the obvious, no tutorials for self-evident steps. Concise beats comprehensive.
+- **Delete stale docs** when a feature is removed; a wrong doc is a trap. When unsure what's stale, run `auditing-doc-freshness`.

@@ -1,0 +1,42 @@
+---
+description: >
+  Run a non-trivial coding task as a verifiable perceive->plan->act->observe->verify->reflect
+  loop with a stop-condition contract, an independent checker, durable memory, a managed
+  context budget, and bounded autonomy. Read the `agentic-loop` skill when this is relevant.
+  Triggers on "agentic loop", "loop engineering", "context engineering", "stop condition",
+  "maker-checker", "verify before done", "manage context", "spawn subagents". Anti-triggers:
+  full dev-cycle routing -> running-a-dev-cycle; one root cause + class fix -> root-cause-fix;
+  quick bug -> debugging-an-issue; a product's agent tools -> agent-tool-design.
+alwaysApply: false
+---
+
+# Agentic loop
+
+Read the `agentic-loop` skill for the full discipline; its references cover the depth
+(`context-engineering.md`, `verification-and-stop-conditions.md`,
+`subagents-and-parallelism.md`).
+
+## Non-negotiables
+
+1. **Write the stop contract first** — end state, evidence, constraints, budget — before
+   editing anything non-trivial. "Done" is a claim; the evidence proves it.
+2. **Verify against ground truth** — the project's typecheck, the affected test, the linter,
+   and a regression test that fails-on-revert. A red gate is the honest signal, never
+   something to suppress (`no-shortcuts`, `regression-test`).
+3. **The maker isn't the sole checker** — for shippable work run an independent checker in a
+   fresh context (the `reviewer`/`security-reviewer` agent) against the contract.
+4. **State lives outside the window** — `TodoWrite` for in-task memory; a durable file /
+   ticket for cross-session work so a fresh context resumes exactly where this stopped.
+5. **Manage the context budget** — just-in-time retrieval over front-loading; compact when the
+   window fills; isolate broad exploration in an `explorer` sub-agent.
+6. **Bounded autonomy, git-safe** — chain edit->verify->fix cycles to a green contract, but
+   NEVER stage/commit/branch/push/PR unless the user explicitly asks; edits stay unstaged
+   (`commit-and-pr-conventions`).
+7. **Satisfy the outer contract** — the change is only done when `definition-of-done` rows for
+   it are met in the SAME change (behavior + tests + docs + surface registration).
+
+## Stop and ask
+
+If you're still red after the budget ceiling, if verification is impossible to define, or if
+the correct fix needs a scope/architecture decision the user owns — stop and report what you
+tried and what's blocking, rather than thrashing or shipping a bandaid.

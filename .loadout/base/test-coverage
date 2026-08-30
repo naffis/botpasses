@@ -1,0 +1,16 @@
+---
+description: Coverage is a guide, not a goal. Cover new/changed code and the branches/error paths that matter; don't chase 100% or game the metric.
+alwaysApply: false
+---
+
+# Test coverage
+
+Coverage finds untested code; it does not prove tests are good. High coverage with weak
+assertions is worse than honest gaps. Use it as a flashlight, not a trophy.
+
+- **Cover what changed.** New and modified code should be tested in the same change (diff/patch coverage). The most effective lever isn't raising the global number — it's never letting *new* code go untested. Don't let overall coverage drop.
+- **Branches and error paths, not just lines.** Prefer branch coverage. A line can be "covered" while its `false` branch, thrown error, or null case never runs. Test the edge and failure cases explicitly.
+- **Prioritize by risk.** Spend coverage on critical, complex, and error-prone code. Trivial getters/setters, generated code, and thin pass-throughs aren't worth chasing; third-party code isn't yours to cover.
+- **Pick a sane floor, not 100%.** A team-chosen threshold (rough guide: ~60% ok, ~75% good, ~90% exemplary) is a backstop, not a target. The last few percent are usually low-value or force bad tests. Don't mandate 100%.
+- **Coverage ≠ assertion quality.** Execution isn't verification. For critical logic, confirm tests actually catch bugs (e.g. mutation testing), not just that the lines ran.
+- **Never game it.** No assertion-free tests, no `expect(true)`, no excluding files just to lift the number. A green coverage gate must mean real tests. (See `testing-conventions` for how to write them.)

@@ -8,7 +8,7 @@ import type { Io } from "../src/cli.ts";
 export const CANARY = "sk_live_CANARY_do_not_leak_f47ac10b";
 
 export function tempHome(): string {
-  return mkdtempSync(join(tmpdir(), "agent-vault-"));
+  return mkdtempSync(join(tmpdir(), "botpasses-"));
 }
 
 export function makeVault(home = tempHome()): { vault: Vault; home: string; keyHex: string } {

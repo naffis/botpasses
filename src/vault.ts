@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_HOME_DIRNAME } from "./brand.ts";
 import { decrypt, encrypt, generateMasterKey, keyFingerprint, parseMasterKey } from "./crypto.ts";
 import {
   findOpenGrant,
@@ -362,7 +363,7 @@ export function defaultActor(): string {
 }
 
 export function defaultHome(): string {
-  return process.env.VAULT_HOME || join(process.env.HOME || process.cwd(), ".agent-vault");
+  return process.env.VAULT_HOME || join(process.env.HOME || process.cwd(), DEFAULT_HOME_DIRNAME);
 }
 
 export function loadMasterKey(home: string): { key: Buffer; source: string } {

@@ -1,0 +1,16 @@
+---
+description: Use exhaustive switch handling for discriminated unions and enums.
+globs: ["**/*.ts", "**/*.tsx"]
+alwaysApply: false
+---
+
+# Exhaustive switch
+
+In `switch` statements over discriminated unions or enums, add a `default` case that assigns the value to a `never`-typed variable, so adding a new variant causes a compile-time error until it is handled.
+
+```ts
+default: {
+  const _exhaustive: never = value;
+  throw new Error(`Unhandled variant: ${String(_exhaustive)}`);
+}
+```

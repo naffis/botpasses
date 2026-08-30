@@ -1,0 +1,31 @@
+---
+description: >
+  Removing a capability means removing ALL of it — the entry point AND its wiring, tests, docs,
+  config, and dead code — not just the surface. Use when deleting or merging a feature,
+  endpoint, tool, flag, command, or module so nothing orphaned is left behind.
+alwaysApply: false
+---
+
+# Capability removal
+
+When you remove or merge a capability, remove the whole thing. A deletion that leaves the entry
+point gone but its wiring behind creates dead code, broken references, and confusing orphans.
+
+Before declaring a removal done, sweep for and handle every trace:
+
+- **Registration / wiring** — the route, tool registry entry, manifest, export, DI binding, or
+  menu item that made it reachable.
+- **Callers** — `Grep` for every usage; update or remove them. Don't leave imports of a deleted
+  symbol.
+- **Tests** — delete tests for the removed behavior; keep (and update) tests that guard adjacent
+  behavior.
+- **Config / flags / env** — remove now-dead config keys, feature flags, and env vars, and their
+  documentation.
+- **Docs / changelog** — remove references in README/API docs; add a changelog entry; if the
+  removal is a decision worth preserving, record why (an ADR) rather than silently dropping it.
+- **Data / migrations** — if it owned schema or stored data, plan the migration/cleanup
+  explicitly (`db-migration-safety`); don't strand columns or rows.
+
+Verify with a search that the capability's names no longer resolve anywhere unexpected, and that
+the gate is still green. Leave the removal reviewable — a reviewer should see one coherent
+deletion, not a half-removed feature.

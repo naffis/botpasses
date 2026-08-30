@@ -1,0 +1,31 @@
+---
+description: >
+  Mid-session in-flight quality gate. Triggers on "deep-flight", "deep flight",
+  "in-flight check", "are we still doing this right", "course-correct",
+  "don't drift", "check the layer". Confirm chosen layer, run shortcut-sweep
+  script, quote gates, launch readonly flight-checker. Not deep-dive; not
+  post-flight wrap. Read the `deep-flight` skill.
+alwaysApply: false
+---
+
+# Deep-flight
+
+Mid-build, after substantial edits, before claiming done: prove the work is
+still on the class-kill path and **fix drift now**.
+
+## Completeness bar
+
+1. Chosen layer named (file:symbol). No Chosen Fix → `do-it-right` first.
+2. Layer still owns the invariant — crash-site / heuristic patches are P0.
+3. Shortcut RECEIPT from the flight-family sweep script quoted.
+4. Gate commands pasted (real closing lines).
+5. `flight-checker` PASS. Same-session self-grade cannot be ON-COURSE.
+
+## Absolute bans
+
+- Calling this `deep-dive`
+- Skipping because `post-flight` will run later
+- Sweep without a RECEIPT
+- Polishing a bandaid instead of handing back to `do-it-right`
+
+Full procedure: the `deep-flight` skill. Routing: `_shared/flight-family.md`.

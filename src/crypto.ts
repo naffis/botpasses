@@ -37,9 +37,12 @@ export function keyFingerprint(key: Buffer): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
 }
 
-export function encrypt(plaintext: string, key: Buffer): Envelope {
+export function encrypt(plaintext: string, key: Buffer, aad = ""): Envelope {
   const iv = randomBytes(IV_LEN);
   const cipher = createCipheriv(ALGO, key, iv);
+  if (aad.length > 0) {
+    cipher.setAAD(Buffer.from(aad, "utf8"));
+  }
   const ciphertext = Buffer.concat([
     cipher.update(plaintext, "utf8"),
     cipher.final(),
@@ -51,12 +54,15 @@ export function encrypt(plaintext: string, key: Buffer): Envelope {
   };
 }
 
-export function decrypt(envelope: Envelope, key: Buffer): string {
+export function decrypt(envelope: Envelope, key: Buffer, aad = ""): string {
   const decipher = createDecipheriv(
     ALGO,
     key,
     Buffer.from(envelope.iv, "base64"),
   );
+  if (aad.length > 0) {
+    decipher.setAAD(Buffer.from(aad, "utf8"));
+  }
   decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
   return Buffer.concat([
     decipher.update(Buffer.from(envelope.ciphertext, "base64")),

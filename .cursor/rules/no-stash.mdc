@@ -1,0 +1,26 @@
+---
+description: Absolute ban on git stash — stashes strand work, especially with parallel agents on one tree
+alwaysApply: true
+---
+
+# No stash
+
+Never run `git stash`, `git stash push`, `git stash -u`, `git stash save`,
+`git stash create`, or `git stash store`.
+
+## Why
+
+Stashes are easy to forget, hard to attribute across agents/chats, and have stranded real
+product work. A "temporary" stash to pull or switch context is how WIP disappears.
+
+## Do instead
+
+| Need | Action |
+| --- | --- |
+| Pull with dirty tree | Commit the whole tree first (`committing-on-shared-trunk` when that kit is installed), then pull — or ask |
+| Isolate work | Only if the user asks for a branch/worktree; default is shared trunk (`shared-working-tree`) |
+| Set aside unfinished edits | Leave them unstaged, or WIP-commit everything when the user asks |
+| Clean tree for a command | Ask the user; never stash or wipe |
+
+If someone asks to "stash this" or a skill suggests stash: refuse, explain, offer leave-in-tree
+or whole-tree commit instead.

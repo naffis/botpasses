@@ -1,0 +1,10 @@
+node_modules
+.vault
+.botpasses
+.git
+*.md
+test
+.loadout
+.cursor
+.claude
+.env

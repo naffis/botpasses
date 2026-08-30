@@ -1,0 +1,11 @@
+---
+description: Detect and respect the project's language version manager; never install or switch runtimes without asking.
+alwaysApply: false
+---
+
+# Dependency & version management
+
+- Detect the toolchain before running anything: look for `mise`/`asdf`/`.tool-versions`, `.nvmrc`/`.node-version`, `.ruby-version`, `Volta`, `fnm`, etc., and use it.
+- Don't install a new runtime, switch global versions, or change the version manager without asking the user first.
+- Use the project's package manager as declared (don't switch `pnpm`↔`npm`↔`yarn`); honor the lockfile.
+- In sandboxed/agent shells, set up the environment the project expects (e.g. unset stray `BUNDLE_PATH`/`GEM_HOME`) before invoking tools.

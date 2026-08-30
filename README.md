@@ -1,73 +1,106 @@
-# Agent Grant Vault
+# Botpasses
 
-Named secrets for **agents and tools**, injected into the **tool/runtime**, never into the **model context or transcript**.
+Named credentials for **agents and tools**, injected into the **runtime** (child env, hosted connector, or trusted resolve). Never into the **model context or transcript**.
 
 This is not a human password manager. It does not do browser autofill, TOTP, passkeys, or sharing secrets with other people. If the LLM can see a secret value, the product failed.
 
-Ticket: **DAV-42**.
+Hosted origins: **https://botpasses.ai** (prod) and **https://staging.botpasses.ai**. Process env names stay `VAULT_*`. AgentPass (`/agentpass/*`) is a separate protocol, not the product name.
+
+An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAULT_HOME` to that path.
 
 ## Product intent
 
-Operators store a named secret once (API key, token, password). Agents ask for a **grant** to use that name with a named tool. After a human approves, the vault injects the plaintext into the **child process environment** of that tool. Chat, MCP tool results, the operator console, and the audit log show **name + last-4 / grant metadata only**.
+You store named credentials **once**. Agents request use. You authorize with a policy. The runtime gets the value. The model never does.
 
-One vault. Many agents. Grants are scoped to `(secret, agent, tool)`.
+Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault run`. Hosted (`VAULT_MODE=hosted`) is the multi-user product: Clerk orgs, Neon Postgres, Fly (one Machine), Cloudflare WAF.
 
-## v1 working path
+## v1 local path
 
 1. `vault set NAME` — store encrypted at rest. Output is `NAME ••••last4`.
 2. Agent calls MCP `request_grant` for a named secret and named tool.
 3. Operator approves with `vault grant` (once or session) or the loopback console.
-4. `vault run --with NAME --agent AGENT --tool TOOL -- command` injects the value into the child env. Chat records that a grant happened.
-5. `vault revoke` and `vault audit` — who, which secret name, which tool/agent, when, grant vs revoke. Audit never stores the value.
-6. The same SQLite vault serves every agent.
+4. `vault run --with NAME --agent AGENT --tool TOOL -- command` injects the value into the child env.
+5. `vault revoke` and `vault audit` — operator only. MCP does not revoke.
+6. Listen port is **8788** (not 8787; that port is reserved for Cursor MCP OAuth).
+
+## Hosted path
+
+Operators in a Clerk Organization store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `list_items`, `request_grant`, `list_grants`, `http.request`. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects.
+
+Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` is `botpasses`.
+
+### Vendor connect
+
+| Client | How |
+| --- | --- |
+| Grok | `grok mcp add --transport http` + OAuth, or a bearer machine token scoped `mcp:model` |
+| Claude | Remote connector named `Botpasses` + OAuth |
+| ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration (enable DCR on the Clerk instance) |
+| Cursor | Remote MCP URL or local `npx vault mcp` stdio. Hosted stdio: `npx vault login`, then `npx vault mcp --user-jwt` |
+
+Until the package is published on npm, use `npx vault` from this repo or `npm run botpasses`.
+
+### Hosted MCP stdio
+
+Do not put `CLERK_SECRET_KEY` in `mcp.json`. Sign in at the hosted origin, copy the Clerk **session** JWT, then:
+
+```bash
+export VAULT_PUBLIC_URL=https://staging.botpasses.ai
+npx vault login
+export VAULT_USER_JWT=eyJ...
+npx vault mcp --user-jwt
+```
+
+### Grant policies
+
+| Policy | Behavior |
+| --- | --- |
+| `prompt` | One connector call or resolve, then consumed |
+| `session` | Active until TTL (8h) or revoke |
+| `item_standing` | Later `request_grant` for that client+item is already active |
+| `folder_standing` | Owner only. Requires `confirm_name`. Later requests in that folder/env auto-activate |
+
+Approve via web inbox, Resend magic link, or the 8-digit code returned by `request_grant`.
 
 ## What this is not
 
 - A LastPass / 1Password / Bitwarden clone
-- Browser login filling
-- Ingesting someone else's password vault
-- TOTP or passkeys as a product
-- Human-to-human secret sharing
+- Browser login filling, TOTP, or passkeys as a product
 - An MCP/API tool that returns plaintext to the model (`get_secret` does not exist)
+- Two Fly Machines in v1 (MCP Streamable HTTP session is in-process)
 
 ## Threat model
 
 | Surface | Sees secret value? |
 | --- | --- |
-| MCP tools (`list_secrets`, `request_grant`, `list_grants`, `revoke_grant`) | **No** — names, last-4, grant status |
-| Operator console / HTTP JSON | **No** after submit — name + last-4 |
+| MCP tools (`list_items` / `list_secrets`, `request_grant`, `list_grants`, `http.request`) | **No** — names, last-4, username, grant status, redacted origin body |
+| Operator console / HTTP JSON (except trusted resolve) | **No** after submit — name + last-4 |
 | CLI `list` / `grant` / `audit` | **No** |
-| Audit SQLite table | **No** — no value column |
-| Secrets SQLite table | Ciphertext only (AES-256-GCM envelope) |
-| `vault run` child process env | **Yes** — that is the inject. The process that received the inject still holds plaintext. Treat that process as a secret holder. |
-| Model context / chat transcript | **Must not.** Tests fail if a canary value appears after store, grant, or use. |
+| Audit table | **No** — no value column |
+| Items table | Ciphertext only (AES-256-GCM) |
+| `vault run` child env / trusted `/runtime/resolve` / connector origin | **Yes** — that is the inject |
+| Model context / chat transcript | **Must not.** Tests fail if a canary appears |
 
-The vault master key decrypts every envelope. Anyone who can read `VAULT_MASTER_KEY` or `VAULT_HOME/master.key` and the SQLite file can decrypt. Keep both off the model and out of git.
-
-v1 is local and loopback. It is not a multi-tenant KMS.
-
-## Hard rules (enforced in code + tests)
+## Hard rules
 
 - No MCP/API tool returns secret **values** to the model.
-- MCP may list **names**, request a grant, report grant status, revoke.
-- Values stay in the vault process until `run` copies them into a child env.
-- Encryption is boring envelope AES-256-GCM via Node `crypto`. No novel KMS.
-- Tests prove a mocked LLM/agent conversation cannot contain the stored secret after store, grant, or use.
+- MCP may list **names**, request a grant, report grant status, call `http.request`.
+- Revoke is operator-only (`POST /api/grants/:id/revoke` or `vault revoke`).
+- Values stay in the vault process until inject.
+- Tests prove a mocked conversation cannot contain the stored secret after store, grant, or use.
 
 ## Requirements
 
 - Node.js 22.14+
-- `VAULT_MASTER_KEY` — 32 bytes as **64 hex characters** (preferred) or standard base64
+- Local: `VAULT_MASTER_KEY` — 32 bytes as **64 hex characters** (preferred) or standard base64
+- Hosted: `VAULT_KEK` (same encoding) plus Neon `DATABASE_URL`
 
 ## How to run locally
 
 ```bash
 npm install
-export VAULT_HOME="$PWD/.vault"
+export VAULT_HOME="$PWD/.botpasses"
 npx vault init
-# vault init prints: export VAULT_MASTER_KEY=...
-# or uses the generated file $VAULT_HOME/master.key (mode 0600)
-
 printf '%s' 'sk_test_example_not_real' | npx vault set STRIPE_KEY
 npx vault list
 npx vault grant --secret STRIPE_KEY --agent invoicer --tool stripe --once
@@ -77,41 +110,29 @@ npx vault audit
 npx vault revoke --secret STRIPE_KEY --agent invoicer --tool stripe
 ```
 
-Prefer stdin for `vault set` so the value is not visible in `ps`. `--value` is for scripts and tests only.
-
-### Master key
-
-```bash
-# Preferred: environment (do not commit)
-export VAULT_MASTER_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
-
-# vault init will write $VAULT_HOME/master.key if the env var is unset.
-# Env wins over the file.
-```
-
-`.env.example` documents the variables. Never put real production secrets in this repo.
+Default home when `VAULT_HOME` is unset is `$HOME/.botpasses`.
 
 ### Operator console + HTTP + MCP (one process)
 
 ```bash
-npx vault serve --host 127.0.0.1 --port 8787
+npx vault serve --host 127.0.0.1 --port 8788
 ```
 
-- Console: `http://127.0.0.1:8787/` — store, approve, revoke, audit. Values are cleared after submit.
-- JSON: `/api/secrets`, `/api/grants`, `/api/audit` — metadata only. There is no `/api/inject` that returns plaintext.
+- Console: `http://127.0.0.1:8788/` — store, approve, revoke, audit.
+- JSON: `/api/secrets`, `/api/grants`, `/api/audit` — metadata only.
 - MCP JSON-RPC: `POST /mcp`
-- Bind defaults to loopback.
+- `GET /health` — `{ ok, product: "botpasses" }` with **no** key fingerprint
 
 ### MCP (stdio)
 
 ```json
 {
   "mcpServers": {
-    "agent-vault": {
+    "botpasses": {
       "command": "npx",
       "args": ["vault", "mcp"],
       "env": {
-        "VAULT_HOME": "/absolute/path/.vault",
+        "VAULT_HOME": "/absolute/path/.botpasses",
         "VAULT_MASTER_KEY": "set-me"
       }
     }
@@ -119,14 +140,13 @@ npx vault serve --host 127.0.0.1 --port 8787
 }
 ```
 
-| Tool | Returns |
+| Tool (local) | Returns |
 | --- | --- |
 | `list_secrets` | names, last-4, timestamps |
-| `request_grant` | pending grant metadata (agent cannot self-approve) |
+| `request_grant` | pending grant metadata |
 | `list_grants` | grant status |
-| `revoke_grant` | revoked grant metadata |
 
-There is no `get_secret` / `read_value` tool. Approval is `vault grant` or the operator console.
+There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and revoke are operator surfaces.
 
 ## CLI
 
@@ -139,16 +159,29 @@ There is no `get_secret` / `read_value` tool. Approval is `vault grant` or the o
 | `vault revoke --id GRANT_ID` | Stop future injects |
 | `vault audit` | Grant/revoke/store/inject events, no values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject into child env without printing |
-| `vault serve` | Loopback HTTP + operator console + `/mcp` |
-| `vault mcp` | MCP stdio |
+| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788) |
+| `vault login` | Print hosted stdio steps (`VAULT_PUBLIC_URL` + Clerk session JWT) |
+| `vault mcp` | MCP stdio (local sqlite). `vault mcp --user-jwt` proxies hosted MCP over the session JWT |
 
-`--session` grants expire after `--ttl` (default 8h) or when revoked. `--once` is consumed after a single successful inject.
+`VAULT_MODE=hosted` on `vault serve` starts the hosted process (Postgres). Do not set `VAULT_HOME` in that mode (exit 78).
 
 ## Encryption
 
-Each secret is an AES-256-GCM envelope: random 12-byte IV, ciphertext, 16-byte auth tag, stored as base64 in SQLite. The 32-byte master key from `VAULT_MASTER_KEY` (or `master.key`) is the AES key. A SHA-256 fingerprint of the key is stored in `vault_meta` so a wrong key fails closed.
+Local: AES-256-GCM envelope with `VAULT_MASTER_KEY`. Hosted: platform `VAULT_KEK` wraps a per-org DEK; item encrypt uses the org DEK with AAD `org_id`.
 
-This is ordinary envelope encryption. It is not a novel KMS.
+## Hosted deploy (Fly + Neon + Cloudflare)
+
+Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `iad`. Staging and production keep **separate Neon databases** (reuse the existing `DATABASE_URL` secrets; do not branch prod from staging). Cloudflare orange-cloud DNS + WAF, SSL Full (strict). Cutover steps: [docs/ops/botpasses-cutover.md](docs/ops/botpasses-cutover.md). Identity decisions: [docs/adr/0001-botpasses-identity.md](docs/adr/0001-botpasses-identity.md).
+
+**DNS:** orange-cloud `A`/`AAAA` for `botpasses.ai` and `staging.botpasses.ai`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.ai` is a Cloudflare 301 to the apex (no Fly cert).
+
+**Fly secrets (names only):** `VAULT_KEK`, `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API` (hostname only, e.g. `clerk.staging.botpasses.ai`), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.ai>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
+
+Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong.
+
+Push to `dev` runs tests then `flyctl deploy -c fly.staging.toml`. Production is `workflow_dispatch` after a named staging SHA is green. Nightly `backup-prod.yml` (`0 4 * * *` UTC) dumps via `DATABASE_URL_DIRECT`, AES-256-GCM with `BACKUP_KEY`, puts `botpasses-${STAMP}.dump.enc` in R2.
+
+AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
 
 ## Tests
 
@@ -157,12 +190,13 @@ npm test
 npm run typecheck
 ```
 
-The isolation tests store a canary value, drive a mocked agent conversation (MCP list/request/list grants/revoke + operator grant + `run`), and fail if that canary appears in the transcript, MCP results, audit JSON, CLI output, or the SQLite file. A separate probe file (not part of the transcript) asserts the child process **did** receive the plaintext.
+Isolation tests store a canary value and fail if it appears in MCP, REST model payloads, audit JSON, email HTML, or connector tool results. Hosted AC-10/AC-11 run when `DATABASE_URL` points at Postgres 16 (CI service).
 
 ## Layout
 
 ```
-src/          vault, crypto, sqlite, CLI, HTTP+MCP
-test/         isolation, MCP allowlist, CLI, HTTP
-bin/vault.js  Node 22 launcher
+src/           local kernel, hosted kernel, stores, MCP, HTTP
+test/          isolation, MCP, CLI, HTTP, hosted ACs
+migrations/    hosted SQL
+fly.staging.toml / fly.prod.toml
 ```
