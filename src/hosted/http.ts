@@ -13,16 +13,16 @@ import {
 } from "./auth.ts";
 import { AgentPassAuthority, agentPassEnabled } from "./agentpass.ts";
 import { type ConnectorFetch } from "./connector.ts";
-import { HttpError, isHttpError } from "./errors.ts";
+import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import {
   handleHostedMcpRpc,
   listHostedMcpTools,
   type JsonRpcRequest,
 } from "./mcp.ts";
+import { hostedCollectHtml, hostedCollectMissingHtml } from "./collect-page.ts";
 import { hostedOperatorHtml } from "./operator-page.ts";
 import { captureException } from "./observe.ts";
-import { OrgRateLimiter } from "./rate-limit.ts";
 
 const BODY_CAP = 128 * 1024;
 const KEEPALIVE_MS = 25_000;
@@ -44,7 +44,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const port = opts.port ?? 8788;
   const publicUrl = opts.publicUrl ?? opts.kernel.publicUrl;
   const auth = opts.authResolver ?? testAuthResolver;
-  const limiter = new OrgRateLimiter();
+  const limiter = opts.kernel.limiter;
   const agentpass = agentPassEnabled() ? new AgentPassAuthority(opts.kernel, publicUrl) : undefined;
   const allowed = opts.allowedHosts ?? hostAllowlist(publicUrl);
 
@@ -131,6 +131,29 @@ export function createHostedServer(opts: HostedHttpOpts) {
       res.end(hostedOperatorHtml());
       return;
     }
+    const collect = /^\/collect\/([^/]+)$/.exec(path);
+    if (method === "GET" && collect) {
+      const needId = decodeURIComponent(collect[1] ?? "");
+      const found = await opts.kernel.getNeed(needId);
+      if (!found) {
+        res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+        res.end(hostedCollectMissingHtml());
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        hostedCollectHtml({
+          needId: found.need.id,
+          clientName: found.need.client_name,
+          suggestedName: found.need.suggested_name,
+          host: found.need.host,
+          taskDescription: found.need.task_description,
+          status: found.need.status,
+          origin: publicUrl.replace(/\/$/, "") || `http://${req.headers.host ?? "127.0.0.1"}`,
+        }),
+      );
+      return;
+    }
 
     if (method === "POST" && path === "/mcp") {
       const body = (await readJson(req)) as JsonRpcRequest;
@@ -200,6 +223,24 @@ export function createHostedServer(opts: HostedHttpOpts) {
         folderName: optional(body.folder_name ?? body.folderName),
       });
       json(res, 200, { item });
+      return;
+    }
+    const fulfillNeed = /^\/api\/need-items\/([^/]+)\/fulfill$/.exec(path);
+    if (method === "POST" && fulfillNeed) {
+      const op = requireOperator(principal);
+      const body = await readJson(req);
+      const result = await opts.kernel.fulfillNeed({
+        orgId: op.orgId,
+        actor: op.userId,
+        needId: decodeURIComponent(fulfillNeed[1] ?? ""),
+        value: String(body.value ?? ""),
+        name: optional(body.name),
+        allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
+        inject: String(body.inject ?? "bearer"),
+        kind: body.kind === undefined ? undefined : asKind(body.kind),
+        username: optional(body.username),
+      });
+      json(res, 200, { item: result.item, grant_status: result.grant_status });
       return;
     }
     const rotate = /^\/api\/items\/([^/]+)\/rotate$/.exec(path);
@@ -306,10 +347,11 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (method === "GET" && path === "/api/inbox") {
       const op = requireOperator(principal);
       const grants = await opts.kernel.inbox(op.orgId);
+      const needs = await opts.kernel.listInboxNeeds(op.orgId);
       const agentpass = agentPassEnabled()
         ? (await opts.kernel.store.listAgentPasses(op.orgId)).filter((p) => p.status === "pending")
         : [];
-      json(res, 200, { grants, agentpass });
+      json(res, 200, { grants, needs, agentpass });
       return;
     }
     if (method === "GET" && path === "/api/audit") {
@@ -582,6 +624,15 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 function sendError(res: ServerResponse, err: unknown): void {
   void captureException(err);
+  if (isNeedItemError(err)) {
+    const headers: Record<string, string> = {
+      "content-type": "application/json; charset=utf-8",
+      ...corsHeaders(),
+    };
+    res.writeHead(err.status, headers);
+    res.end(JSON.stringify(err.payload));
+    return;
+  }
   if (isHttpError(err)) {
     const headers: Record<string, string> = {
       "content-type": "application/json; charset=utf-8",

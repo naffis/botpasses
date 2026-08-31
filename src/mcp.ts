@@ -1,4 +1,5 @@
 import { MCP_INSTRUCTIONS_LOCAL, MCP_SERVER_NAME } from "./brand.ts";
+import { normalizeSecretName } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
 import type { Vault } from "./vault.ts";
 import type { GrantScope } from "./types.ts";
@@ -111,7 +112,14 @@ export function callMcpTool(
   try {
     const payload = dispatch(vault, name, args);
     assertSafePublicObject(`mcp:${name}`, payload);
-    return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+    const status =
+      payload && typeof payload === "object" && "status" in payload
+        ? (payload as { status: unknown }).status
+        : undefined;
+    return {
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      ...(status === "need_item" ? { isError: true } : {}),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return fail(message);
@@ -129,15 +137,25 @@ function dispatch(vault: Vault, name: string, args: Record<string, unknown>): un
           updated_at: s.updatedAt,
         })),
       };
-    case "request_grant":
+    case "request_grant": {
+      const secretName = normalizeSecretName(str(args, "secret_name"));
+      const known = vault.listSecrets().some((s) => s.name === secretName);
+      if (!known) {
+        return {
+          status: "need_item",
+          message:
+            "No secret with that name. Store it with `vault store` or the local console. Do not paste the secret into chat.",
+        };
+      }
       return publicGrant(
         vault.requestGrant({
-          secretName: str(args, "secret_name"),
+          secretName,
           agentId: str(args, "agent_id"),
           toolId: str(args, "tool_id"),
           scope: optionalScope(args.scope),
         }),
       );
+    }
     case "list_grants": {
       let grants = vault.listGrants();
       if (typeof args.agent_id === "string") {

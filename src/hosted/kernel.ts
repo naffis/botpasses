@@ -11,6 +11,7 @@ import { last4, normalizeSecretName } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type {
   ClientRecord,
+  FindItemsResult,
   GrantPolicy,
   HostedGrantRecord,
   ItemKind,
@@ -21,7 +22,17 @@ import type {
 import type { VaultStore } from "../store/types.ts";
 import { HttpError } from "./errors.ts";
 import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
+import {
+  ensureNeedItem,
+  findItems,
+  fulfillNeed,
+  getNeed,
+  listInboxNeeds,
+  needItemError,
+  type NeedHost,
+} from "./need-ops.ts";
 import { logVaultEvent } from "./observe.ts";
+import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
 
 const SESSION_TTL_MS = 8 * 3600 * 1000;
@@ -41,6 +52,7 @@ export type HostedKernelOpts = {
   publicUrl?: string;
   approvalHmac?: Buffer;
   deployPlane?: "staging" | "production";
+  limiter?: OrgRateLimiter;
 };
 
 function nowIso(d: Date): string {
@@ -71,6 +83,7 @@ export class HostedKernel {
   readonly publicUrl: string;
   readonly approvalHmac: Buffer | undefined;
   readonly deployPlane: "staging" | "production";
+  readonly limiter: OrgRateLimiter;
 
   constructor(opts: HostedKernelOpts) {
     this.store = opts.store;
@@ -80,6 +93,7 @@ export class HostedKernel {
     this.publicUrl = opts.publicUrl ?? "http://127.0.0.1:8788";
     this.approvalHmac = opts.approvalHmac;
     this.deployPlane = opts.deployPlane ?? "production";
+    this.limiter = opts.limiter ?? new OrgRateLimiter();
   }
 
   async ping(): Promise<void> {
@@ -303,6 +317,83 @@ export class HostedKernel {
     return pub;
   }
 
+  #needHost(): NeedHost {
+    return {
+      store: this.store,
+      limiter: this.limiter,
+      publicUrl: this.publicUrl,
+      now: this.now,
+      magicTtlMs: MAGIC_TTL_MS,
+      maxItemBytes: MAX_ITEM_BYTES,
+      envFor: (orgId, name) => this.envFor(orgId, name),
+      dekForOrg: (orgId) => this.dekForOrg(orgId),
+      clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
+      assertHosts: (hosts) => this.#assertHosts(hosts),
+      assertPlane: (name) => this.#assertPlane(name),
+      standingFor: (orgId, clientId, item) => this.#standingFor(orgId, clientId, item),
+      publicItem: (environment, item) => this.#publicItem(environment, item),
+      audit: (orgId, action, actor, itemName, clientId) =>
+        this.#audit(orgId, action, actor, itemName, clientId),
+    };
+  }
+
+  async findItems(input: {
+    orgId: string;
+    clientId: string;
+    environment: VaultEnvName;
+    itemName?: string;
+    host?: string;
+    taskDescription?: string;
+  }): Promise<FindItemsResult> {
+    return findItems(this.#needHost(), input);
+  }
+
+  async ensureNeedItem(input: {
+    orgId: string;
+    clientId: string;
+    environment: VaultEnvName;
+    itemName?: string;
+    host: string;
+    taskDescription?: string;
+    alreadyLimited?: boolean;
+  }) {
+    return ensureNeedItem(this.#needHost(), input);
+  }
+
+  async needItemError(input: {
+    orgId: string;
+    clientId: string;
+    environment: VaultEnvName;
+    itemName: string;
+    host: string;
+    taskDescription?: string;
+    alreadyLimited?: boolean;
+  }) {
+    return needItemError(this.#needHost(), input);
+  }
+
+  async getNeed(id: string) {
+    return getNeed(this.#needHost(), id);
+  }
+
+  async listInboxNeeds(orgId: string) {
+    return listInboxNeeds(this.#needHost(), orgId);
+  }
+
+  async fulfillNeed(input: {
+    orgId: string;
+    actor: string;
+    needId: string;
+    value: string;
+    name?: string;
+    allowedHosts: string[];
+    inject: string;
+    kind?: ItemKind;
+    username?: string;
+  }) {
+    return fulfillNeed(this.#needHost(), input);
+  }
+
   async createTrustedClient(input: {
     orgId: string;
     name: string;
@@ -384,7 +475,17 @@ export class HostedKernel {
     }
     const env = await this.envFor(input.orgId, input.environment);
     const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
-    if (!item) throw new HttpError(404, "Unknown item");
+    if (!item) {
+      throw await this.needItemError({
+        orgId: input.orgId,
+        clientId: input.clientId,
+        environment: input.environment,
+        itemName: input.itemName,
+        host: "",
+        taskDescription: input.taskDescription,
+        alreadyLimited: true,
+      });
+    }
     const standing = await this.#standingFor(input.orgId, client.id, item);
     const at = nowIso(this.now());
     const grant: HostedGrantRecord = {
@@ -643,7 +744,16 @@ export class HostedKernel {
     }
     const env = await this.envFor(input.orgId, input.environment);
     const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
-    if (!item) throw new HttpError(404, "Unknown item");
+    if (!item) {
+      throw await this.needItemError({
+        orgId: input.orgId,
+        clientId: input.clientId,
+        environment: input.environment,
+        itemName: input.itemName,
+        host: "",
+        alreadyLimited: false,
+      });
+    }
     await this.consumeActiveGrant(input.orgId, client.id, item.id);
     return this.decryptItem(input.orgId, item.id);
   }

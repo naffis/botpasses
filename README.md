@@ -25,7 +25,7 @@ Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault 
 
 ## Hosted path
 
-Operators in a Clerk Organization store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `list_items`, `request_grant`, `list_grants`, `http.request`. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects.
+Operators in a Clerk Organization store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http.request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects.
 
 Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` is `botpasses`.
 
@@ -74,7 +74,7 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 
 | Surface | Sees secret value? |
 | --- | --- |
-| MCP tools (`list_items` / `list_secrets`, `request_grant`, `list_grants`, `http.request`) | **No** — names, last-4, username, grant status, redacted origin body |
+| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `http.request`) | **No** — names, last-4, username, grant status, `collect_url`, redacted origin body |
 | Operator console / HTTP JSON (except trusted resolve) | **No** after submit — name + last-4 |
 | CLI `list` / `grant` / `audit` | **No** |
 | Audit table | **No** — no value column |
@@ -85,7 +85,7 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 ## Hard rules
 
 - No MCP/API tool returns secret **values** to the model.
-- MCP may list **names**, request a grant, report grant status, call `http.request`.
+- MCP may list **names**, find by name or host, request a grant, report grant status, call `http.request`. On a miss it returns a Botpasses `collect_url` (no HMAC). The operator types the secret on that origin.
 - Revoke is operator-only (`POST /api/grants/:id/revoke` or `vault revoke`).
 - Values stay in the vault process until inject.
 - Tests prove a mocked conversation cannot contain the stored secret after store, grant, or use.

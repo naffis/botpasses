@@ -4,7 +4,7 @@ Create the Fly apps and copy secrets **before** any `git push origin dev` that c
 
 Do not destroy `agent-vault-staging` / `agent-vault-prod` until `https://staging.botpasses.ai/health` and `https://botpasses.ai/health` return `{"ok":true,"product":"botpasses"}` through Cloudflare.
 
-GitHub rename (`gh repo rename botpasses`) is **after** the first green staging deploy. Then `git remote set-url origin https://github.com/naffis/botpasses.git`. Do not create a new repo named `agent-vault` under the same owner (redirects break).
+GitHub is `naffis/botpasses`. Local origin is `https://github.com/naffis/botpasses.git`. Do not create a new repo named `agent-vault` under the same owner (redirects break).
 
 ## DNS and TLS
 
@@ -92,4 +92,4 @@ Attempted 2026-08-30 from this checkout. In-repo ACs are green. Live cutover is 
 | Resend domain `mail.botpasses.ai` verified | **blocked** — `RESEND_API_KEY` unset |
 | `git push origin dev` after apps exist | **not run** (no user ask to push; Fly apps do not exist yet) |
 | First green staging `/health` through Cloudflare | **blocked** — DNS NXDOMAIN |
-| `gh repo rename botpasses` then update git remote | **deferred** until first green staging. GitHub CLI is logged in as `naffis`; repo is still `naffis/agent-vault`. Do not create a new `naffis/agent-vault` after rename. |
+| `gh repo rename botpasses` then update git remote | **done** 2026-08-30. Repo is `naffis/botpasses`. Do not create a new `naffis/agent-vault`. |

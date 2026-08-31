@@ -2,7 +2,7 @@ import { MCP_INSTRUCTIONS_HOSTED, MCP_SERVER_NAME } from "../brand.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { HostedGrantRecord, ItemPublic, VaultEnvName } from "../hosted-types.ts";
 import { executeConnector, type ConnectorFetch } from "./connector.ts";
-import { HttpError, isHttpError } from "./errors.ts";
+import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { ModelPrincipal } from "./auth.ts";
 
@@ -15,6 +15,7 @@ export const HOSTED_MCP_PROTOCOL = "2024-11-05";
 
 export const HOSTED_MCP_TOOL_NAMES = [
   "list_items",
+  "find_items",
   "request_grant",
   "list_grants",
   "http.request",
@@ -43,6 +44,21 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        environment: { type: "string", enum: ["staging", "production"] },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "find_items",
+    description:
+      "Find a named credential by exact item_name and/or exact API hostname. Returns names, last-4, and allowed hosts — never values. On a miss, returns a Botpasses collect_url for the operator. Never paste secrets into chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_name: { type: "string" },
+        host: { type: "string", description: "Exact API hostname, e.g. api.spotify.com" },
+        task_description: { type: "string" },
         environment: { type: "string", enum: ["staging", "production"] },
       },
       additionalProperties: false,
@@ -141,8 +157,12 @@ export async function callHostedMcpTool(
   try {
     const payload = await dispatch(deps, name, args);
     assertSafePublicObject(`mcp:${name}`, payload);
-    return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+    return mcpPayloadResult(payload);
   } catch (err) {
+    if (isNeedItemError(err)) {
+      assertSafePublicObject(`mcp:${name}`, err.payload);
+      return mcpPayloadResult(err.payload);
+    }
     const message = isHttpError(err) ? err.message : err instanceof Error ? err.message : String(err);
     return fail(message);
   }
@@ -168,6 +188,18 @@ async function dispatch(
           inject: i.inject,
         })),
       };
+    }
+    case "find_items": {
+      const itemName = optional(args.item_name);
+      const host = optional(args.host);
+      return kernel.findItems({
+        orgId: principal.orgId,
+        clientId: principal.clientId,
+        environment,
+        itemName,
+        host,
+        taskDescription: optional(args.task_description),
+      });
     }
     case "request_grant": {
       const itemName = str(args, "item_name");
@@ -224,6 +256,18 @@ function str(args: Record<string, unknown>, key: string): string {
 
 function optional(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function mcpPayloadResult(payload: unknown): McpCallResult {
+  const status =
+    payload && typeof payload === "object" && "status" in payload
+      ? (payload as { status: unknown }).status
+      : undefined;
+  const blocking = status === "need_item" || status === "host_mismatch";
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    ...(blocking ? { isError: true } : {}),
+  };
 }
 
 function fail(message: string): McpCallResult {

@@ -24,6 +24,18 @@ export function last4(value: string): string {
   return value.slice(-4);
 }
 
+/** Structural hostname → env-var name. Not semantic classification. */
+export function suggestedNameFromHost(host: string): string | undefined {
+  const raw = host.trim().toLowerCase();
+  if (!raw) return undefined;
+  const candidate = raw.split(".").filter(Boolean).join("_").toUpperCase();
+  try {
+    return normalizeSecretName(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
 export function maskLast4(suffix: string): string {
   return `••••${suffix}`;
 }

@@ -10,10 +10,13 @@ import type {
   HostedGrantRecord,
   ItemRecord,
   MemberRecord,
+  NeedItemRecord,
   OrgRecord,
+  PersistFulfillInput,
   PolicyRecord,
   VaultRecord,
 } from "../hosted-types.ts";
+import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
 import { HOSTED_SCHEMA_SQLITE } from "./schema.ts";
 import type { VaultStore } from "./types.ts";
 
@@ -115,6 +118,7 @@ export class SqliteHostedStore implements VaultStore {
   async deleteOrg(orgId: string): Promise<void> {
     this.#db.exec("BEGIN");
     try {
+      this.#db.prepare("DELETE FROM need_items WHERE org_id = ?").run(orgId);
       this.#db
         .prepare(
           "DELETE FROM approval_challenges WHERE grant_id IN (SELECT id FROM grants WHERE org_id = ?)",
@@ -657,6 +661,171 @@ export class SqliteHostedStore implements VaultStore {
       at: String(r.at),
     }));
   }
+
+  async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
+    try {
+      this.#db
+        .prepare(
+          `INSERT INTO need_items (
+            id, org_id, client_id, environment_id, suggested_name, host, task_description,
+            status, item_id, grant_id, expires_at, created_at, fulfilled_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.id,
+          row.orgId,
+          row.clientId,
+          row.environmentId,
+          row.suggestedName,
+          row.host,
+          row.taskDescription,
+          row.status,
+          row.itemId,
+          row.grantId,
+          row.expiresAt,
+          row.createdAt,
+          row.fulfilledAt,
+        );
+      return row;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const existing = await this.getPendingNeed({
+        orgId: row.orgId,
+        clientId: row.clientId,
+        environmentId: row.environmentId,
+        suggestedName: row.suggestedName,
+        host: row.host,
+      });
+      if (existing) return existing;
+      throw err;
+    }
+  }
+
+  async getNeed(id: string): Promise<NeedItemRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM need_items WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapNeed(r) : undefined;
+  }
+
+  async getPendingNeed(input: {
+    orgId: string;
+    clientId: string;
+    environmentId: string;
+    suggestedName: string;
+    host: string;
+  }): Promise<NeedItemRecord | undefined> {
+    const r = this.#db
+      .prepare(
+        `SELECT * FROM need_items WHERE org_id = ? AND client_id = ? AND environment_id = ?
+         AND suggested_name = ? AND host = ? AND status = 'pending'`,
+      )
+      .get(input.orgId, input.clientId, input.environmentId, input.suggestedName, input.host) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapNeed(r) : undefined;
+  }
+
+  async listPendingNeeds(orgId: string): Promise<NeedItemRecord[]> {
+    const rows = this.#db
+      .prepare(
+        "SELECT * FROM need_items WHERE org_id = ? AND status = 'pending' ORDER BY created_at DESC",
+      )
+      .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapNeed);
+  }
+
+  async cancelNeed(id: string): Promise<void> {
+    this.#db.prepare("UPDATE need_items SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(id);
+  }
+
+  async refreshNeedExpires(id: string, expiresAt: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE need_items SET expires_at = ? WHERE id = ? AND status = 'pending'")
+      .run(expiresAt, id);
+  }
+
+  async persistFulfill(input: PersistFulfillInput): Promise<void> {
+    this.#db.exec("BEGIN");
+    try {
+      this.#db
+        .prepare(
+          `INSERT INTO items (
+            id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
+            inject, iv, ciphertext, tag, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.item.id,
+          input.item.environmentId,
+          input.item.folderId,
+          input.item.kind,
+          input.item.name,
+          input.item.last4,
+          input.item.username,
+          input.item.allowedHostsJson,
+          input.item.inject,
+          input.item.iv,
+          input.item.ciphertext,
+          input.item.tag,
+          input.item.createdAt,
+          input.item.updatedAt,
+        );
+      this.#db
+        .prepare(
+          `INSERT INTO grants (
+            id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
+            expires_at, created_at, approved_at, consumed_at, task_id, task_description
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.grant.id,
+          input.grant.orgId,
+          input.grant.clientId,
+          input.grant.itemId,
+          input.grant.folderId,
+          input.grant.environmentId,
+          input.grant.policy,
+          input.grant.status,
+          input.grant.expiresAt,
+          input.grant.createdAt,
+          input.grant.approvedAt,
+          input.grant.consumedAt,
+          input.grant.taskId,
+          input.grant.taskDescription,
+        );
+      const claimed = this.#db
+        .prepare(
+          `UPDATE need_items SET status = 'fulfilled', item_id = ?, grant_id = ?, fulfilled_at = ?
+           WHERE id = ? AND status = 'pending'`,
+        )
+        .run(input.item.id, input.grant.id, input.fulfilledAt, input.needId);
+      if (claimed.changes !== 1) {
+        throw new StoreConflictError("Need is not pending");
+      }
+      this.#db
+        .prepare(
+          "INSERT INTO audit (id, org_id, action, actor, item_name, client_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          input.audit.id,
+          input.audit.orgId,
+          input.audit.action,
+          input.audit.actor,
+          input.audit.itemName,
+          input.audit.clientId,
+          input.audit.at,
+        );
+      this.#db.exec("COMMIT");
+    } catch (err) {
+      this.#db.exec("ROLLBACK");
+      if (err instanceof StoreConflictError) throw err;
+      if (isUniqueViolation(err)) {
+        throw new StoreConflictError("Item name already exists in this environment");
+      }
+      throw err;
+    }
+  }
 }
 
 function mapPolicy(r: Record<string, unknown>): PolicyRecord {
@@ -680,5 +849,23 @@ function mapChallenge(r: Record<string, unknown>): ApprovalChallengeRecord {
     expiresAt: String(r.expires_at),
     attempts: Number(r.attempts),
     kind: r.kind as ApprovalChallengeRecord["kind"],
+  };
+}
+
+function mapNeed(r: Record<string, unknown>): NeedItemRecord {
+  return {
+    id: String(r.id),
+    orgId: String(r.org_id),
+    clientId: String(r.client_id),
+    environmentId: String(r.environment_id),
+    suggestedName: String(r.suggested_name),
+    host: String(r.host),
+    taskDescription: r.task_description == null ? null : String(r.task_description),
+    status: r.status as NeedItemRecord["status"],
+    itemId: r.item_id == null ? null : String(r.item_id),
+    grantId: r.grant_id == null ? null : String(r.grant_id),
+    expiresAt: String(r.expires_at),
+    createdAt: String(r.created_at),
+    fulfilledAt: r.fulfilled_at == null ? null : String(r.fulfilled_at),
   };
 }

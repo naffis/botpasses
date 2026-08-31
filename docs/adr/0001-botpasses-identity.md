@@ -21,7 +21,7 @@ We will create Fly apps `botpasses-staging` and `botpasses-prod`, copy secrets (
 - Default sqlite home is `$HOME/.botpasses`. There is no auto-migrate from `~/.agent-vault`.
 - Two Clerk production instances with grey-cloud FAPI hosts `clerk.botpasses.ai` and `clerk.staging.botpasses.ai`.
 - Resend domain `mail.botpasses.ai`; From `Botpasses <noreply@mail.botpasses.ai>` via `VAULT_EMAIL_FROM`.
-- GitHub rename to `naffis/botpasses` happens after the first green staging deploy, not before.
+- GitHub rename to `naffis/botpasses` was planned after the first green staging deploy. It was executed 2026-08-30 at operator request; live staging was still blocked on Fly/DNS.
 
 ## Alternatives considered
 
