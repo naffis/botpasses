@@ -137,3 +137,80 @@ test("trusted avt_ token cannot use MCP", async () => {
     cleanup(ctx.home);
   }
 });
+
+test("avm_ token cannot fulfill a need", async () => {
+  const ctx = await hostedCtx();
+  try {
+    const created = await ctx.kernel.createModelClient({
+      orgId: ctx.orgId,
+      name: "grok",
+      environment: "staging",
+      issueBearer: true,
+    });
+    assert.ok(created.plaintext);
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: created.client.id,
+      environment: "staging",
+      host: "api.example.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    const fulfill = await fetch(`${ctx.base}/api/need-items/${miss.need_id}/fulfill`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${created.plaintext}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        value: CANARY,
+        allowed_hosts: ["api.example.com"],
+        inject: "bearer",
+      }),
+    });
+    assert.ok(fulfill.status === 401 || fulfill.status === 403);
+    const env = await ctx.kernel.envFor(ctx.orgId, "staging");
+    assert.equal((await ctx.store.listItems(env.id)).length, 0);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("avt_ token cannot fulfill a need", async () => {
+  const ctx = await hostedCtx();
+  try {
+    const created = await ctx.kernel.createTrustedClient({
+      orgId: ctx.orgId,
+      name: "runtime",
+      environment: "staging",
+    });
+    const model = await ctx.kernel.createModelClient({
+      orgId: ctx.orgId,
+      name: "grok",
+      environment: "staging",
+    });
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: model.client.id,
+      environment: "staging",
+      host: "api.example.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    const fulfill = await fetch(`${ctx.base}/api/need-items/${miss.need_id}/fulfill`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${created.plaintext}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        value: CANARY,
+        allowed_hosts: ["api.example.com"],
+        inject: "bearer",
+      }),
+    });
+    assert.ok(fulfill.status === 401 || fulfill.status === 403);
+    const env = await ctx.kernel.envFor(ctx.orgId, "staging");
+    assert.equal((await ctx.store.listItems(env.id)).length, 0);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});

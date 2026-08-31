@@ -125,3 +125,66 @@ export type HostedAuditRecord = {
   clientId: string | null;
   at: string;
 };
+
+export type NeedItemStatus = "pending" | "fulfilled" | "cancelled";
+
+export type NeedItemRecord = {
+  id: string;
+  orgId: string;
+  clientId: string;
+  environmentId: string;
+  suggestedName: string;
+  host: string;
+  taskDescription: string | null;
+  status: NeedItemStatus;
+  itemId: string | null;
+  grantId: string | null;
+  expiresAt: string;
+  createdAt: string;
+  fulfilledAt: string | null;
+};
+
+export type PersistFulfillInput = {
+  item: ItemRecord;
+  grant: HostedGrantRecord;
+  audit: HostedAuditRecord;
+  needId: string;
+  fulfilledAt: string;
+};
+
+export type NeedPublic = {
+  id: string;
+  suggested_name: string;
+  host: string;
+  client_id: string;
+  client_name: string;
+  task_description: string | null;
+  collect_path: string;
+  expires_at: string;
+  status: NeedItemStatus;
+};
+
+export type FindItemsStatus = "found" | "ambiguous" | "need_item" | "host_mismatch";
+
+export type FindItemSummary = {
+  name: string;
+  kind: ItemKind;
+  last4: string;
+  allowed_hosts: string[];
+  inject: string;
+  environment: VaultEnvName;
+};
+
+export type FindItemsResult =
+  | { status: "found"; item: FindItemSummary }
+  | { status: "ambiguous"; items: FindItemSummary[]; truncated: boolean }
+  | { status: "host_mismatch"; item: FindItemSummary }
+  | {
+      status: "need_item";
+      collect_url: string;
+      suggested_name: string;
+      host: string;
+      client_name: string;
+      need_id: string;
+      message: string;
+    };

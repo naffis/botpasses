@@ -51,7 +51,13 @@ export function hostedOperatorHtml(): string {
       <label>Value <input name="value" type="password" autocomplete="off" /></label>
       <label>Username (login) <input name="username" /></label>
       <label>Allowed hosts (comma) <input name="allowed_hosts" placeholder="api.spotify.com" /></label>
-      <label>Inject <input name="inject" value="bearer" /></label>
+      <label>Inject
+        <select name="inject">
+          <option value="bearer" selected>bearer</option>
+          <option value="basic">basic</option>
+          <option value="header:Authorization">header:Authorization</option>
+        </select>
+      </label>
       <button type="submit">Store</button>
     </form>
     <h2>Items</h2>
@@ -93,6 +99,16 @@ export function hostedOperatorHtml(): string {
       const j = await r.json();
       const el = document.getElementById("inbox");
       el.innerHTML = "";
+      for (const n of j.needs || []) {
+        const row = document.createElement("div");
+        row.textContent = [n.client_name, "needs", n.suggested_name, n.host, n.task_description]
+          .filter(Boolean).join(" ");
+        const a = document.createElement("a");
+        a.href = n.collect_path || ("/collect/" + n.id);
+        a.textContent = "Open collect";
+        row.appendChild(a);
+        el.appendChild(row);
+      }
       for (const g of j.grants || []) {
         const row = document.createElement("div");
         row.textContent = g.id + " " + g.status + " " + (g.task_description || "");

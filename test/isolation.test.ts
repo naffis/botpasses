@@ -231,3 +231,99 @@ test("hosted MCP REST email audit never contain the stored canary", async () => 
     cleanup(home);
   }
 });
+
+test("hosted find then operator fulfill never leaks canary into MCP collect HTML or inbox", async () => {
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "hosted.sqlite"));
+  const kernel = new HostedKernel({
+    store,
+    kek: parseMasterKey(generateMasterKey()),
+    publicUrl: "http://127.0.0.1:8788",
+    deployPlane: "staging",
+  });
+  const { orgId } = await kernel.createOrg("iso", "user_owner");
+  const { client: model } = await kernel.createModelClient({
+    orgId,
+    name: "grok",
+    environment: "staging",
+  });
+  const http = createHostedServer({
+    kernel,
+    host: "127.0.0.1",
+    port: 0,
+    fetchImpl: async (_url, init) => {
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), `Bearer ${CANARY}`);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+    resolveAddresses: async () => ["8.8.8.8"],
+  });
+  const addr = await http.listen();
+  const base = `http://${addr.host}:${addr.port}`;
+  const op = {
+    "content-type": "application/json",
+    "x-test-channel": "operator",
+    "x-test-user": "user_owner",
+    "x-test-org": orgId,
+  };
+  const chat = new ChatTranscript();
+  try {
+    const found = await handleHostedMcpRpc(
+      { kernel, principal: { channel: "model", orgId, clientId: model.id, environment: "staging" } },
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "find_items", arguments: { host: "api.spotify.com" } },
+      },
+    );
+    chat.add("agent", found);
+    const text = (found as { result?: { content?: { text?: string }[] } }).result?.content?.[0]?.text ?? "{}";
+    const miss = JSON.parse(text) as { need_id?: string; collect_url?: string };
+    const collect = await (await fetch(`${base}/collect/${miss.need_id}`)).text();
+    chat.add("operator", collect);
+    const fulfill = await fetch(`${base}/api/need-items/${miss.need_id}/fulfill`, {
+      method: "POST",
+      headers: op,
+      body: JSON.stringify({
+        name: "SPOTIFY_TOKEN",
+        value: CANARY,
+        allowed_hosts: ["api.spotify.com"],
+        inject: "bearer",
+      }),
+    });
+    chat.add("operator", await fulfill.json());
+    const used = await handleHostedMcpRpc(
+      {
+        kernel,
+        principal: { channel: "model", orgId, clientId: model.id, environment: "staging" },
+        fetchImpl: async (_url, init) => {
+          const headers = new Headers(init?.headers);
+          assert.equal(headers.get("authorization"), `Bearer ${CANARY}`);
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        },
+        resolveAddresses: async () => ["8.8.8.8"],
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "http.request",
+          arguments: { item_name: "SPOTIFY_TOKEN", method: "GET", path: "/v1/me" },
+        },
+      },
+    );
+    chat.add("agent", used);
+    const inbox = await (await fetch(`${base}/api/inbox`, { headers: op })).json();
+    chat.add("operator", inbox);
+    const blob = chat.serialize() + collect + JSON.stringify(inbox);
+    assert.equal(transcriptContainsSecret(blob, CANARY), false, blob);
+    const url = new URL(String(miss.collect_url));
+    assert.equal(url.search, "");
+  } finally {
+    await http.close();
+    await store.close();
+    cleanup(home);
+  }
+});

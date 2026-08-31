@@ -8,10 +8,13 @@ import type {
   HostedGrantRecord,
   ItemRecord,
   MemberRecord,
+  NeedItemRecord,
   OrgRecord,
+  PersistFulfillInput,
   PolicyRecord,
   VaultRecord,
 } from "../hosted-types.ts";
+import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
 import { HOSTED_SCHEMA_SQLITE } from "./schema.ts";
 import type { VaultStore } from "./types.ts";
 
@@ -71,6 +74,7 @@ export class PostgresStore implements VaultStore {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query("DELETE FROM need_items WHERE org_id = $1", [orgId]);
       await client.query(
         "DELETE FROM approval_challenges WHERE grant_id IN (SELECT id FROM grants WHERE org_id = $1)",
         [orgId],
@@ -490,6 +494,123 @@ export class PostgresStore implements VaultStore {
     });
   }
 
+  async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
+    try {
+      await this.#pool.query(
+        `INSERT INTO need_items (
+          id, org_id, client_id, environment_id, suggested_name, host, task_description,
+          status, item_id, grant_id, expires_at, created_at, fulfilled_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        needValues(row),
+      );
+      return row;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const existing = await this.getPendingNeed({
+        orgId: row.orgId,
+        clientId: row.clientId,
+        environmentId: row.environmentId,
+        suggestedName: row.suggestedName,
+        host: row.host,
+      });
+      if (existing) return existing;
+      throw err;
+    }
+  }
+
+  async getNeed(id: string): Promise<NeedItemRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM need_items WHERE id = $1", [id]);
+    return mapNeed(r.rows[0]);
+  }
+
+  async getPendingNeed(input: {
+    orgId: string;
+    clientId: string;
+    environmentId: string;
+    suggestedName: string;
+    host: string;
+  }): Promise<NeedItemRecord | undefined> {
+    const r = await this.#pool.query(
+      `SELECT * FROM need_items WHERE org_id=$1 AND client_id=$2 AND environment_id=$3
+       AND suggested_name=$4 AND host=$5 AND status='pending'`,
+      [input.orgId, input.clientId, input.environmentId, input.suggestedName, input.host],
+    );
+    return mapNeed(r.rows[0]);
+  }
+
+  async listPendingNeeds(orgId: string): Promise<NeedItemRecord[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM need_items WHERE org_id=$1 AND status='pending' ORDER BY created_at DESC",
+      [orgId],
+    );
+    return r.rows.map((row) => mapNeed(row)!);
+  }
+
+  async cancelNeed(id: string): Promise<void> {
+    await this.#pool.query(
+      "UPDATE need_items SET status='cancelled' WHERE id=$1 AND status='pending'",
+      [id],
+    );
+  }
+
+  async refreshNeedExpires(id: string, expiresAt: string): Promise<void> {
+    await this.#pool.query(
+      "UPDATE need_items SET expires_at=$1 WHERE id=$2 AND status='pending'",
+      [expiresAt, id],
+    );
+  }
+
+  async persistFulfill(input: PersistFulfillInput): Promise<void> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO items (
+          id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
+          inject, iv, ciphertext, tag, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        itemValues(input.item),
+      );
+      await client.query(
+        `INSERT INTO grants (
+          id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
+          expires_at, created_at, approved_at, consumed_at, task_id, task_description
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        grantValues(input.grant),
+      );
+      const claimed = await client.query(
+        `UPDATE need_items SET status='fulfilled', item_id=$1, grant_id=$2, fulfilled_at=$3
+         WHERE id=$4 AND status='pending'`,
+        [input.item.id, input.grant.id, input.fulfilledAt, input.needId],
+      );
+      if (claimed.rowCount !== 1) {
+        throw new StoreConflictError("Need is not pending");
+      }
+      await client.query(
+        "INSERT INTO audit (id, org_id, action, actor, item_name, client_id, at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [
+          input.audit.id,
+          input.audit.orgId,
+          input.audit.action,
+          input.audit.actor,
+          input.audit.itemName,
+          input.audit.clientId,
+          input.audit.at,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      if (err instanceof StoreConflictError) throw err;
+      if (isUniqueViolation(err)) {
+        throw new StoreConflictError("Item name already exists in this environment");
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async insertAgentPass(row: {
     id: string;
     orgId: string;
@@ -663,4 +784,80 @@ function mapChallenge(row: unknown): ApprovalChallengeRecord | undefined {
     attempts: Number(rec.attempts),
     kind: rec.kind as ApprovalChallengeRecord["kind"],
   };
+}
+
+function mapNeed(row: unknown): NeedItemRecord | undefined {
+  if (!row) return undefined;
+  const rec = asRecord(row);
+  return {
+    id: String(rec.id),
+    orgId: String(rec.org_id),
+    clientId: String(rec.client_id),
+    environmentId: String(rec.environment_id),
+    suggestedName: String(rec.suggested_name),
+    host: String(rec.host),
+    taskDescription: rec.task_description == null ? null : String(rec.task_description),
+    status: rec.status as NeedItemRecord["status"],
+    itemId: rec.item_id == null ? null : String(rec.item_id),
+    grantId: rec.grant_id == null ? null : String(rec.grant_id),
+    expiresAt: String(rec.expires_at),
+    createdAt: String(rec.created_at),
+    fulfilledAt: rec.fulfilled_at == null ? null : String(rec.fulfilled_at),
+  };
+}
+
+function needValues(row: NeedItemRecord): unknown[] {
+  return [
+    row.id,
+    row.orgId,
+    row.clientId,
+    row.environmentId,
+    row.suggestedName,
+    row.host,
+    row.taskDescription,
+    row.status,
+    row.itemId,
+    row.grantId,
+    row.expiresAt,
+    row.createdAt,
+    row.fulfilledAt,
+  ];
+}
+
+function itemValues(row: ItemRecord): unknown[] {
+  return [
+    row.id,
+    row.environmentId,
+    row.folderId,
+    row.kind,
+    row.name,
+    row.last4,
+    row.username,
+    row.allowedHostsJson,
+    row.inject,
+    row.iv,
+    row.ciphertext,
+    row.tag,
+    row.createdAt,
+    row.updatedAt,
+  ];
+}
+
+function grantValues(row: HostedGrantRecord): unknown[] {
+  return [
+    row.id,
+    row.orgId,
+    row.clientId,
+    row.itemId,
+    row.folderId,
+    row.environmentId,
+    row.policy,
+    row.status,
+    row.expiresAt,
+    row.createdAt,
+    row.approvedAt,
+    row.consumedAt,
+    row.taskId,
+    row.taskDescription,
+  ];
 }

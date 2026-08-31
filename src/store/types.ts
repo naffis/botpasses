@@ -7,7 +7,9 @@ import type {
   HostedGrantRecord,
   ItemRecord,
   MemberRecord,
+  NeedItemRecord,
   OrgRecord,
+  PersistFulfillInput,
   PolicyRecord,
   VaultRecord,
 } from "../hosted-types.ts";
@@ -82,6 +84,20 @@ export type VaultStore = {
 
   insertAudit(row: HostedAuditRecord): Promise<void>;
   listAudit(orgId: string, limit?: number): Promise<HostedAuditRecord[]>;
+
+  insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord>;
+  getNeed(id: string): Promise<NeedItemRecord | undefined>;
+  getPendingNeed(input: {
+    orgId: string;
+    clientId: string;
+    environmentId: string;
+    suggestedName: string;
+    host: string;
+  }): Promise<NeedItemRecord | undefined>;
+  listPendingNeeds(orgId: string): Promise<NeedItemRecord[]>;
+  cancelNeed(id: string): Promise<void>;
+  refreshNeedExpires(id: string, expiresAt: string): Promise<void>;
+  persistFulfill(input: PersistFulfillInput): Promise<void>;
 
   insertAgentPass(row: {
     id: string;
