@@ -8,7 +8,7 @@ test("operator page can list both environments and rotate or delete", () => {
   assert.doesNotMatch(html, /Agent Grant Vault/);
   assert.match(html, /\/api\/items\?environment=/);
   assert.match(html, /\["staging", "production"\]/);
-  assert.match(html, /Rotate/);
-  assert.match(html, /Delete/);
-  assert.match(html, /\/rotate/);
+  assert.match(html, /Issue Grok Bot token/);
+  assert.match(html, /Operator token/);
+  assert.match(html, /Authorization/);
 });

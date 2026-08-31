@@ -37,7 +37,7 @@ async function setup() {
     allowedHosts: ["api.stripe.com"],
     inject: "bearer",
   });
-  const model = await kernel.createModelClient({
+  const { client: model } = await kernel.createModelClient({
     orgId,
     name: "grok",
     environment: "staging",
@@ -578,6 +578,15 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     }),
     undefined,
   );
+  assert.match(
+    hostedBootError({
+      VAULT_MODE: "hosted",
+      DATABASE_URL: "postgres://x",
+      VAULT_KEK: "aa".repeat(32),
+      VAULT_BOOTSTRAP_TOKEN: "short",
+    }) ?? "",
+    /VAULT_BOOTSTRAP_TOKEN/,
+  );
 });
 
 test("login username is listable; password is not", async () => {
@@ -697,7 +706,7 @@ test("expired approval code is 410", async () => {
     allowedHosts: ["api.stripe.com"],
     inject: "bearer",
   });
-  const model = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
+  const { client: model } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
   const asked = await kernel.requestGrant({
     orgId,
     clientId: model.id,
@@ -733,7 +742,7 @@ test("missing Resend still returns a code and audits notify_failed", async () =>
     allowedHosts: ["api.stripe.com"],
     inject: "bearer",
   });
-  const model = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
+  const { client: model } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
   const asked = await kernel.requestGrant({
     orgId,
     clientId: model.id,

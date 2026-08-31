@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { verifyToken } from "@clerk/backend";
 import type { HostedKernel } from "./kernel.ts";
 import { HttpError } from "./errors.ts";
-import type { Principal } from "./auth.ts";
+import { readBearer, resolveMachineToken, type Principal } from "./auth.ts";
 
 export type ClerkClaims = {
   sub?: string;
@@ -10,13 +10,6 @@ export type ClerkClaims = {
   azp?: string;
   sid?: string | null;
 };
-
-function bearer(req: IncomingMessage): string | undefined {
-  const raw = req.headers.authorization;
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (!value?.startsWith("Bearer ")) return undefined;
-  return value.slice("Bearer ".length).trim();
-}
 
 function stringField(payload: object, key: string): string | undefined {
   if (!(key in payload)) return undefined;
@@ -65,18 +58,10 @@ export async function clerkAuthResolver(
   req: IncomingMessage,
   kernel: HostedKernel,
 ): Promise<Principal | undefined> {
-  const token = bearer(req);
+  const machine = await resolveMachineToken(req, kernel);
+  if (machine) return machine;
+  const token = readBearer(req);
   if (!token) return undefined;
-  if (token.startsWith("avt_")) {
-    const client = await kernel.lookupTrustedToken(token);
-    if (!client || client.kind !== "trusted") return undefined;
-    return {
-      channel: "trusted",
-      orgId: client.orgId,
-      clientId: client.id,
-      environment: client.environment,
-    };
-  }
   const secretKey = process.env.CLERK_SECRET_KEY;
   if (!secretKey) throw new HttpError(401, "Authentication required");
   const payload = await verifyToken(token, { secretKey });

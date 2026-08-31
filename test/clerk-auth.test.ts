@@ -16,12 +16,12 @@ test("Clerk session JWT with sid is an operator, not the first model client", as
   });
   try {
     const { orgId } = await kernel.createOrg("acme", "user_owner");
-    const grok = await kernel.createModelClient({
+    const grok = (await kernel.createModelClient({
       orgId,
       name: "grok",
       environment: "staging",
       clerkOauthUserId: "azp_grok",
-    });
+    })).client;
     const session = await principalFromClerkClaims(kernel, {
       sub: "user_owner",
       org_id: orgId,
@@ -42,12 +42,12 @@ test("Clerk session JWT with sid is an operator, not the first model client", as
     if (oauth.channel === "model") {
       assert.equal(oauth.clientId, grok.id);
     }
-    const prod = await kernel.createModelClient({
+    const prod = (await kernel.createModelClient({
       orgId,
       name: "prod-mcp",
       environment: "production",
       clerkOauthUserId: "azp_prod",
-    });
+    })).client;
     const prodOauth = await principalFromClerkClaims(kernel, {
       sub: "oauth_sub",
       org_id: orgId,

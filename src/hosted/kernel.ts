@@ -29,6 +29,10 @@ const CODE_TTL_MS = 10 * 60 * 1000;
 const MAGIC_TTL_MS = 15 * 60 * 1000;
 const MAX_ITEM_BYTES = 64 * 1024;
 
+/** Single-operator org when `VAULT_BOOTSTRAP_TOKEN` is set (Clerk not required). */
+export const BOOTSTRAP_ORG_ID = "org_bootstrap";
+export const BOOTSTRAP_USER_ID = "user_bootstrap";
+
 export type HostedKernelOpts = {
   store: VaultStore;
   kek: Buffer;
@@ -84,6 +88,24 @@ export class HostedKernel {
 
   async createOrg(name: string, userId: string): Promise<{ orgId: string }> {
     const orgId = `org_${randomUUID()}`;
+    await this.#provisionOrg(orgId, name, userId);
+    return { orgId };
+  }
+
+  async ensureBootstrapOperator(): Promise<{ orgId: string; userId: string; role: MemberRole }> {
+    const orgId = BOOTSTRAP_ORG_ID;
+    const userId = BOOTSTRAP_USER_ID;
+    const existing = await this.store.getOrg(orgId);
+    if (!existing) {
+      await this.#provisionOrg(orgId, "personal", userId);
+    } else if (!(await this.store.getMember(orgId, userId))) {
+      await this.store.insertMember({ orgId, userId, role: "owner" });
+    }
+    const role = await this.requireMember(orgId, userId);
+    return { orgId, userId, role };
+  }
+
+  async #provisionOrg(orgId: string, name: string, userId: string): Promise<void> {
     const dek = generateDek();
     const wrapped = wrapDek(dek, this.#kek, orgId);
     const at = nowIso(this.now());
@@ -108,7 +130,6 @@ export class HostedKernel {
       vaultId,
       name: "production",
     });
-    return { orgId };
   }
 
   async addMember(orgId: string, userId: string, role: MemberRole): Promise<void> {
@@ -308,19 +329,21 @@ export class HostedKernel {
     name: string;
     environment: VaultEnvName;
     clerkOauthUserId?: string;
-  }): Promise<ClientRecord> {
+    issueBearer?: boolean;
+  }): Promise<{ client: ClientRecord; plaintext?: string }> {
     this.#assertPlane(input.environment);
+    const plaintext = input.issueBearer === true ? `avm_${randomBytes(24).toString("hex")}` : undefined;
     const row: ClientRecord = {
       id: `cli_${randomUUID()}`,
       orgId: input.orgId,
       kind: "model",
       name: input.name,
-      hashedSecret: null,
+      hashedSecret: plaintext ? hashSecret(plaintext) : null,
       clerkOauthUserId: input.clerkOauthUserId ?? null,
       environment: input.environment,
     };
     await this.store.insertClient(row);
-    return row;
+    return { client: row, plaintext };
   }
 
   async ensureModelClient(input: {
@@ -334,7 +357,8 @@ export class HostedKernel {
       (c) => c.kind === "model" && c.clerkOauthUserId === input.clerkOauthUserId,
     );
     if (existing) return existing;
-    return this.createModelClient(input);
+    const created = await this.createModelClient(input);
+    return created.client;
   }
 
   async lookupTrusted(orgId: string, token: string): Promise<ClientRecord | undefined> {

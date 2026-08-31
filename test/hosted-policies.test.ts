@@ -43,7 +43,7 @@ for (const c of cases) {
         allowedHosts: ["api.stripe.com"],
         inject: "bearer",
       });
-      const model = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
+      const { client: model } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
       const asked = await kernel.requestGrant({
         orgId,
         clientId: model.id,

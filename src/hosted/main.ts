@@ -6,7 +6,7 @@ import { createResendSender } from "./email.ts";
 import { assertHostedBoot, HOSTED_CONFIG_EXIT } from "./boot.ts";
 import { PostgresStore } from "../store/postgres.ts";
 import { clerkAuthResolver } from "./clerk-auth.ts";
-import { testAuthResolver } from "./auth.ts";
+import { hostedAuthResolver, testAuthResolver } from "./auth.ts";
 
 export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   try {
@@ -36,7 +36,8 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     console.error("Refusing non-loopback bind without https VAULT_PUBLIC_URL");
     process.exit(HOSTED_CONFIG_EXIT);
   }
-  const authResolver = env.VAULT_AUTH_MODE === "test" ? testAuthResolver : clerkAuthResolver;
+  const inner = env.VAULT_AUTH_MODE === "test" ? testAuthResolver : clerkAuthResolver;
+  const authResolver = hostedAuthResolver(env, inner);
   const http = createHostedServer({
     kernel,
     host,

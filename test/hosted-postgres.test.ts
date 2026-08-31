@@ -32,7 +32,7 @@ test("AC-10 two processes: exactly one prompt consume on Postgres", async (t) =>
     allowedHosts: ["api.stripe.com"],
     inject: "bearer",
   });
-  const model = await kernel.createModelClient({
+  const { client: model } = await kernel.createModelClient({
     orgId,
     name: "m",
     environment: "staging",

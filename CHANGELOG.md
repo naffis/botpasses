@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-08-30
+
+Hosted console and Grok Bot can run without Clerk.
+
+- Operator HTML at `/` is public; APIs still require auth. Paste `VAULT_BOOTSTRAP_TOKEN` (32+ chars) to operate.
+- `POST /api/clients/model` issues a one-time `avm_…` bearer for remote MCP (Grok Bot header auth). `avt_…` trusted tokens still cannot call MCP. Model tokens still cannot `/runtime/resolve`.
+- Process env: `VAULT_BOOTSTRAP_TOKEN`.
+
 ## 0.3.0 — 2026-08-30
 
 Product identity is **Botpasses**. Hosted origins are `https://botpasses.ai` and `https://staging.botpasses.ai`.

@@ -33,7 +33,8 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 
 | Client | How |
 | --- | --- |
-| Grok | `grok mcp add --transport http` + OAuth, or a bearer machine token scoped `mcp:model` |
+| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. |
+| Grok Build | `grok mcp add --transport http botpasses https://<origin>/mcp --header "Authorization: Bearer ${BOTPASSES_MODEL_TOKEN}"` |
 | Claude | Remote connector named `Botpasses` + OAuth |
 | ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration (enable DCR on the Clerk instance) |
 | Cursor | Remote MCP URL or local `npx vault mcp` stdio. Hosted stdio: `npx vault login`, then `npx vault mcp --user-jwt` |
@@ -175,7 +176,7 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 
 **DNS:** orange-cloud `A`/`AAAA` for `botpasses.ai` and `staging.botpasses.ai`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.ai` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK`, `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API` (hostname only, e.g. `clerk.staging.botpasses.ai`), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.ai>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
+**Fly secrets (names only):** `VAULT_KEK`, `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; operator login until Clerk), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API` (hostname only, e.g. `clerk.staging.botpasses.ai`), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.ai>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
 
 Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong.
 
