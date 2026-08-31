@@ -164,7 +164,7 @@ test("hosted MCP REST email audit never contain the stored canary", async () => 
     allowedHosts: ["api.stripe.com"],
     inject: "bearer",
   });
-  const model = await kernel.createModelClient({ orgId, name: "grok", environment: "staging" });
+  const { client: model } = await kernel.createModelClient({ orgId, name: "grok", environment: "staging" });
   const http = createHostedServer({
     kernel,
     host: "127.0.0.1",

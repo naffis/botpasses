@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { ClientKind, MemberRole, VaultEnvName } from "../hosted-types.ts";
 import type { HostedKernel } from "./kernel.ts";
@@ -38,18 +38,26 @@ function header(req: IncomingMessage, name: string): string | undefined {
   return raw;
 }
 
-function bearer(req: IncomingMessage): string | undefined {
+export function readBearer(req: IncomingMessage): string | undefined {
   const auth = header(req, "authorization");
   if (!auth?.startsWith("Bearer ")) return undefined;
   return auth.slice("Bearer ".length).trim();
 }
 
-export async function testAuthResolver(
+/** Constant-time compare of token strings (hashes first so lengths may differ). */
+export function tokensEqual(a: string, b: string): boolean {
+  const left = createHash("sha256").update(a).digest();
+  const right = createHash("sha256").update(b).digest();
+  return timingSafeEqual(left, right);
+}
+
+export async function resolveMachineToken(
   req: IncomingMessage,
   kernel: HostedKernel,
 ): Promise<Principal | undefined> {
-  const token = bearer(req);
-  if (token?.startsWith("avt_")) {
+  const token = readBearer(req);
+  if (!token) return undefined;
+  if (token.startsWith("avt_")) {
     const client = await kernel.lookupTrustedToken(token);
     if (!client || client.kind !== "trusted") return undefined;
     return {
@@ -59,6 +67,42 @@ export async function testAuthResolver(
       environment: client.environment,
     };
   }
+  if (token.startsWith("avm_")) {
+    const client = await kernel.lookupTrustedToken(token);
+    if (!client || client.kind !== "model") return undefined;
+    return {
+      channel: "model",
+      orgId: client.orgId,
+      clientId: client.id,
+      environment: client.environment,
+    };
+  }
+  return undefined;
+}
+
+export function hostedAuthResolver(
+  env: NodeJS.ProcessEnv,
+  fallback: AuthResolver,
+): AuthResolver {
+  const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
+  return async (req, kernel) => {
+    const token = readBearer(req);
+    if (bootstrap.length >= 32 && token && tokensEqual(token, bootstrap)) {
+      const op = await kernel.ensureBootstrapOperator();
+      return { channel: "operator", userId: op.userId, orgId: op.orgId, role: op.role };
+    }
+    const machine = await resolveMachineToken(req, kernel);
+    if (machine) return machine;
+    return fallback(req, kernel);
+  };
+}
+
+export async function testAuthResolver(
+  req: IncomingMessage,
+  kernel: HostedKernel,
+): Promise<Principal | undefined> {
+  const machine = await resolveMachineToken(req, kernel);
+  if (machine) return machine;
   const channel = header(req, "x-test-channel");
   if (!channel) return undefined;
   if (channel === "operator") {

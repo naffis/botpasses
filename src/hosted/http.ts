@@ -127,12 +127,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && (path === "/" || path === "/index.html")) {
-      try {
-        requireOperator(principal);
-      } catch (err) {
-        sendError(res, err);
-        return;
-      }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(hostedOperatorHtml());
       return;
@@ -273,12 +267,17 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (method === "POST" && path === "/api/clients/model") {
       const op = requireOperator(principal);
       const body = await readJson(req);
-      const client = await opts.kernel.createModelClient({
+      const created = await opts.kernel.createModelClient({
         orgId: op.orgId,
-        name: String(body.name ?? "model"),
+        name: String(body.name ?? "grok"),
         environment: asEnv(body.environment),
+        issueBearer: true,
       });
-      json(res, 200, { client: { id: client.id, name: client.name, kind: client.kind } });
+      json(res, 200, {
+        client: { id: created.client.id, name: created.client.name, kind: created.client.kind },
+        token: created.plaintext,
+        mcp_url: `${publicUrl.replace(/\/$/, "")}/mcp`,
+      });
       return;
     }
     if (method === "POST" && path === "/api/grants/request") {

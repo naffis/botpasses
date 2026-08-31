@@ -16,6 +16,10 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (env.RESEND_API_KEY && !env.VAULT_EMAIL_FROM?.trim()) {
     return "VAULT_MODE=hosted with RESEND_API_KEY requires VAULT_EMAIL_FROM.";
   }
+  const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
+  if (bootstrap.length > 0 && bootstrap.length < 32) {
+    return "VAULT_BOOTSTRAP_TOKEN must be at least 32 characters when set.";
+  }
   return undefined;
 }
 
