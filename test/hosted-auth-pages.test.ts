@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
@@ -9,6 +9,18 @@ import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
 import { signInHtml, signUpHtml, enrollTotpHtml, consentHtml, deviceHtml } from "../src/hosted/auth-pages.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { TEST_SESSION_SECRET, cleanup, tempHome } from "./helpers.ts";
+
+const BANNED_AUTH = /@clerk\/backend|CLERK_|better-auth|@better-auth\//;
+
+function filesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) out.push(...filesUnder(p));
+    else out.push(p);
+  }
+  return out;
+}
 
 test("AC-14 auth HTML has one h1 and no secrets", () => {
   for (const html of [signInHtml(), signUpHtml(), enrollTotpHtml(), consentHtml("Demo", "uid"), deviceHtml()]) {
@@ -62,15 +74,9 @@ test("AC-14 GET /sign-in is HTML with CSP self only", async () => {
 });
 
 test("AC-20 src and package.json have no Clerk or Better Auth", () => {
-  try {
-    const out = execFileSync(
-      "rg",
-      ["-n", "@clerk/backend|CLERK_|better-auth|@better-auth/", "src", "package.json"],
-      { encoding: "utf8" },
-    );
-    assert.equal(out.trim(), "", out);
-  } catch (err) {
-    const rec = err as { status?: number; stdout?: string };
-    if (rec.status !== 1) throw err;
+  const hits: string[] = [];
+  for (const p of ["package.json", ...filesUnder("src")]) {
+    if (BANNED_AUTH.test(readFileSync(p, "utf8"))) hits.push(p);
   }
+  assert.deepEqual(hits, []);
 });
