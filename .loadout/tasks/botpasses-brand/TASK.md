@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Product identity is Botpasses on `https://botpasses.ai` and `https://staging.botpasses.ai`: UI, MCP, CLI/npm, Fly toml names, docs, and a sequenced infra cutover. `VAULT_*` env names unchanged. `npm test && npm run typecheck` green.
+Product identity is Botpasses on `https://botpasses.com` and `https://staging.botpasses.com`: UI, MCP, CLI/npm, Fly toml names, docs, and a sequenced infra cutover. `VAULT_*` env names unchanged. `npm test && npm run typecheck` green.
 
 ## Spec pointer
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
+import { PRODUCTION_ORIGIN, STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
@@ -13,7 +14,7 @@ async function setup() {
   const kernel = new HostedKernel({
     store,
     kek: parseMasterKey(generateMasterKey()),
-    publicUrl: "https://staging.botpasses.ai",
+    publicUrl: STAGING_ORIGIN,
     deployPlane: "staging",
   });
   const { orgId } = await kernel.createOrg("acme", "user_owner");
@@ -31,7 +32,7 @@ test("production client cannot find_items in staging (env isolation)", async () 
   const kernel = new HostedKernel({
     store,
     kek: parseMasterKey(generateMasterKey()),
-    publicUrl: "https://botpasses.ai",
+    publicUrl: PRODUCTION_ORIGIN,
     deployPlane: "production",
   });
   try {
@@ -165,7 +166,7 @@ test("repeated find refreshes expires_at on the pending row (N-03)", async () =>
   const kernel = new HostedKernel({
     store,
     kek: parseMasterKey(generateMasterKey()),
-    publicUrl: "https://staging.botpasses.ai",
+    publicUrl: STAGING_ORIGIN,
     deployPlane: "staging",
     now: () => new Date(nowMs),
   });

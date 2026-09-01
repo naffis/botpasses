@@ -7,6 +7,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { decrypt, encrypt } from "../crypto.ts";
+import { resolvePublicOrigin } from "../brand.ts";
 import { last4, normalizeSecretName } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type {
@@ -90,9 +91,12 @@ export class HostedKernel {
     this.#kek = opts.kek;
     this.now = opts.now ?? (() => new Date());
     this.sendEmail = opts.sendEmail;
-    this.publicUrl = opts.publicUrl ?? "http://127.0.0.1:8788";
     this.approvalHmac = opts.approvalHmac;
     this.deployPlane = opts.deployPlane ?? "production";
+    this.publicUrl = resolvePublicOrigin(opts.publicUrl ?? "http://127.0.0.1:8788", {
+      plane: this.deployPlane,
+      allowLoopback: true,
+    });
     this.limiter = opts.limiter ?? new OrgRateLimiter();
   }
 

@@ -4,7 +4,7 @@ Named credentials for **agents and tools**, injected into the **runtime** (child
 
 This is not a human password manager. It does not do browser autofill, TOTP, passkeys, or sharing secrets with other people. If the LLM can see a secret value, the product failed.
 
-Hosted origins: **https://botpasses.ai** (prod) and **https://staging.botpasses.ai**. Process env names stay `VAULT_*`. AgentPass (`/agentpass/*`) is a separate protocol, not the product name.
+Hosted origins: **https://botpasses.com** (prod) and **https://staging.botpasses.com**. MCP collect URLs, CLI login, OAuth resource, and emails use those origins only. Process env names stay `VAULT_*`. AgentPass (`/agentpass/*`) is a separate protocol, not the product name.
 
 An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAULT_HOME` to that path.
 
@@ -46,7 +46,7 @@ Until the package is published on npm, use `npx vault` from this repo or `npm ru
 Do not put `CLERK_SECRET_KEY` in `mcp.json`. Sign in at the hosted origin, copy the Clerk **session** JWT, then:
 
 ```bash
-export VAULT_PUBLIC_URL=https://staging.botpasses.ai
+export VAULT_PUBLIC_URL=https://staging.botpasses.com
 npx vault login
 export VAULT_USER_JWT=eyJ...
 npx vault mcp --user-jwt
@@ -172,11 +172,11 @@ Local: AES-256-GCM envelope with `VAULT_MASTER_KEY`. Hosted: platform `VAULT_KEK
 
 ## Hosted deploy (Fly + Neon + Cloudflare)
 
-Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `iad`. Staging and production keep **separate Neon databases** (reuse the existing `DATABASE_URL` secrets; do not branch prod from staging). Cloudflare orange-cloud DNS + WAF, SSL Full (strict). Cutover steps: [docs/ops/botpasses-cutover.md](docs/ops/botpasses-cutover.md). Identity decisions: [docs/adr/0001-botpasses-identity.md](docs/adr/0001-botpasses-identity.md).
+Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `iad`. Staging and production keep **separate Neon databases** (reuse the existing `DATABASE_URL` secrets; do not branch prod from staging). Cloudflare orange-cloud DNS + WAF, SSL Full (strict). Cutover steps: [docs/ops/botpasses-cutover.md](docs/ops/botpasses-cutover.md). Identity decisions: [docs/adr/0001-botpasses-identity.md](docs/adr/0001-botpasses-identity.md), origins [docs/adr/0002-botpasses-com-origin.md](docs/adr/0002-botpasses-com-origin.md).
 
-**DNS:** orange-cloud `A`/`AAAA` for `botpasses.ai` and `staging.botpasses.ai`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.ai` is a Cloudflare 301 to the apex (no Fly cert).
+**DNS:** orange-cloud `A`/`AAAA` for `botpasses.com` and `staging.botpasses.com`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.com` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK`, `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; operator login until Clerk), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API` (hostname only, e.g. `clerk.staging.botpasses.ai`), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.ai>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
+**Fly secrets (names only):** `VAULT_KEK`, `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; operator login until Clerk), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API` (hostname only, e.g. `clerk.staging.botpasses.com`), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.com>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
 
 Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong.
 

@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { STAGING_ORIGIN } from "../src/brand.ts";
 import { main } from "../src/cli.ts";
 import { generateMasterKey } from "../src/crypto.ts";
 import { CANARY, captureIo, cleanup, tempHome } from "./helpers.ts";
@@ -135,9 +136,25 @@ test("vault login prints hosted stdio steps and never a canary", async () => {
     const out = [...io.stdout, ...io.stderr].join("\n");
     assert.match(out, /VAULT_USER_JWT/);
     assert.match(out, /vault mcp --user-jwt/);
-    assert.match(out, /https:\/\/staging\.botpasses\.ai/);
+    assert.ok(out.includes(STAGING_ORIGIN));
     assert.ok(!out.includes(CANARY));
     assert.ok(!out.includes("sk_live"));
+  } finally {
+    if (prevUrl === undefined) delete process.env.VAULT_PUBLIC_URL;
+    else process.env.VAULT_PUBLIC_URL = prevUrl;
+  }
+});
+
+test("vault login refuses a non-botpasses VAULT_PUBLIC_URL", async () => {
+  const io = captureIo();
+  const prevUrl = process.env.VAULT_PUBLIC_URL;
+  const platformDefault = `https://botpasses-staging.${["fly", "dev"].join(".")}`;
+  process.env.VAULT_PUBLIC_URL = platformDefault;
+  try {
+    assert.equal(await main(["login"], io), 1);
+    const out = [...io.stdout, ...io.stderr].join("\n");
+    assert.match(out, /botpasses\.com/);
+    assert.ok(!out.includes(platformDefault));
   } finally {
     if (prevUrl === undefined) delete process.env.VAULT_PUBLIC_URL;
     else process.env.VAULT_PUBLIC_URL = prevUrl;

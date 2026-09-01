@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { STAGING_ORIGIN } from "../src/brand.ts";
 import { hostedCollectHtml } from "../src/hosted/collect-page.ts";
 import { hostedOperatorHtml } from "../src/hosted/operator-page.ts";
 
@@ -26,7 +27,7 @@ test("collect HTML surfaces the fulfill error body (duplicate-name conflict)", (
     host: "api.example.com",
     taskDescription: "fetch playlists",
     status: "pending",
-    origin: "https://staging.botpasses.ai",
+    origin: STAGING_ORIGIN,
   });
   assert.match(html, /type="password"/);
   assert.match(html, /grok/);

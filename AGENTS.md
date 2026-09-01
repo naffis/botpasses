@@ -9,7 +9,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 - TypeScript (Node.js 22.14+, ESM, `--experimental-strip-types` — no compile step for run)
 - SQLite vault at `$VAULT_HOME` (default `$HOME/.botpasses`) · AES-256-GCM envelope encryption
 - MCP (stdio + HTTP) + CLI (`npx vault` / `npm run botpasses`) + loopback operator console
-- Hosted origins: `https://botpasses.ai`, `https://staging.botpasses.ai`
+- Hosted origins: `https://botpasses.com`, `https://staging.botpasses.com`. Never a platform default hostname.
 
 ## Commands
 

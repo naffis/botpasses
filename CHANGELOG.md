@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3 — 2026-08-31
+
+Public origins are **botpasses.com**, not botpasses.ai.
+
+- Prod `https://botpasses.com`, staging `https://staging.botpasses.com`.
+- Documented Clerk FAPI `clerk.botpasses.com` / `clerk.staging.botpasses.com` and Resend `mail.botpasses.com`.
+- Hosted boot requires `VAULT_PUBLIC_URL` to match the deploy plane origin. MCP, CLI, and emails never use a platform default hostname.
+- Canonical constants: `src/brand.ts`. Identity ADR: [0002](docs/adr/0002-botpasses-com-origin.md).
+
 ## 0.3.2 — 2026-08-30
 
 Agents can find named credentials and operators can enter a missing key on Botpasses without the model seeing the value.

@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
+import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { HostedKernel } from "../src/hosted/kernel.ts";
-import { createHostedServer, KEEPALIVE_MS } from "../src/hosted/http.ts";
-import { assertAllowedHostname, isBlockedIp } from "../src/hosted/ssrf.ts";
 import { hostedBootError, HOSTED_CONFIG_EXIT } from "../src/hosted/boot.ts";
+import { createHostedServer, KEEPALIVE_MS } from "../src/hosted/http.ts";
+import { HostedKernel } from "../src/hosted/kernel.ts";
+import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
+import { assertAllowedHostname, isBlockedIp } from "../src/hosted/ssrf.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
-import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
 
 const HMAC = Buffer.from("aa".repeat(32), "hex");
 
@@ -552,11 +553,19 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     DATABASE_URL: "postgres://x",
     VAULT_HOME: "/tmp/vault",
     VAULT_KEK: "x",
+    VAULT_PUBLIC_URL: STAGING_ORIGIN,
+    VAULT_DEPLOY_PLANE: "staging",
   });
   assert.match(err ?? "", /VAULT_HOME/);
   assert.equal(HOSTED_CONFIG_EXIT, 78);
   assert.equal(
-    hostedBootError({ VAULT_MODE: "hosted", DATABASE_URL: "postgres://x", VAULT_KEK: "aa".repeat(32) }),
+    hostedBootError({
+      VAULT_MODE: "hosted",
+      DATABASE_URL: "postgres://x",
+      VAULT_KEK: "aa".repeat(32),
+      VAULT_PUBLIC_URL: STAGING_ORIGIN,
+      VAULT_DEPLOY_PLANE: "staging",
+    }),
     undefined,
   );
   assert.match(
@@ -565,6 +574,8 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       DATABASE_URL: "postgres://x",
       VAULT_KEK: "aa".repeat(32),
       RESEND_API_KEY: "re_test",
+      VAULT_PUBLIC_URL: STAGING_ORIGIN,
+      VAULT_DEPLOY_PLANE: "staging",
     }) ?? "",
     /VAULT_EMAIL_FROM/,
   );
@@ -574,7 +585,9 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       DATABASE_URL: "postgres://x",
       VAULT_KEK: "aa".repeat(32),
       RESEND_API_KEY: "re_test",
-      VAULT_EMAIL_FROM: "Botpasses <noreply@mail.botpasses.ai>",
+      VAULT_EMAIL_FROM: "Botpasses <noreply@mail.botpasses.com>",
+      VAULT_PUBLIC_URL: STAGING_ORIGIN,
+      VAULT_DEPLOY_PLANE: "staging",
     }),
     undefined,
   );
@@ -584,8 +597,30 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       DATABASE_URL: "postgres://x",
       VAULT_KEK: "aa".repeat(32),
       VAULT_BOOTSTRAP_TOKEN: "short",
+      VAULT_PUBLIC_URL: STAGING_ORIGIN,
+      VAULT_DEPLOY_PLANE: "staging",
     }) ?? "",
     /VAULT_BOOTSTRAP_TOKEN/,
+  );
+  assert.match(
+    hostedBootError({
+      VAULT_MODE: "hosted",
+      DATABASE_URL: "postgres://x",
+      VAULT_KEK: "aa".repeat(32),
+      VAULT_DEPLOY_PLANE: "staging",
+    }) ?? "",
+    /VAULT_PUBLIC_URL/,
+  );
+  const platformDefault = `https://botpasses-staging.${["fly", "dev"].join(".")}`;
+  assert.match(
+    hostedBootError({
+      VAULT_MODE: "hosted",
+      DATABASE_URL: "postgres://x",
+      VAULT_KEK: "aa".repeat(32),
+      VAULT_PUBLIC_URL: platformDefault,
+      VAULT_DEPLOY_PLANE: "staging",
+    }) ?? "",
+    /staging\.botpasses\.com/,
   );
 });
 
