@@ -50,6 +50,31 @@ test("GET / is the operator HTML without auth", async () => {
   }
 });
 
+test("staging deploy GET /api/items?environment=production is 404", async () => {
+  const ctx = await hostedCtx();
+  try {
+    const res = await fetch(`${ctx.base}/api/items?environment=production`, {
+      headers: { authorization: `Bearer ${BOOTSTRAP}` },
+    });
+    assert.equal(res.status, 404);
+    assert.match(await res.text(), /Production items are not available on the staging deploy/);
+    const staging = await fetch(`${ctx.base}/api/items?environment=staging`, {
+      headers: { authorization: `Bearer ${BOOTSTRAP}` },
+    });
+    assert.equal(staging.status, 200);
+    const omitted = await fetch(`${ctx.base}/api/items`, {
+      headers: { authorization: `Bearer ${BOOTSTRAP}` },
+    });
+    assert.equal(omitted.status, 200);
+    const omittedBody = (await omitted.json()) as { items: { environment: string }[] };
+    assert.ok(omittedBody.items.every((i) => i.environment === "staging"));
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
 test("bootstrap token is an operator; wrong token is not", async () => {
   const ctx = await hostedCtx();
   try {

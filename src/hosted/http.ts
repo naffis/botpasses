@@ -26,6 +26,7 @@ import { hostedPageHeaders, MARKETING_CSP_EXTRAS, newCspNonce, securityHeaders }
 import { captureException } from "./observe.ts";
 import { isPublicSitePath, tryServeSite } from "./static-site.ts";
 import { hostedAsset } from "./hosted-assets.ts";
+import { hostedFont } from "./console-fonts.ts";
 import { handleAuthApi, tryAuthPage } from "./http-auth-routes.ts";
 import { handleAccessApi } from "./http-access-routes.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
@@ -75,6 +76,15 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
   const identity = opts.identity;
   const oidcProvider = opts.oidcProvider;
+
+  function operatorAppHeaders(nonce: string): Record<string, string> {
+    return hostedPageHeaders(deployPlane, {
+      html: true,
+      nonce,
+      extraFontSrc: ["'self'"],
+      extraImgSrc: ["'self'"],
+    });
+  }
 
   const server = createServer((req, res) => {
     void route(req, res).catch((err: unknown) => {
@@ -140,6 +150,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
     if ((method === "GET" || method === "HEAD") && path.startsWith("/assets/")) {
+      const font = hostedFont(path);
+      if (font) {
+        res.writeHead(200, {
+          "content-type": font.type,
+          "cache-control": "public, max-age=31536000, immutable",
+          ...securityHeaders({ html: false, cache: false }),
+        });
+        res.end(font.body);
+        return;
+      }
       const asset = hostedAsset(path);
       if (asset) {
         res.writeHead(200, {
@@ -213,7 +233,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         req,
         res,
         principal,
-        hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce() }),
+        operatorAppHeaders(newCspNonce()),
       );
       return;
     }
@@ -222,7 +242,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         method,
         path,
         res,
-        hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce() }),
+        operatorAppHeaders(newCspNonce()),
         principal,
       )
     ) {
@@ -249,9 +269,9 @@ export function createHostedServer(opts: HostedHttpOpts) {
       const nonce = newCspNonce();
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
-        ...hostedPageHeaders(deployPlane, { html: true, nonce }),
+        ...operatorAppHeaders(nonce),
       });
-      res.end(hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce }));
+      res.end(hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce, deployPlane }));
       return;
     }
     const collect = /^\/collect\/([^/]+)$/.exec(path);
@@ -262,7 +282,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         const nonce = newCspNonce();
         res.writeHead(404, {
           "content-type": "text/html; charset=utf-8",
-          ...hostedPageHeaders(deployPlane, { html: true, nonce }),
+          ...operatorAppHeaders(nonce),
         });
         res.end(hostedCollectMissingHtml());
         return;
@@ -270,7 +290,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
       const nonce = newCspNonce();
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
-        ...hostedPageHeaders(deployPlane, { html: true, nonce }),
+        ...operatorAppHeaders(nonce),
       });
       res.end(
         hostedCollectHtml({
@@ -381,8 +401,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
     if (method === "GET" && path === "/api/items") {
       const op = requireOperator(principal);
-      const environment = asEnv(url.searchParams.get("environment") ?? "staging");
-      json(res, 200, { items: await opts.kernel.listItems(op.orgId, environment) });
+      const raw = url.searchParams.get("environment");
+      if (raw === null || raw === "") {
+        json(res, 200, { items: await opts.kernel.listItemsOnPlane(op.orgId) });
+        return;
+      }
+      json(res, 200, { items: await opts.kernel.listItems(op.orgId, asEnv(raw)) });
       return;
     }
     if (method === "POST" && path === "/api/items") {

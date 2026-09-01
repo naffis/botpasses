@@ -33,6 +33,10 @@ test("AC-14 auth HTML has one h1 and no secrets", () => {
     assert.doesNotMatch(html, /12345678/);
   }
   assert.match(signInHtml(), /data-testid="sign-in"/);
+  assert.match(signInHtml(), /\/assets\/console\.css/);
+  assert.match(signInHtml(), /id="otp-verify" hidden/);
+  assert.match(signInHtml(), /class="auth-body"/);
+  assert.doesNotMatch(signInHtml(), /<img/);
   assert.match(enrollTotpHtml(), /data-testid="enroll-totp"/);
   assert.match(enrollTotpHtml(), /data-testid="totp-qr"/);
   assert.match(enrollTotpHtml(), /data-testid="otpauth-link"/);
@@ -42,8 +46,10 @@ test("AC-14 auth HTML has one h1 and no secrets", () => {
   assert.match(AUTH_JS, /otpauth-link/);
   assert.match(AUTH_JS, /qr_svg/);
   assert.match(AUTH_JS, /DOMParser/);
+  assert.match(AUTH_JS, /verifyForm.hidden = false/);
   assert.doesNotMatch(AUTH_JS, /chart\.googleapis|api\.qrserver|qrserver\.com/);
   assert.match(consentHtml("Widgets", "u1"), /Widgets/);
+  assert.match(consentHtml("Widgets", "u1"), /btn-primary/);
   assert.doesNotMatch(consentHtml("Widgets", "u1"), /<img/);
   assert.match(deviceHtml(), /data-testid="device-code"/);
 });
@@ -68,6 +74,8 @@ test("AC-14 GET /sign-in is HTML with CSP self only", async () => {
     assert.equal(res.status, 200);
     assert.match(html, /data-testid="sign-in"/);
     assert.match(res.headers.get("content-security-policy") ?? "", /connect-src 'self'/);
+    assert.match(res.headers.get("content-security-policy") ?? "", /font-src 'self'/);
+    assert.match(res.headers.get("content-security-policy") ?? "", /img-src 'self'/);
     assert.match(res.headers.get("content-security-policy") ?? "", /style-src 'unsafe-inline' 'self'/);
     assert.match(res.headers.get("cache-control") ?? "", /no-store/);
     assert.equal(res.headers.get("x-frame-options"), "DENY");

@@ -61,7 +61,10 @@ test("bindSecurityHeaders injects D-05 on writeHead for JSON and HTML", async ()
     assert.equal(json.headers.get("content-security-policy"), null);
     const html = await fetch(`http://127.0.0.1:${addr.port}/html`);
     assert.equal(html.headers.get("x-frame-options"), "DENY");
-    assert.match(html.headers.get("content-security-policy") ?? "", /nonce-/);
+    const csp = html.headers.get("content-security-policy") ?? "";
+    assert.match(csp, /nonce-/);
+    assert.match(csp, /font-src 'self'/);
+    assert.match(csp, /img-src 'self'/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }

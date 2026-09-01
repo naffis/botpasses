@@ -107,6 +107,34 @@ function mcpToolStatus(rpc: unknown): unknown {
   return (JSON.parse(text) as { status?: unknown }).status;
 }
 
+test("omitted environment on GET /api/items lists every env this plane serves", async () => {
+  const ctx = await setup();
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "production",
+      kind: "secret",
+      name: "PROD_LIST_KEY",
+      value: "prod-list-not-a-canary",
+      allowedHosts: ["api.stripe.com"],
+      inject: "bearer",
+    });
+    const res = await fetch(`${ctx.base}/api/items`, { headers: ctx.op });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { items: { name: string; environment: string }[] };
+    const names = body.items.map((i) => i.name);
+    assert.ok(names.includes("STRIPE_KEY"));
+    assert.ok(names.includes("PROD_LIST_KEY"));
+    assert.ok(body.items.some((i) => i.environment === "staging"));
+    assert.ok(body.items.some((i) => i.environment === "production"));
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
 test("AC-08 unauthenticated POST /api/items is 401", async () => {
   const ctx = await setup();
   try {

@@ -24,6 +24,7 @@ import {
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "../store/conflict.ts";
 import type { VaultStore } from "../store/types.ts";
+import { deployPlaneAllowsEnvironment, environmentsForDeployPlane } from "./deploy-plane.ts";
 import { HttpError } from "./errors.ts";
 import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
 import {
@@ -184,7 +185,7 @@ export class HostedKernel {
   }
 
   #assertPlane(name: VaultEnvName): void {
-    if (this.deployPlane === "staging" && name === "production") {
+    if (!deployPlaneAllowsEnvironment(this.deployPlane, name)) {
       throw new HttpError(404, "Production items are not available on the staging deploy");
     }
   }
@@ -367,6 +368,16 @@ export class HostedKernel {
     const items = await this.store.listItems(env.id);
     const pub = items.map((i) => this.#publicItem(env.name, i));
     assertSafePublicObject("listItems", pub);
+    return pub;
+  }
+
+  /** Items in every vault environment this deploy plane may serve. */
+  async listItemsOnPlane(orgId: string): Promise<ItemPublic[]> {
+    const pub: ItemPublic[] = [];
+    for (const environment of environmentsForDeployPlane(this.deployPlane)) {
+      pub.push(...(await this.listItems(orgId, environment)));
+    }
+    assertSafePublicObject("listItemsOnPlane", pub);
     return pub;
   }
 

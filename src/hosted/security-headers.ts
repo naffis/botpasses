@@ -88,7 +88,13 @@ export function bindSecurityHeaders(res: ServerResponse): void {
     const raw = headerBag(hasReason ? maybeHeaders : reasonOrHeaders);
     const ctype = String(raw["content-type"] ?? raw["Content-Type"] ?? res.getHeader("content-type") ?? "");
     const html = ctype.includes("text/html");
-    const sec = securityHeaders({ html, nonce: html ? newCspNonce() : undefined });
+    // First-party HTML loads /assets/console.css fonts and /favicon.svg. OAuth device HTML uses the same chrome without operatorAppHeaders.
+    const sec = securityHeaders({
+      html,
+      nonce: html ? newCspNonce() : undefined,
+      extraFontSrc: html ? ["'self'"] : undefined,
+      extraImgSrc: html ? ["'self'"] : undefined,
+    });
     for (const [k, v] of Object.entries(sec)) {
       if (raw[k] === undefined && raw[k.toLowerCase()] === undefined && res.getHeader(k) === undefined) {
         raw[k] = v;

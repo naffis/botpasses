@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Sign-in, sign-up, enroll, consent, device, and collect use the same brand fonts and card chrome as `/console`. Verify is hidden until a code is sent. Inbox needs say Store the credential. Vault empty offers Store credential. Connect copies the MCP URL and one-time token. Rotate no longer shows the item id.
+- Staging console lists and stores only staging items. `GET /api/items` with no environment returns every env this deploy plane serves (staging only on staging; both on production). Explicit `environment=production` on staging is still 404. Failed Store, Rotate, or delete/revoke show the API error inside the open dialog. A failed Access snapshot shows an error, not an empty panel. Collect and approve-by-code still flash on the page. Issue Grok uses the same environment list as Store. Secret fields stay filled until the request succeeds.
+- Console and collect pick how a credential is sent from Kind (API token → Bearer, username and password → HTTP Basic). Inject is behind “Change how it is sent.” Username stays hidden unless Basic is in use.
 - `/enroll-totp` shows a local QR code, an `otpauth://` link, and the grouped secret after `POST /api/auth/totp/start`. The QR is SVG generated on this origin (not a third-party image).
 - Hosted mail sends through Resend on the verified public hosts. Staging From is `Botpasses <noreply@staging.botpasses.com>`; production is `Botpasses <noreply@botpasses.com>`. Fly uses a sending-access key per plane.
 - Public and internal MCP + HTTP API reference: hosted tools (`http.request`, find, grant), operator `/api`, OAuth, local `vault serve`. No `get_secret`.
