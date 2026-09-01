@@ -33,7 +33,7 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 
 | Client | How |
 | --- | --- |
-| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. |
+| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. After it is connected, ask in plain language (get my Spotify profile). Grok should call `http.request` in the same turn. You approve in the inbox if asked. You do not need to name Botpasses tools. |
 | Grok Build | `grok mcp add --transport http botpasses https://<origin>/mcp --header "Authorization: Bearer ${BOTPASSES_MODEL_TOKEN}"` |
 | Claude | Remote connector named `Botpasses` + OAuth |
 | ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration (enable DCR on the Clerk instance) |

@@ -3,6 +3,7 @@ const FORBIDDEN_RESULT_KEYS = new Set([
   "plaintext",
   "password",
   "token",
+  "secret",
   "secret_value",
   "ciphertext_plain",
 ]);

@@ -11,6 +11,9 @@ test("operator page can list both environments and rotate or delete", () => {
   assert.match(html, /\/api\/items\?environment=/);
   assert.match(html, /\["staging", "production"\]/);
   assert.match(html, /Issue Grok Bot token/);
+  assert.match(html, /ask it in plain language/);
+  assert.match(html, /Grok calls the API in the same turn/);
+  assert.match(html, /You do not need to tell it to use Botpasses/);
   assert.match(html, /Operator token/);
   assert.match(html, /Authorization/);
   assert.match(html, /<select name="inject">/);

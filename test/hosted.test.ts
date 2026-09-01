@@ -101,6 +101,12 @@ async function setup() {
   };
 }
 
+function mcpToolStatus(rpc: unknown): unknown {
+  const rec = rpc as { result?: { content?: { text?: string }[] } };
+  const text = rec.result?.content?.[0]?.text ?? "{}";
+  return (JSON.parse(text) as { status?: unknown }).status;
+}
+
 test("AC-08 unauthenticated POST /api/items is 401", async () => {
   const ctx = await setup();
   try {
@@ -369,8 +375,10 @@ test("AC-05 concurrent prompt consume: one origin fetch", async () => {
     const texts = [JSON.stringify(a), JSON.stringify(b)];
     assert.ok(!texts.join("").includes(CANARY));
     assert.equal(ctx.stats().originHits, 1);
-    const denied = texts.filter((t) => t.includes("inject_denied"));
-    assert.equal(denied.length, 1);
+    const statuses = [a, b].map(mcpToolStatus);
+    assert.ok(statuses.includes(200), "one call must reach the origin");
+    assert.ok(statuses.includes("pending"), "the other call requests a new prompt grant");
+    assert.ok(!texts.join("").includes("inject_denied"));
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -998,6 +1006,7 @@ test("hosted MCP initialize name is botpasses", async () => {
     const result = rpc?.result as { serverInfo?: { name?: string }; instructions?: string };
     assert.equal(result.serverInfo?.name, "botpasses");
     assert.match(result.instructions ?? "", /Botpasses/);
+    assert.match(result.instructions ?? "", /does not need to say Botpasses/);
     assert.doesNotMatch(result.instructions ?? "", /Agent grant vault/);
   } finally {
     await ctx.http.close();

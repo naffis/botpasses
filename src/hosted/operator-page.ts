@@ -26,7 +26,7 @@ export function hostedOperatorHtml(): string {
   <main>
     <h1>${PRODUCT_NAME}</h1>
     <p>Store named credentials once. Agents request use. You authorize. The runtime gets the value. The model never does.</p>
-    <div class="banner">Paste your operator token to use this console. Issue a Grok Bot token once. MCP never sees secret values.</div>
+    <div class="banner">Paste your operator token to use this console. Issue a Grok Bot token once. After Grok is connected, ask it in plain language (for example get my Spotify profile). Grok calls the API in the same turn. You approve here if asked. You do not need to tell it to use Botpasses. Never paste a secret into Grok.</div>
     <form id="signin">
       <label>Operator token <input name="token" type="password" autocomplete="off" /></label>
       <button type="submit">Use token</button>
@@ -34,6 +34,7 @@ export function hostedOperatorHtml(): string {
     <p id="flash"></p>
     <h2>Grok Bot</h2>
     <p>MCP URL: <code id="mcp_url"></code></p>
+    <p>Connect that URL with <code>Authorization: Bearer avm_…</code>. Then say what you want (get my Spotify profile). Grok should call http.request immediately. Approve in the inbox when a grant is pending.</p>
     <form id="grok">
       <label>Client name <input name="name" value="grok" /></label>
       <button type="submit">Issue Grok Bot token</button>

@@ -80,16 +80,16 @@ MCP connector URL: `https://botpasses.com/mcp` (prod) or `https://staging.botpas
 
 ## Remaining operator checklist
 
-Attempted 2026-08-30 from this checkout. In-repo ACs are green. Live cutover is blocked on credentials. Do not `git push origin dev` with the renamed tomls until Fly apps exist and `FLY_API_TOKEN` can deploy `botpasses-staging` / `botpasses-prod`.
+DNS and staging health were completed 2026-08-31. Production is DNS-only until a promote. Do not give users a platform default hostname.
 
 | Step | Status |
 | --- | --- |
-| `flyctl auth whoami` | **blocked** — `no access token available`. `FLY_API_TOKEN` unset in this environment. Run `flyctl auth login` (or export an org token), then `fly apps create botpasses-staging` and `botpasses-prod`. |
-| Copy secrets from `agent-vault-*`; set `VAULT_PUBLIC_URL`, `VAULT_EMAIL_FROM`, `CLERK_FRONTEND_API`; reuse Neon `DATABASE_URL` | **blocked** on Fly auth |
-| Confirm GitHub `FLY_API_TOKEN` can deploy the new app names (org token, not a leftover `agent-vault-*` deploy token) | **blocked** on Fly auth. Check in GitHub Actions secrets after apps exist. |
-| Cloudflare DNS (A/AAAA, `_fly-ownership` TXT, Clerk/Resend grey-cloud, `www` 301, cache bypass, Full (strict)) | **blocked** — `wrangler whoami` not logged in; `CLOUDFLARE_API_TOKEN` unset. Hosts `botpasses.com` and `staging.botpasses.com` do not resolve. |
-| Clerk production instances + FAPI CNAMEs `clerk.botpasses.com` / `clerk.staging.botpasses.com` | **blocked** — no Clerk keys in this environment |
-| Resend domain `mail.botpasses.com` verified | **blocked** — `RESEND_API_KEY` unset |
-| `git push origin dev` after apps exist | **not run** (no user ask to push; Fly apps do not exist yet) |
-| First green staging `/health` through Cloudflare | **blocked** — DNS NXDOMAIN |
+| Fly apps `botpasses-staging` / `botpasses-prod` | **done**. Staging is deployed. Prod has IPs and an Origin CA cert, no Machines (not promoted). |
+| Staging secrets `VAULT_PUBLIC_URL=https://staging.botpasses.com` and `VAULT_DEPLOY_PLANE=staging` | **done** 2026-08-31. A leftover `VAULT_PUBLIC_URL` secret without `VAULT_DEPLOY_PLANE` caused hosted boot exit 78 until both were set. |
+| GitHub `FLY_API_TOKEN` deploys `botpasses-staging` | **done** (push to `dev` is green). |
+| Cloudflare orange-cloud A/AAAA to Fly IPs, `_fly-ownership` TXT, ACME CNAMEs, `www` 301, cache bypass, Always HTTPS, Full (strict) | **done** 2026-08-31. Let's Encrypt HTTP-01 cannot complete through Fly `force_https`; Origin CA was imported on both apps so Full (strict) works. |
+| First green staging `/health` through Cloudflare | **done**. `curl -fsS https://staging.botpasses.com/health` → `{"ok":true,"product":"botpasses"}`. |
+| `https://botpasses.com/health` | **not yet**. Apex DNS points at `botpasses-prod` IPs. No prod Machine until promote. Expect Cloudflare 521/timeout. |
+| Clerk production instances + FAPI CNAMEs `clerk.botpasses.com` / `clerk.staging.botpasses.com` | **open**. Staging console can use `VAULT_BOOTSTRAP_TOKEN` without Clerk. |
+| Resend domain `mail.botpasses.com` verified | **open**. |
 | `gh repo rename botpasses` then update git remote | **done** 2026-08-30. Repo is `naffis/botpasses`. Do not create a new `naffis/agent-vault`. |

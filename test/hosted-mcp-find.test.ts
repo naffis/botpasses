@@ -142,7 +142,7 @@ test("GET /api/need-items/:id is not public JSON (R-19)", async () => {
   }
 });
 
-test("find_items miss is isError with need_item JSON (AC-16)", async () => {
+test("find_items miss is need_item JSON with next, not isError (AC-16)", async () => {
   const ctx = await setup();
   try {
     const rpc = await handleHostedMcpRpc(
@@ -155,9 +155,10 @@ test("find_items miss is isError with need_item JSON (AC-16)", async () => {
       },
     );
     const parsed = parseTool(rpc);
-    assert.equal(parsed.isError, true);
+    assert.equal(parsed.isError, undefined);
     assert.equal(parsed.body.status, "need_item");
     assert.equal(typeof parsed.body.collect_url, "string");
+    assert.match(String((parsed.body.next as { for_model?: string } | undefined)?.for_model ?? ""), /collect_url/);
     assert.ok(!JSON.stringify(parsed.body).includes(CANARY));
   } finally {
     await ctx.http.close();
@@ -179,7 +180,7 @@ test("request_grant unknown name includes collect_url (AC-08)", async () => {
       },
     );
     const parsed = parseTool(rpc);
-    assert.equal(parsed.isError, true);
+    assert.equal(parsed.isError, undefined);
     assert.equal(typeof parsed.body.collect_url, "string");
     assert.notEqual(parsed.body.error, "Unknown item");
   } finally {
@@ -229,9 +230,9 @@ test("http.request unknown item is need_item not connector body (AC-14)", async 
       },
     );
     const parsed = parseTool(rpc);
-    assert.equal(parsed.isError, true);
+    assert.equal(parsed.isError, undefined);
     assert.equal(parsed.body.status, "need_item");
-    assert.ok(!("body" in parsed.body));
+    assert.equal(parsed.body.body, undefined);
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -412,6 +413,8 @@ test("find_items found is not isError (R-23)", async () => {
     const parsed = parseTool(rpc);
     assert.equal(parsed.isError, undefined);
     assert.equal(parsed.body.status, "found");
+    const next = parsed.body.next as { tool?: string } | undefined;
+    assert.equal(next?.tool, "http.request");
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -468,6 +471,110 @@ test("fulfill ignores client_id and environment in the body (A-13)", async () =>
     const grant = grants.find((g) => g.itemId === body.item?.id);
     assert.equal(grant?.clientId, ctx.model.id);
     assert.notEqual(grant?.clientId, other.client.id);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("http.request with host only on a miss returns need_item and next, not isError", async () => {
+  const ctx = await setup();
+  try {
+    const rpc = await handleHostedMcpRpc(
+      { kernel: ctx.kernel, principal: ctx.principal },
+      {
+        jsonrpc: "2.0",
+        id: 40,
+        method: "tools/call",
+        params: {
+          name: "http.request",
+          arguments: { host: "api.spotify.com", method: "GET", path: "/v1/me" },
+        },
+      },
+    );
+    const parsed = parseTool(rpc);
+    assert.equal(parsed.isError, undefined);
+    assert.equal(parsed.body.status, "need_item");
+    assert.match(String(parsed.body.collect_url), /\/collect\//);
+    const next = parsed.body.next as { for_model?: string; arguments?: Record<string, string> } | undefined;
+    assert.match(next?.for_model ?? "", /collect_url/);
+    assert.equal(next?.arguments?.host, "api.spotify.com");
+    assert.equal(next?.arguments?.method, "GET");
+    assert.equal(next?.arguments?.path, "/v1/me");
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("http.request accepts a full https URL as path and finds by host", async () => {
+  const ctx = await setup();
+  try {
+    const rpc = await handleHostedMcpRpc(
+      { kernel: ctx.kernel, principal: ctx.principal },
+      {
+        jsonrpc: "2.0",
+        id: 41,
+        method: "tools/call",
+        params: {
+          name: "http.request",
+          arguments: { method: "GET", path: "https://api.spotify.com/v1/me" },
+        },
+      },
+    );
+    const parsed = parseTool(rpc);
+    assert.equal(parsed.body.status, "need_item");
+    assert.equal(parsed.body.host, "api.spotify.com");
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("http.request with host requests a grant when the item exists but is not granted", async () => {
+  const ctx = await setup();
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_TOKEN",
+      value: CANARY,
+      allowedHosts: ["api.spotify.com"],
+      inject: "bearer",
+    });
+    const rpc = await handleHostedMcpRpc(
+      {
+        kernel: ctx.kernel,
+        principal: ctx.principal,
+        fetchImpl: async () => new Response("should-not-run", { status: 200 }),
+        resolveAddresses: async () => ["8.8.8.8"],
+      },
+      {
+        jsonrpc: "2.0",
+        id: 42,
+        method: "tools/call",
+        params: {
+          name: "http.request",
+          arguments: { host: "api.spotify.com", method: "GET", path: "/v1/me" },
+        },
+      },
+    );
+    const parsed = parseTool(rpc);
+    assert.equal(parsed.body.status, "pending");
+    assert.equal(typeof parsed.body.approval_code, "string");
+    assert.equal(parsed.isError, undefined);
+    const next = parsed.body.next as { for_model?: string; arguments?: Record<string, string> } | undefined;
+    assert.match(next?.for_model ?? "", /approve/);
+    assert.equal(next?.arguments?.host, "api.spotify.com");
+    assert.equal(next?.arguments?.method, "GET");
+    assert.equal(next?.arguments?.path, "/v1/me");
+    assert.equal(next?.arguments?.item_name, "SPOTIFY_TOKEN");
+    assert.ok(!JSON.stringify(parsed.body).includes(CANARY));
   } finally {
     await ctx.http.close();
     await ctx.store.close();

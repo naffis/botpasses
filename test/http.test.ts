@@ -77,6 +77,7 @@ test("HTTP operator API never returns secret values", async () => {
     };
     assert.equal(initBody.result?.serverInfo?.name, "botpasses");
     assert.match(initBody.result?.instructions ?? "", /Botpasses/);
+    assert.match(initBody.result?.instructions ?? "", /Do not wait for the operator to name Botpasses/);
     assert.doesNotMatch(initBody.result?.instructions ?? "", /Agent grant vault/);
   } finally {
     await http.close();

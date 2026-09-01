@@ -1,14 +1,21 @@
-import { MCP_INSTRUCTIONS_HOSTED, MCP_SERVER_NAME } from "../brand.ts";
+import { MCP_SERVER_NAME } from "../brand.ts";
+import {
+  HOSTED_TOOL_DESCRIPTIONS,
+  HOSTED_TOOL_PARAM_DESCRIPTIONS,
+  MCP_INSTRUCTIONS_HOSTED,
+} from "../prompts/mcp-hosted.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { HostedGrantRecord, ItemPublic, VaultEnvName } from "../hosted-types.ts";
-import { executeConnector, type ConnectorFetch } from "./connector.ts";
+import type { ConnectorFetch } from "./connector.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { ModelPrincipal } from "./auth.ts";
+import { runHttpRequest } from "./mcp-http.ts";
+import { attachMcpNext } from "./mcp-steer.ts";
 
 export const HOSTED_MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
-  version: "0.2.0",
+  version: "0.3.4",
 } as const;
 
 export const HOSTED_MCP_PROTOCOL = "2024-11-05";
@@ -34,13 +41,14 @@ export type HostedMcpTool = {
   name: (typeof HOSTED_MCP_TOOL_NAMES)[number];
   description: string;
   inputSchema: JsonSchema;
+  annotations?: { title: string; readOnlyHint?: boolean; openWorldHint?: boolean };
 };
 
 export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
   {
     name: "list_items",
-    description:
-      "List named vault items. Returns names, last-4, username, environment — never concealed values.",
+    description: HOSTED_TOOL_DESCRIPTIONS.list_items,
+    annotations: { title: "List stored credential names", readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -51,14 +59,17 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
   },
   {
     name: "find_items",
-    description:
-      "Find a named credential by exact item_name and/or exact API hostname. Returns names, last-4, and allowed hosts — never values. On a miss, returns a Botpasses collect_url for the operator. Never paste secrets into chat.",
+    description: HOSTED_TOOL_DESCRIPTIONS.find_items,
+    annotations: { title: "Find a credential by API host" },
     inputSchema: {
       type: "object",
       properties: {
-        item_name: { type: "string" },
-        host: { type: "string", description: "Exact API hostname, e.g. api.spotify.com" },
-        task_description: { type: "string" },
+        item_name: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_item_name },
+        host: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_host },
+        task_description: {
+          type: "string",
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
+        },
         environment: { type: "string", enum: ["staging", "production"] },
       },
       additionalProperties: false,
@@ -66,15 +77,18 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
   },
   {
     name: "request_grant",
-    description:
-      "Ask the operator to grant a named item to this client. Returns pending or already-active grant metadata and an 8-digit code when pending. Never returns the secret value.",
+    description: HOSTED_TOOL_DESCRIPTIONS.request_grant,
+    annotations: { title: "Ask the operator to approve using a credential" },
     inputSchema: {
       type: "object",
       properties: {
-        item_name: { type: "string" },
+        item_name: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.grant_item_name },
         environment: { type: "string", enum: ["staging", "production"] },
         task_id: { type: "string" },
-        task_description: { type: "string" },
+        task_description: {
+          type: "string",
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.grant_task_description,
+        },
       },
       required: ["item_name"],
       additionalProperties: false,
@@ -82,7 +96,8 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
   },
   {
     name: "list_grants",
-    description: "List grant status for this client. Names and metadata only — never secret values.",
+    description: HOSTED_TOOL_DESCRIPTIONS.list_grants,
+    annotations: { title: "List grant status", readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: {},
@@ -91,18 +106,27 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
   },
   {
     name: "http.request",
-    description:
-      "Call the item's allowlisted HTTPS origin with the granted credential attached. Returns status and a redacted body. Never returns the secret.",
+    description: HOSTED_TOOL_DESCRIPTIONS["http.request"],
+    annotations: { title: "Call an API with a Botpasses credential", openWorldHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        item_name: { type: "string" },
-        method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-        path: { type: "string" },
-        body: { type: "object" },
+        item_name: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_item_name },
+        host: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_host },
+        method: {
+          type: "string",
+          enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_method,
+        },
+        path: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_path },
+        body: { type: "object", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_body },
+        task_description: {
+          type: "string",
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
+        },
         environment: { type: "string", enum: ["staging", "production"] },
       },
-      required: ["item_name", "method", "path"],
+      required: ["method", "path"],
       additionalProperties: false,
     },
   },
@@ -155,13 +179,14 @@ export async function callHostedMcpTool(
     return fail(`Tool ${name} is not available. Vault MCP never returns secret values.`);
   }
   try {
-    const payload = await dispatch(deps, name, args);
+    const payload = attachMcpNext(await dispatch(deps, name, args));
     assertSafePublicObject(`mcp:${name}`, payload);
     return mcpPayloadResult(payload);
   } catch (err) {
     if (isNeedItemError(err)) {
-      assertSafePublicObject(`mcp:${name}`, err.payload);
-      return mcpPayloadResult(err.payload);
+      const payload = attachMcpNext(err.payload);
+      assertSafePublicObject(`mcp:${name}`, payload);
+      return mcpPayloadResult(payload);
     }
     const message = isHttpError(err) ? err.message : err instanceof Error ? err.message : String(err);
     return fail(message);
@@ -213,6 +238,7 @@ async function dispatch(
       });
       return {
         ...publicGrant(result.grant),
+        item_name: itemName,
         approval_code: result.code,
         notify_failed: result.notifyFailed ?? false,
       };
@@ -222,21 +248,7 @@ async function dispatch(
       return { grants: grants.map(publicGrant) };
     }
     case "http.request": {
-      const itemName = str(args, "item_name");
-      const method = str(args, "method");
-      const path = str(args, "path");
-      const prepared = await kernel.prepareConnector({
-        orgId: principal.orgId,
-        clientId: principal.clientId,
-        itemName,
-        environment,
-      });
-      const origin = await executeConnector(
-        prepared,
-        { method, path, body: args.body },
-        { fetchImpl: deps.fetchImpl, resolveAddresses: deps.resolveAddresses },
-      );
-      return { status: origin.status, body: origin.body };
+      return runHttpRequest(deps, args, environment);
     }
     default:
       throw new HttpError(
@@ -263,7 +275,7 @@ function mcpPayloadResult(payload: unknown): McpCallResult {
     payload && typeof payload === "object" && "status" in payload
       ? (payload as { status: unknown }).status
       : undefined;
-  const blocking = status === "need_item" || status === "host_mismatch";
+  const blocking = status === "host_mismatch";
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     ...(blocking ? { isError: true } : {}),
