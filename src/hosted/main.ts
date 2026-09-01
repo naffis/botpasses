@@ -1,12 +1,17 @@
+import { resolve } from "node:path";
 import { hostedDeployPlane, PRODUCT_NAME, resolvePublicOrigin } from "../brand.ts";
-import { parseKek } from "./kek.ts";
+import { zeroKey } from "../crypto.ts";
 import { HostedKernel } from "./kernel.ts";
 import { createHostedServer } from "./http.ts";
 import { createResendSender } from "./email.ts";
-import { assertHostedBoot, HOSTED_CONFIG_EXIT } from "./boot.ts";
+import { assertHostedBoot, HOSTED_CONFIG_EXIT, parseOidcPrivateJwk } from "./boot.ts";
+import { selectKekProvider, usedRawKekFallback } from "./kms.ts";
+import { logVaultEvent } from "./observe.ts";
 import { PostgresStore } from "../store/postgres.ts";
-import { clerkAuthResolver } from "./clerk-auth.ts";
 import { hostedAuthResolver, testAuthResolver } from "./auth.ts";
+import { OperatorIdentity } from "./operator-identity.ts";
+import { identityAuthResolver } from "./identity.ts";
+import { createOauthProvider } from "./oauth-as.ts";
 
 export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   try {
@@ -16,7 +21,17 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     console.error(message);
     process.exit(HOSTED_CONFIG_EXIT);
   }
-  const kek = parseKek(env.VAULT_KEK ?? "");
+  let kek: Buffer;
+  try {
+    kek = await selectKekProvider(env).unwrap();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`KMS unwrap failed: ${message}`);
+    process.exit(HOSTED_CONFIG_EXIT);
+  }
+  if (usedRawKekFallback(env)) {
+    logVaultEvent("kek_raw_fallback", { plane: env.VAULT_DEPLOY_PLANE ?? "" });
+  }
   const store = await PostgresStore.open(env.DATABASE_URL ?? "");
   const sendEmail = env.RESEND_API_KEY
     ? createResendSender(env.RESEND_API_KEY, env.VAULT_EMAIL_FROM ?? "")
@@ -35,7 +50,28 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     deployPlane,
   });
   const host = env.VAULT_BIND_HOST ?? "0.0.0.0";
-  const inner = env.VAULT_AUTH_MODE === "test" ? testAuthResolver : clerkAuthResolver;
+  const sessionSecret = env.VAULT_SESSION_SECRET ?? "";
+  const identity = new OperatorIdentity({ store, sessionSecret, kek, sendEmail });
+  const jwk = parseOidcPrivateJwk(env.VAULT_OIDC_PRIVATE_JWK);
+  const oidcProvider = jwk
+    ? createOauthProvider({
+        issuer: publicUrl.replace(/\/$/, ""),
+        kernel,
+        sessionSecret,
+        jwk,
+        secureCookies: true,
+      })
+    : undefined;
+  const inner =
+    env.VAULT_AUTH_MODE === "test"
+      ? testAuthResolver
+      : identityAuthResolver({
+          identity,
+          kernel,
+          secureCookies: true,
+          oidcJwk: jwk,
+          issuer: publicUrl.replace(/\/$/, ""),
+        });
   const authResolver = hostedAuthResolver(env, inner);
   const http = createHostedServer({
     kernel,
@@ -43,14 +79,21 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     port: Number(env.PORT ?? env.VAULT_PORT ?? 8788),
     publicUrl: kernel.publicUrl,
     authResolver,
-    clerkIssuer: env.CLERK_FRONTEND_API ? `https://${env.CLERK_FRONTEND_API}` : undefined,
+    identity,
+    oidcProvider,
+    secureCookies: true,
+    siteRoot: env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist"),
+    deployPlane,
   });
   const addr = await http.listen();
   console.error(`${PRODUCT_NAME} hosted on ${addr.host}:${addr.port} plane=${deployPlane}`);
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolveDone) => {
     const stop = () => {
       void http.close().then(() => {
-        void store.close().then(() => resolve());
+        void store.close().then(() => {
+          zeroKey(kek);
+          resolveDone();
+        });
       });
     };
     process.on("SIGINT", stop);

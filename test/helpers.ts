@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,18 @@ import { Vault } from "../src/vault.ts";
 import type { Io } from "../src/cli.ts";
 
 export const CANARY = "sk_live_CANARY_do_not_leak_f47ac10b";
+export const TEST_SESSION_SECRET = "session-secret-for-tests-32b!!!!";
+
+let cachedOidcJwk: string | undefined;
+export function testOidcPrivateJwk(): string {
+  if (cachedOidcJwk) return cachedOidcJwk;
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = privateKey.export({ format: "jwk" }) as Record<string, string>;
+  jwk.alg = "RS256";
+  jwk.kid = "test";
+  cachedOidcJwk = JSON.stringify(jwk);
+  return cachedOidcJwk;
+}
 
 export function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "botpasses-"));

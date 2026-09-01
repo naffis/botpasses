@@ -151,4 +151,87 @@ CREATE TABLE IF NOT EXISTS need_items (
 CREATE UNIQUE INDEX IF NOT EXISTS need_items_pending
   ON need_items (org_id, client_id, environment_id, suggested_name, host)
   WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS rate_hits (
+  org_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  window_start TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY (org_id, kind, window_start)
+);
+`;
+
+export const HOSTED_SCHEMA_IDENTITY = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  email_verified_at TEXT,
+  totp_wrapped_iv TEXT,
+  totp_wrapped_ciphertext TEXT,
+  totp_wrapped_tag TEXT,
+  totp_last_step INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users (email);
+
+CREATE TABLE IF NOT EXISTS email_otp_challenges (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  code_scrypt TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  sent_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS backup_codes (
+  user_id TEXT NOT NULL,
+  code_scrypt TEXT NOT NULL,
+  used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS operator_sessions (
+  id_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_payloads (
+  id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  expires_at TEXT,
+  PRIMARY KEY (id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS access_events (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  client_id TEXT,
+  actor_user_id TEXT,
+  kind TEXT NOT NULL,
+  jti_hash TEXT NOT NULL,
+  issued_at TEXT NOT NULL,
+  expires_at TEXT,
+  revoked_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS access_events_jti ON access_events (jti_hash);
+CREATE INDEX IF NOT EXISTS access_events_org_issued ON access_events (org_id, issued_at);
+`;
+
+export const HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE = `
+ALTER TABLE clients ADD COLUMN oauth_client_id TEXT;
+ALTER TABLE clients ADD COLUMN revoked_at TEXT;
+ALTER TABLE clients ADD COLUMN last_token_at TEXT;
+ALTER TABLE clients ADD COLUMN last_seen_at TEXT;
+ALTER TABLE clients ADD COLUMN consented_by_user_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_IDENTITY_ALTER_PG = `
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS oauth_client_id TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS revoked_at TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_token_at TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_seen_at TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS consented_by_user_id TEXT;
 `;

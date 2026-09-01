@@ -1,7 +1,9 @@
 import { Pool } from "pg";
 import type {
+  AccessEventRecord,
   ApprovalChallengeRecord,
   ClientRecord,
+  EmailOtpRecord,
   EnvironmentRecord,
   FolderRecord,
   HostedAuditRecord,
@@ -9,13 +11,16 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
+  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
+  UserRecord,
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
-import { HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_PG, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import { mapClientRow } from "./map-client.ts";
 import type { VaultStore } from "./types.ts";
 
 function asRecord(row: unknown): Record<string, unknown> {
@@ -37,6 +42,8 @@ export class PostgresStore implements VaultStore {
 
   async migrate(): Promise<void> {
     await this.#pool.query(HOSTED_SCHEMA_SQLITE);
+    await this.#pool.query(HOSTED_SCHEMA_IDENTITY);
+    await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
   }
 
   async ping(): Promise<void> {
@@ -52,6 +59,31 @@ export class PostgresStore implements VaultStore {
       `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [row.id, row.name, row.wrappedDekIv, row.wrappedDekCiphertext, row.wrappedDekTag, row.createdAt],
+    );
+  }
+
+  async listOrgs(): Promise<OrgRecord[]> {
+    const r = await this.#pool.query("SELECT * FROM orgs");
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return {
+        id: String(rec.id),
+        name: String(rec.name),
+        wrappedDekIv: String(rec.wrapped_dek_iv),
+        wrappedDekCiphertext: String(rec.wrapped_dek_ciphertext),
+        wrappedDekTag: String(rec.wrapped_dek_tag),
+        createdAt: String(rec.created_at),
+      };
+    });
+  }
+
+  async updateOrgWrappedDek(
+    id: string,
+    patch: Pick<OrgRecord, "wrappedDekIv" | "wrappedDekCiphertext" | "wrappedDekTag">,
+  ): Promise<void> {
+    await this.#pool.query(
+      `UPDATE orgs SET wrapped_dek_iv = $1, wrapped_dek_ciphertext = $2, wrapped_dek_tag = $3 WHERE id = $4`,
+      [patch.wrappedDekIv, patch.wrappedDekCiphertext, patch.wrappedDekTag, id],
     );
   }
 
@@ -265,8 +297,9 @@ export class PostgresStore implements VaultStore {
 
   async insertClient(row: ClientRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO clients (id, org_id, kind, name, hashed_secret, clerk_oauth_user_id, environment)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      `INSERT INTO clients (id, org_id, kind, name, hashed_secret, clerk_oauth_user_id, environment,
+        oauth_client_id, revoked_at, last_token_at, last_seen_at, consented_by_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
         row.id,
         row.orgId,
@@ -275,8 +308,36 @@ export class PostgresStore implements VaultStore {
         row.hashedSecret,
         row.clerkOauthUserId,
         row.environment,
+        row.oauthClientId,
+        row.revokedAt,
+        row.lastTokenAt,
+        row.lastSeenAt,
+        row.consentedByUserId,
       ],
     );
+  }
+
+  async updateClientHashedSecret(id: string, hashedSecret: string): Promise<void> {
+    await this.#pool.query("UPDATE clients SET hashed_secret = $1 WHERE id = $2", [hashedSecret, id]);
+  }
+
+  async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+    const r = await this.#pool.query(
+      `INSERT INTO rate_hits (org_id, kind, window_start, count) VALUES ($1,$2,$3,1)
+       ON CONFLICT (org_id, kind, window_start) DO UPDATE SET count = rate_hits.count + 1
+       RETURNING count`,
+      [orgId, kind, windowStart],
+    );
+    return Number(asRecord(r.rows[0] ?? { count: 0 }).count);
+  }
+
+  async countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+    const r = await this.#pool.query(
+      "SELECT count FROM rate_hits WHERE org_id = $1 AND kind = $2 AND window_start = $3",
+      [orgId, kind, windowStart],
+    );
+    if (!r.rows[0]) return 0;
+    return Number(asRecord(r.rows[0]).count);
   }
 
   async getClient(id: string): Promise<ClientRecord | undefined> {
@@ -300,6 +361,14 @@ export class PostgresStore implements VaultStore {
   async listClients(orgId: string): Promise<ClientRecord[]> {
     const r = await this.#pool.query("SELECT * FROM clients WHERE org_id = $1", [orgId]);
     return r.rows.map((row) => mapClient(row)!);
+  }
+
+  async findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined> {
+    const r = await this.#pool.query(
+      "SELECT * FROM clients WHERE oauth_client_id = $1 OR clerk_oauth_user_id = $1 LIMIT 1",
+      [oauthClientId],
+    );
+    return r.rows[0] ? mapClient(r.rows[0]) : undefined;
   }
 
   async insertPolicy(row: PolicyRecord): Promise<void> {
@@ -684,6 +753,228 @@ export class PostgresStore implements VaultStore {
       };
     });
   }
+
+  async listMembers(orgId: string): Promise<MemberRecord[]> {
+    const r = await this.#pool.query("SELECT * FROM org_members WHERE org_id = $1", [orgId]);
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return {
+        orgId: String(rec.org_id),
+        userId: String(rec.user_id),
+        role: rec.role as MemberRecord["role"],
+      };
+    });
+  }
+
+  async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
+    const r = await this.#pool.query("SELECT * FROM org_members WHERE user_id = $1", [userId]);
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return {
+        orgId: String(rec.org_id),
+        userId: String(rec.user_id),
+        role: rec.role as MemberRecord["role"],
+      };
+    });
+  }
+
+  async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO oidc_payloads (id, kind, payload, expires_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
+      [row.id, row.kind, row.payload, row.expiresAt],
+    );
+  }
+
+  async getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined> {
+    const r = await this.#pool.query("SELECT * FROM oidc_payloads WHERE id = $1 AND kind = $2", [id, kind]);
+    if (!r.rows[0]) return undefined;
+    const rec = asRecord(r.rows[0]);
+    return {
+      payload: String(rec.payload),
+      expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
+    };
+  }
+
+  async deleteOidcPayload(id: string, kind: string): Promise<void> {
+    await this.#pool.query("DELETE FROM oidc_payloads WHERE id = $1 AND kind = $2", [id, kind]);
+  }
+
+  async listOidcPayloads(kind: string): Promise<{ id: string; payload: string }[]> {
+    const r = await this.#pool.query("SELECT id, payload FROM oidc_payloads WHERE kind = $1", [kind]);
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return { id: String(rec.id), payload: String(rec.payload) };
+    });
+  }
+
+  async insertUser(row: UserRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO users (id, email, email_verified_at, totp_wrapped_iv, totp_wrapped_ciphertext, totp_wrapped_tag, totp_last_step, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        row.id, row.email, row.emailVerifiedAt, row.totpWrappedIv, row.totpWrappedCiphertext,
+        row.totpWrappedTag, row.totpLastStep, row.createdAt,
+      ],
+    );
+  }
+
+  async getUser(id: string): Promise<UserRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM users WHERE id = $1", [id]);
+    return r.rows[0] ? mapUserPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
+    return r.rows[0] ? mapUserPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async updateUser(row: UserRecord): Promise<void> {
+    await this.#pool.query(
+      `UPDATE users SET email_verified_at=$1, totp_wrapped_iv=$2, totp_wrapped_ciphertext=$3,
+       totp_wrapped_tag=$4, totp_last_step=$5 WHERE id=$6`,
+      [row.emailVerifiedAt, row.totpWrappedIv, row.totpWrappedCiphertext, row.totpWrappedTag, row.totpLastStep, row.id],
+    );
+  }
+
+  async insertEmailOtp(row: EmailOtpRecord): Promise<void> {
+    await this.#pool.query(
+      "INSERT INTO email_otp_challenges (id, email, code_scrypt, expires_at, attempts, sent_at) VALUES ($1,$2,$3,$4,$5,$6)",
+      [row.id, row.email, row.codeScrypt, row.expiresAt, row.attempts, row.sentAt],
+    );
+  }
+
+  async latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined> {
+    const r = await this.#pool.query(
+      "SELECT * FROM email_otp_challenges WHERE email = $1 ORDER BY sent_at DESC LIMIT 1",
+      [email.toLowerCase()],
+    );
+    return r.rows[0] ? mapOtpPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async updateEmailOtp(row: EmailOtpRecord): Promise<void> {
+    await this.#pool.query("UPDATE email_otp_challenges SET attempts=$1, expires_at=$2 WHERE id=$3", [
+      row.attempts,
+      row.expiresAt,
+      row.id,
+    ]);
+  }
+
+  async countEmailOtpSince(email: string, sinceIso: string): Promise<number> {
+    const r = await this.#pool.query(
+      "SELECT COUNT(*)::int AS n FROM email_otp_challenges WHERE email = $1 AND sent_at >= $2",
+      [email.toLowerCase(), sinceIso],
+    );
+    return Number(asRecord(r.rows[0] ?? { n: 0 }).n);
+  }
+
+  async insertBackupCode(userId: string, codeScrypt: string): Promise<void> {
+    await this.#pool.query("INSERT INTO backup_codes (user_id, code_scrypt) VALUES ($1,$2)", [userId, codeScrypt]);
+  }
+
+  async listBackupCodes(userId: string): Promise<{ codeScrypt: string; usedAt: string | null }[]> {
+    const r = await this.#pool.query("SELECT * FROM backup_codes WHERE user_id = $1", [userId]);
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return {
+        codeScrypt: String(rec.code_scrypt),
+        usedAt: rec.used_at == null ? null : String(rec.used_at),
+      };
+    });
+  }
+
+  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void> {
+    await this.#pool.query(
+      "UPDATE backup_codes SET used_at = $1 WHERE user_id = $2 AND code_scrypt = $3 AND used_at IS NULL",
+      [usedAt, userId, codeScrypt],
+    );
+  }
+
+  async insertSession(row: OperatorSessionRecord): Promise<void> {
+    await this.#pool.query(
+      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ($1,$2,$3,$4,$5)",
+      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt],
+    );
+  }
+
+  async getSession(idHash: string): Promise<OperatorSessionRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM operator_sessions WHERE id_hash = $1", [idHash]);
+    return r.rows[0] ? mapSessPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async deleteSession(idHash: string): Promise<void> {
+    await this.#pool.query("DELETE FROM operator_sessions WHERE id_hash = $1", [idHash]);
+  }
+
+  async deleteOtherSessions(userId: string, keepHash: string): Promise<void> {
+    await this.#pool.query("DELETE FROM operator_sessions WHERE user_id = $1 AND id_hash != $2", [userId, keepHash]);
+  }
+
+  async listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]> {
+    const r = await this.#pool.query(
+      `SELECT s.* FROM operator_sessions s JOIN org_members m ON m.user_id = s.user_id WHERE m.org_id = $1`,
+      [orgId],
+    );
+    return r.rows.map((row) => mapSessPg(asRecord(row)));
+  }
+
+  async touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void> {
+    await this.#pool.query("UPDATE operator_sessions SET last_seen_at=$1, expires_at=$2 WHERE id_hash=$3", [
+      lastSeenAt,
+      expiresAt,
+      idHash,
+    ]);
+  }
+
+  async insertAccessEvent(row: AccessEventRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        row.id, row.orgId, row.clientId, row.actorUserId, row.kind, row.jtiHash,
+        row.issuedAt, row.expiresAt, row.revokedAt,
+      ],
+    );
+  }
+
+  async listAccessEvents(orgId: string, limit = 200): Promise<AccessEventRecord[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM access_events WHERE org_id = $1 ORDER BY issued_at DESC LIMIT $2",
+      [orgId, limit],
+    );
+    return r.rows.map((row) => mapAccessPg(asRecord(row)));
+  }
+
+  async getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM access_events WHERE jti_hash = $1", [jtiHash]);
+    return r.rows[0] ? mapAccessPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async revokeAccessEventsForClient(clientId: string, at: string): Promise<void> {
+    await this.#pool.query(
+      "UPDATE access_events SET revoked_at = $1 WHERE client_id = $2 AND revoked_at IS NULL",
+      [at, clientId],
+    );
+  }
+
+  async revokeAccessEvent(jtiHash: string, at: string): Promise<void> {
+    await this.#pool.query("UPDATE access_events SET revoked_at = $1 WHERE jti_hash = $2", [at, jtiHash]);
+  }
+
+  async setClientRevoked(id: string, at: string): Promise<void> {
+    await this.#pool.query("UPDATE clients SET revoked_at = $1 WHERE id = $2", [at, id]);
+  }
+
+  async touchClientLastSeen(id: string, at: string): Promise<void> {
+    await this.#pool.query(
+      `UPDATE clients SET last_seen_at = $1 WHERE id = $2 AND (last_seen_at IS NULL OR last_seen_at < $3)`,
+      [at, id, new Date(Date.parse(at) - 60_000).toISOString()],
+    );
+  }
+
+  async setClientLastTokenAt(id: string, at: string): Promise<void> {
+    await this.#pool.query("UPDATE clients SET last_token_at = $1 WHERE id = $2", [at, id]);
+  }
 }
 
 function mapEnv(row: unknown): EnvironmentRecord | undefined {
@@ -725,16 +1016,7 @@ function mapItem(row: unknown): ItemRecord | undefined {
 
 function mapClient(row: unknown): ClientRecord | undefined {
   if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    orgId: String(rec.org_id),
-    kind: rec.kind as ClientRecord["kind"],
-    name: String(rec.name),
-    hashedSecret: rec.hashed_secret == null ? null : String(rec.hashed_secret),
-    clerkOauthUserId: rec.clerk_oauth_user_id == null ? null : String(rec.clerk_oauth_user_id),
-    environment: rec.environment as ClientRecord["environment"],
-  };
+  return mapClientRow(asRecord(row));
 }
 
 function mapPolicy(row: unknown): PolicyRecord | undefined {
@@ -783,6 +1065,54 @@ function mapChallenge(row: unknown): ApprovalChallengeRecord | undefined {
     expiresAt: String(rec.expires_at),
     attempts: Number(rec.attempts),
     kind: rec.kind as ApprovalChallengeRecord["kind"],
+  };
+}
+
+function mapUserPg(rec: Record<string, unknown>): UserRecord {
+  return {
+    id: String(rec.id),
+    email: String(rec.email),
+    emailVerifiedAt: rec.email_verified_at == null ? null : String(rec.email_verified_at),
+    totpWrappedIv: rec.totp_wrapped_iv == null ? null : String(rec.totp_wrapped_iv),
+    totpWrappedCiphertext: rec.totp_wrapped_ciphertext == null ? null : String(rec.totp_wrapped_ciphertext),
+    totpWrappedTag: rec.totp_wrapped_tag == null ? null : String(rec.totp_wrapped_tag),
+    totpLastStep: rec.totp_last_step == null ? null : Number(rec.totp_last_step),
+    createdAt: String(rec.created_at),
+  };
+}
+
+function mapOtpPg(rec: Record<string, unknown>): EmailOtpRecord {
+  return {
+    id: String(rec.id),
+    email: String(rec.email),
+    codeScrypt: String(rec.code_scrypt),
+    expiresAt: String(rec.expires_at),
+    attempts: Number(rec.attempts),
+    sentAt: String(rec.sent_at),
+  };
+}
+
+function mapSessPg(rec: Record<string, unknown>): OperatorSessionRecord {
+  return {
+    idHash: String(rec.id_hash),
+    userId: String(rec.user_id),
+    createdAt: String(rec.created_at),
+    lastSeenAt: String(rec.last_seen_at),
+    expiresAt: String(rec.expires_at),
+  };
+}
+
+function mapAccessPg(rec: Record<string, unknown>): AccessEventRecord {
+  return {
+    id: String(rec.id),
+    orgId: String(rec.org_id),
+    clientId: rec.client_id == null ? null : String(rec.client_id),
+    actorUserId: rec.actor_user_id == null ? null : String(rec.actor_user_id),
+    kind: rec.kind as AccessEventRecord["kind"],
+    jtiHash: String(rec.jti_hash),
+    issuedAt: String(rec.issued_at),
+    expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
+    revokedAt: rec.revoked_at == null ? null : String(rec.revoked_at),
   };
 }
 

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_HOME_DIRNAME } from "./brand.ts";
@@ -13,6 +13,7 @@ import {
   insertGrant,
   listAudit,
   listGrants,
+  listSecretEnvelopes,
   listSecretMeta,
   nowIso,
   openDb,
@@ -62,6 +63,11 @@ export class Vault {
         "Master key fingerprint does not match this vault. Check VAULT_MASTER_KEY.",
       );
     }
+    migrateNameAad(this.#db, this.#key);
+  }
+
+  loopbackToken(): string {
+    return loopbackBearer(this.#key);
   }
 
   close(): void {
@@ -74,7 +80,7 @@ export class Vault {
     if (Buffer.byteLength(value, "utf8") > MAX_SECRET_BYTES) {
       throw new Error("Secret value exceeds 64KiB");
     }
-    const envelope = encrypt(value, this.#key);
+    const envelope = encrypt(value, this.#key, secretName);
     const meta = upsertSecret(this.#db, {
       name: secretName,
       iv: envelope.iv,
@@ -312,14 +318,7 @@ export class Vault {
   #decryptSecret(name: string): string {
     const row = getSecretEnvelope(this.#db, name);
     if (!row) throw new Error(`Unknown secret ${name}`);
-    try {
-      return decrypt(
-        { iv: row.iv, ciphertext: row.ciphertext, tag: row.tag },
-        this.#key,
-      );
-    } catch {
-      throw new Error(`Failed to decrypt secret ${name}. Check VAULT_MASTER_KEY.`);
-    }
+    return decryptLocalSecret(this.#key, { name, ...row });
   }
 
   #requireSecret(name: string): void {
@@ -405,6 +404,44 @@ export function initVaultHome(home: string): {
   const fingerprint = vault.fingerprint;
   vault.close();
   return { home, keySource, fingerprint, generatedKey };
+}
+
+export function loopbackBearer(masterKey: Buffer): string {
+  return createHmac("sha256", masterKey).update("botpasses-loopback").digest("hex");
+}
+
+function decryptLocalSecret(
+  key: Buffer,
+  row: { name: string; iv: string; ciphertext: string; tag: string },
+): string {
+  const envelope = { iv: row.iv, ciphertext: row.ciphertext, tag: row.tag };
+  try {
+    return decrypt(envelope, key, row.name);
+  } catch {
+    try {
+      return decrypt(envelope, key, "");
+    } catch {
+      throw new Error(`Failed to decrypt secret ${row.name}. Check VAULT_MASTER_KEY.`);
+    }
+  }
+}
+
+function migrateNameAad(db: DatabaseSync, key: Buffer): void {
+  if (getMeta(db, "aad_version") === "1") return;
+  const at = nowIso();
+  for (const row of listSecretEnvelopes(db)) {
+    const value = decryptLocalSecret(key, row);
+    const envelope = encrypt(value, key, row.name);
+    upsertSecret(db, {
+      name: row.name,
+      iv: envelope.iv,
+      ciphertext: envelope.ciphertext,
+      tag: envelope.tag,
+      last4: row.last4,
+      at,
+    });
+  }
+  setMeta(db, "aad_version", "1");
 }
 
 export function openVaultFromEnv(home = defaultHome()): Vault {

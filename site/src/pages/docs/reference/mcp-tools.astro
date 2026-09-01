@@ -1,0 +1,150 @@
+---
+import Docs from "../../../layouts/Docs.astro";
+---
+<Docs title="MCP tools — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }, { href: "/docs/reference/mcp-tools", label: "MCP tools" }]}>
+  <h1>MCP tools</h1>
+  <p>
+    Hosted MCP is <code>POST https://botpasses.com/mcp</code> (staging:
+    <code>https://staging.botpasses.com/mcp</code>). The model never receives a secret
+    value. There is no <code>get_secret</code>.
+  </p>
+  <p>
+    Call <code>http.request</code> in the same turn the user asks for an API. Do not
+    list items first. Do not ask anyone to paste a key into chat.
+  </p>
+
+  <h2>Connect</h2>
+  <table>
+    <thead>
+      <tr><th>Client</th><th>How</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Grok Bot</td>
+        <td>Custom connector URL <code>/mcp</code> plus <code>Authorization: Bearer avm_…</code> from the console.</td>
+      </tr>
+      <tr>
+        <td>Claude / ChatGPT / Cursor</td>
+        <td>Remote MCP on this origin. This origin is the OAuth authorization server. See <a href="/docs/connect/claude">Claude</a>, <a href="/docs/connect/cursor">Cursor</a>, <a href="/docs/connect/openai">OpenAI</a>.</td>
+      </tr>
+      <tr>
+        <td>Local stdio</td>
+        <td><code>npx vault mcp</code> against a sqlite vault. Hosted stdio: <code>npx vault login</code> then <code>npx vault mcp --user-jwt</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Unauthenticated <code>POST /mcp</code> is 401. The
+    <code>WWW-Authenticate</code> header includes <code>resource_metadata=</code> pointing at
+    <code>/.well-known/oauth-protected-resource</code>.
+  </p>
+
+  <h2>JSON-RPC</h2>
+  <p>Protocol <code>2024-11-05</code>. <code>serverInfo.name</code> is <code>botpasses</code>.</p>
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>initialize</code></td><td>Capabilities, server info, and instructions that tell the model to use <code>http.request</code>.</td></tr>
+      <tr><td><code>ping</code></td><td>Empty object.</td></tr>
+      <tr><td><code>tools/list</code></td><td>The five hosted tools below.</td></tr>
+      <tr><td><code>tools/call</code></td><td>One text content item. The JSON is the payload (plus <code>next</code> when the model should retry).</td></tr>
+    </tbody>
+  </table>
+  <p><code>GET /mcp/tools</code> returns the same list as <code>tools/list</code> for an authenticated model or operator.</p>
+
+  <h2>Hosted tools</h2>
+  <p>
+    The client’s vault environment (<code>staging</code> or <code>production</code>) is
+    fixed on the token. You cannot switch environments from a tool argument.
+  </p>
+
+  <h3>http.request (primary)</h3>
+  <p>Call a third-party API. Botpasses finds the credential, requests a grant if needed, and attaches it. The response body is redacted.</p>
+  <table>
+    <thead>
+      <tr><th>Argument</th><th>Required</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>method</code></td><td>yes</td><td><code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code></td></tr>
+      <tr><td><code>path</code></td><td>yes</td><td><code>/v1/me</code> or a full <code>https://</code> URL</td></tr>
+      <tr><td><code>host</code></td><td>if no item_name and path is not a full URL</td><td>Hostname such as <code>api.spotify.com</code></td></tr>
+      <tr><td><code>item_name</code></td><td>if no host and path is not a full URL</td><td>Exact stored name</td></tr>
+      <tr><td><code>body</code></td><td>no</td><td>JSON object for POST, PUT, PATCH</td></tr>
+      <tr><td><code>task_description</code></td><td>no</td><td>Shown in the operator inbox (max 500 characters)</td></tr>
+    </tbody>
+  </table>
+  <pre><code>{`{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "http.request",
+    "arguments": {
+      "method": "GET",
+      "path": "https://api.spotify.com/v1/me"
+    }
+  }
+}`}</code></pre>
+  <p>
+    Example: the user says “get my Spotify profile”. Call
+    <code>http.request</code> with that URL. Do not ask for a token.
+  </p>
+
+  <h3>find_items</h3>
+  <p>Look up a stored name by exact item name and/or exact API host. Prefer <code>http.request</code>, which finds for you.</p>
+  <table>
+    <thead>
+      <tr><th>status</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>found</code></td><td>One item. Name, last-4, allowed hosts, inject. No value.</td></tr>
+      <tr><td><code>ambiguous</code></td><td>More than one host match. Pick an <code>item_name</code>.</td></tr>
+      <tr><td><code>need_item</code></td><td>Nothing stored. <code>collect_url</code> is a Botpasses page. Tell the user to open it. Do not ask them to paste the secret here.</td></tr>
+      <tr><td><code>host_mismatch</code></td><td>That name is not allowlisted for that host. This result is an MCP error.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>list_items</h3>
+  <p>Inventory of names, last-4, kind, inject, and environment. Do not call this first.</p>
+
+  <h3>request_grant</h3>
+  <p>
+    Requires <code>item_name</code>. Creates a pending grant and returns
+    <code>approval_code</code> (8 digits) plus grant status. The operator approves in the
+    inbox. Prefer <code>http.request</code>, which requests a grant when inject is denied.
+  </p>
+
+  <h3>list_grants</h3>
+  <p>Grant status for this client only. Names and timestamps. No values.</p>
+
+  <h2>What comes back after a miss or a pending grant</h2>
+  <p>
+    Most tool results include <code>next.for_model</code> and often
+    <code>next.arguments</code>. Follow those. Retry <code>http.request</code> with the
+    same host, method, and path after the operator stores or approves.
+  </p>
+  <p>
+    <code>need_item</code> is not an MCP error (models stop on errors).
+    <code>collect_url</code> is path-only on this origin. It is not an HMAC.
+  </p>
+
+  <h2>What never appears</h2>
+  <ul>
+    <li>Secret values, ciphertext, or raw JWTs</li>
+    <li><code>get_secret</code>, <code>read_value</code>, or <code>revoke_grant</code></li>
+    <li>A collect URL that encodes the secret</li>
+  </ul>
+
+  <h2>Local MCP (sqlite)</h2>
+  <p>
+    <code>npx vault mcp</code> exposes <code>list_secrets</code>,
+    <code>request_grant</code> (<code>secret_name</code>, <code>agent_id</code>,
+    <code>tool_id</code>), and <code>list_grants</code>. Inject is
+    <code>vault run</code>, not <code>http.request</code>. A miss tells the operator to
+    store the name locally. There is no hosted <code>collect_url</code>.
+  </p>
+
+  <p>HTTP routes that wrap the same vault: <a href="/docs/reference/http-api">HTTP API</a>.</p>
+</Docs>

@@ -9,6 +9,8 @@ export type OperatorPrincipal = {
   userId: string;
   orgId: string;
   role: MemberRole;
+  ready?: boolean;
+  sessionHash?: string;
 };
 
 export type ModelPrincipal = {
@@ -59,7 +61,7 @@ export async function resolveMachineToken(
   if (!token) return undefined;
   if (token.startsWith("avt_")) {
     const client = await kernel.lookupTrustedToken(token);
-    if (!client || client.kind !== "trusted") return undefined;
+    if (!client || client.kind !== "trusted" || client.revokedAt) return undefined;
     return {
       channel: "trusted",
       orgId: client.orgId,
@@ -69,7 +71,7 @@ export async function resolveMachineToken(
   }
   if (token.startsWith("avm_")) {
     const client = await kernel.lookupTrustedToken(token);
-    if (!client || client.kind !== "model") return undefined;
+    if (!client || client.kind !== "model" || client.revokedAt) return undefined;
     return {
       channel: "model",
       orgId: client.orgId,
@@ -125,12 +127,27 @@ export async function testAuthResolver(
       environment: client.environment,
     };
   }
+  if (channel === "trusted") {
+    const clientId = header(req, "x-test-client");
+    if (!clientId) return undefined;
+    const client = await kernel.store.getClient(clientId);
+    if (!client || client.kind !== "trusted" || client.revokedAt) return undefined;
+    return {
+      channel: "trusted",
+      orgId: client.orgId,
+      clientId: client.id,
+      environment: client.environment,
+    };
+  }
   return undefined;
 }
 
 export function requireOperator(p: Principal | undefined): OperatorPrincipal {
   if (!p) throw new HttpError(401, "Authentication required");
   if (p.channel !== "operator") throw new HttpError(403, "Operator session required");
+  if (p.ready === false) {
+    throw new HttpError(403, "mfa_required", { enroll_url: "/enroll-totp" });
+  }
   if (!p.orgId) throw new HttpError(403, "Organization required");
   return p;
 }
@@ -149,10 +166,6 @@ export function requireTrusted(p: Principal | undefined): TrustedPrincipal {
 
 export function isModelChannel(p: Principal): p is ModelPrincipal {
   return p.channel === "model";
-}
-
-export function clerkAudienceHint(publicUrl: string): { resource: string } {
-  return { resource: publicUrl };
 }
 
 export function hashBearer(token: string): string {

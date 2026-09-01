@@ -22,10 +22,26 @@ import {
 } from "./mcp.ts";
 import { hostedCollectHtml, hostedCollectMissingHtml } from "./collect-page.ts";
 import { hostedOperatorHtml } from "./operator-page.ts";
+import { hostedPageHeaders, MARKETING_CSP_EXTRAS, newCspNonce, securityHeaders } from "./security-headers.ts";
 import { captureException } from "./observe.ts";
+import { isPublicSitePath, tryServeSite } from "./static-site.ts";
+import { hostedAsset } from "./hosted-assets.ts";
+import { handleAuthApi, tryAuthPage } from "./http-auth-routes.ts";
+import { handleAccessApi } from "./http-access-routes.ts";
+import type { OperatorIdentity } from "./operator-identity.ts";
+import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
+import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
+import type Provider from "oidc-provider";
 
 const BODY_CAP = 128 * 1024;
 const KEEPALIVE_MS = 25_000;
+
+type CorsState = {
+  req?: IncomingMessage;
+  allowed: string[];
+  testMode: boolean;
+};
+const corsState: CorsState = { allowed: [], testMode: false };
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;
@@ -35,8 +51,12 @@ export type HostedHttpOpts = {
   authResolver?: AuthResolver;
   fetchImpl?: ConnectorFetch;
   resolveAddresses?: (hostname: string) => Promise<string[]>;
-  clerkIssuer?: string;
   allowedHosts?: string[];
+  siteRoot?: string;
+  deployPlane?: "staging" | "production";
+  identity?: OperatorIdentity;
+  oidcProvider?: Provider;
+  secureCookies?: boolean;
 };
 
 export function createHostedServer(opts: HostedHttpOpts) {
@@ -47,6 +67,14 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const limiter = opts.kernel.limiter;
   const agentpass = agentPassEnabled() ? new AgentPassAuthority(opts.kernel, publicUrl) : undefined;
   const allowed = opts.allowedHosts ?? hostAllowlist(publicUrl);
+  const siteRoot = opts.siteRoot;
+  const deployPlane = opts.deployPlane ?? opts.kernel.deployPlane;
+  const testMode = opts.authResolver === testAuthResolver || process.env.VAULT_AUTH_MODE === "test";
+  corsState.allowed = allowed;
+  corsState.testMode = testMode;
+  const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
+  const identity = opts.identity;
+  const oidcProvider = opts.oidcProvider;
 
   const server = createServer((req, res) => {
     void route(req, res).catch((err: unknown) => {
@@ -59,6 +87,17 @@ export function createHostedServer(opts: HostedHttpOpts) {
     const path = url.pathname;
     const method = req.method ?? "GET";
 
+    corsState.req = req;
+    const originHdr = typeof req.headers.origin === "string" ? req.headers.origin : "";
+    if (originHdr && !originAllowed(originHdr, allowed)) {
+      res.writeHead(403, {
+        "content-type": "application/json; charset=utf-8",
+        ...securityHeaders({ html: false }),
+      });
+      res.end(JSON.stringify({ error: "Origin not allowed" }));
+      return;
+    }
+
     if (method === "OPTIONS") {
       res.writeHead(204, corsHeaders());
       res.end();
@@ -66,32 +105,75 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && path === "/health") {
-      json(res, 200, { ok: true, product: HEALTH_PRODUCT });
+      json(res, 200, { ok: true, product: HEALTH_PRODUCT }, true);
       return;
     }
     if (method === "GET" && path === "/ready") {
       try {
         await opts.kernel.ping();
-        json(res, 200, { ok: true });
+        json(res, 200, { ok: true }, true);
       } catch {
-        json(res, 503, { ok: false });
+        json(res, 503, { ok: false }, true);
       }
       return;
     }
     if (method === "GET" && path === "/.well-known/oauth-protected-resource") {
+      const origin = publicUrl.replace(/\/$/, "");
       json(res, 200, {
-        resource: publicUrl,
-        authorization_servers: opts.clerkIssuer ? [opts.clerkIssuer] : [],
+        resource: `${origin}/mcp`,
+        authorization_servers: [origin],
       });
       return;
     }
     if (method === "GET" && path === "/.well-known/oauth-authorization-server") {
+      const origin = publicUrl.replace(/\/$/, "");
       json(res, 200, {
-        issuer: opts.clerkIssuer ?? publicUrl,
-        authorization_endpoint: `${opts.clerkIssuer ?? publicUrl}/oauth/authorize`,
-        token_endpoint: `${opts.clerkIssuer ?? publicUrl}/oauth/token`,
+        issuer: origin,
+        authorization_endpoint: `${origin}/oauth/authorize`,
+        token_endpoint: `${origin}/oauth/token`,
+        jwks_uri: `${origin}/oauth/jwks`,
+        registration_endpoint: `${origin}/oauth/register`,
+        device_authorization_endpoint: `${origin}/oauth/device/auth`,
+        revocation_endpoint: `${origin}/oauth/revoke`,
+        code_challenge_methods_supported: ["S256"],
       });
       return;
+    }
+    if ((method === "GET" || method === "HEAD") && path.startsWith("/assets/")) {
+      const asset = hostedAsset(path);
+      if (asset) {
+        res.writeHead(200, {
+          "content-type": asset.type,
+          "cache-control": "public, max-age=31536000, immutable",
+          ...securityHeaders({ html: false, cache: false }),
+        });
+        res.end(asset.body);
+        return;
+      }
+    }
+    if ((method === "GET" || method === "HEAD") && path === "/robots.txt") {
+      res.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-cache",
+        ...securityHeaders({ html: false, cache: false }),
+        ...(deployPlane === "staging" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+      });
+      res.end(robotsTxt(deployPlane));
+      return;
+    }
+    if (siteRoot && (method === "GET" || method === "HEAD") && isPublicSitePath(path)) {
+      if (
+        tryServeSite(
+          req,
+          res,
+          siteRoot,
+          path,
+          hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce(), ...MARKETING_CSP_EXTRAS }),
+          securityHeaders({ html: false, cache: false }),
+        )
+      ) {
+        return;
+      }
     }
     if (agentpass && method === "GET" && path === "/agentpass/configuration") {
       json(res, 200, agentpass.configuration());
@@ -107,11 +189,43 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
+    if (oidcProvider && isOauthPath(path) && !path.startsWith("/.well-known/")) {
+      if (method === "POST" && path === "/oauth/register") assertDcrIp(req);
+      await handleOauth(oidcProvider, req, res);
+      return;
+    }
+
     let principal: Principal | undefined;
     try {
       principal = await auth(req, opts.kernel);
     } catch (err) {
-      sendError(res, err);
+      const publicGet = (method === "GET" || method === "HEAD") && isPublicHtmlPath(path, Boolean(siteRoot));
+      if (!publicGet) {
+        sendError(res, err, path);
+        return;
+      }
+      principal = undefined;
+    }
+
+    if (oidcProvider && (method === "GET" || method === "HEAD") && path === "/consent") {
+      await handleConsentGet(
+        oidcProvider,
+        req,
+        res,
+        principal,
+        hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce() }),
+      );
+      return;
+    }
+    if (
+      tryAuthPage(
+        method,
+        path,
+        res,
+        hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce() }),
+        principal,
+      )
+    ) {
       return;
     }
 
@@ -126,9 +240,18 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
-    if (method === "GET" && (path === "/" || path === "/index.html")) {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(hostedOperatorHtml());
+    if (method === "GET" && path === "/console/") {
+      res.writeHead(308, { location: "/console" });
+      res.end();
+      return;
+    }
+    if (method === "GET" && (path === "/console" || (!siteRoot && (path === "/" || path === "/index.html")))) {
+      const nonce = newCspNonce();
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        ...hostedPageHeaders(deployPlane, { html: true, nonce }),
+      });
+      res.end(hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce }));
       return;
     }
     const collect = /^\/collect\/([^/]+)$/.exec(path);
@@ -136,20 +259,24 @@ export function createHostedServer(opts: HostedHttpOpts) {
       const needId = decodeURIComponent(collect[1] ?? "");
       const found = await opts.kernel.getNeed(needId);
       if (!found) {
-        res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+        const nonce = newCspNonce();
+        res.writeHead(404, {
+          "content-type": "text/html; charset=utf-8",
+          ...hostedPageHeaders(deployPlane, { html: true, nonce }),
+        });
         res.end(hostedCollectMissingHtml());
         return;
       }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      const nonce = newCspNonce();
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        ...hostedPageHeaders(deployPlane, { html: true, nonce }),
+      });
       res.end(
         hostedCollectHtml({
           needId: found.need.id,
-          clientName: found.need.client_name,
-          suggestedName: found.need.suggested_name,
-          host: found.need.host,
-          taskDescription: found.need.task_description,
-          status: found.need.status,
           origin: publicUrl.replace(/\/$/, "") || `http://${req.headers.host ?? "127.0.0.1"}`,
+          nonce,
         }),
       );
       return;
@@ -161,11 +288,11 @@ export function createHostedServer(opts: HostedHttpOpts) {
       try {
         model = await mcpModelPrincipal(opts.kernel, principal, body);
       } catch (err) {
-        sendError(res, err);
+        sendError(res, err, path);
         return;
       }
       if (body.method === "tools/call" && mcpToolName(body) === "request_grant") {
-        if (!limiter.allow(model.orgId)) throw new HttpError(429, "request_grant rate limit");
+        if (!(await limiter.allow(model.orgId))) throw new HttpError(429, "request_grant rate limit");
       }
       const rpc = await handleHostedMcpRpc(
         {
@@ -177,7 +304,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         body,
       );
       if (!rpc) {
-        res.writeHead(202);
+        res.writeHead(202, securityHeaders({ html: false }));
         res.end();
         return;
       }
@@ -192,6 +319,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
   }
 
+  function setCookies(res: ServerResponse, cookies: string[], status: number, body: unknown): void {
+    res.writeHead(status, {
+      "content-type": "application/json; charset=utf-8",
+      "set-cookie": cookies,
+      ...securityHeaders({ html: false }),
+      ...corsHeaders(),
+    });
+    res.end(JSON.stringify(body));
+  }
+
   async function api(
     req: IncomingMessage,
     res: ServerResponse,
@@ -201,6 +338,47 @@ export function createHostedServer(opts: HostedHttpOpts) {
     principal: Principal | undefined,
     authority: AgentPassAuthority | undefined,
   ): Promise<void> {
+    if (identity) {
+      const handled = await handleAuthApi(req, res, method, path, principal, {
+        identity,
+        secure: secureCookies,
+        htmlHeaders: hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce() }),
+        readJson,
+        json,
+        setCookies,
+        clientIp: (r) =>
+          identity.clientIp(
+            typeof r.headers["x-forwarded-for"] === "string" ? r.headers["x-forwarded-for"] : undefined,
+            r.socket.remoteAddress,
+          ),
+      });
+      if (handled) return;
+    }
+    const mutating = method === "POST" || method === "DELETE" || method === "PATCH" || method === "PUT";
+    if (identity && mutating && !path.startsWith("/api/auth/") && principal?.channel === "operator" && principal.sessionHash) {
+      identity.assertCsrf(
+        req.headers.cookie,
+        typeof req.headers["x-csrf-token"] === "string" ? req.headers["x-csrf-token"] : undefined,
+        secureCookies,
+      );
+    }
+    if (oidcProvider && method === "POST" && path === "/consent") {
+      const body = await readJson(req);
+      await handleConsentPost(
+        oidcProvider,
+        req,
+        res,
+        principal,
+        body,
+        `${publicUrl.replace(/\/$/, "")}/mcp`,
+      );
+      return;
+    }
+    if (
+      await handleAccessApi(req, res, method, path, principal, opts.kernel, readJson, json)
+    ) {
+      return;
+    }
     if (method === "GET" && path === "/api/items") {
       const op = requireOperator(principal);
       const environment = asEnv(url.searchParams.get("environment") ?? "staging");
@@ -223,6 +401,49 @@ export function createHostedServer(opts: HostedHttpOpts) {
         folderName: optional(body.folder_name ?? body.folderName),
       });
       json(res, 200, { item });
+      return;
+    }
+    const getNeedApi = /^\/api\/need-items\/([^/]+)$/.exec(path);
+    if (method === "GET" && getNeedApi) {
+      if (!principal || principal.channel !== "operator") {
+        json(res, 404, { error: "Unknown need" });
+        return;
+      }
+      const op = requireOperator(principal);
+      const needId = decodeURIComponent(getNeedApi[1] ?? "");
+      const row = await opts.kernel.store.getNeed(needId);
+      if (!row) {
+        json(res, 404, { error: "Unknown need" });
+        return;
+      }
+      if (row.orgId !== op.orgId) {
+        json(res, 403, { error: "Need is not in this organization" });
+        return;
+      }
+      const found = await opts.kernel.getNeed(needId);
+      if (!found) {
+        json(res, 404, { error: "Unknown need" });
+        return;
+      }
+      json(res, 200, {
+        id: found.need.id,
+        client_name: found.need.client_name,
+        suggested_name: found.need.suggested_name,
+        host: found.need.host,
+        task_description: found.need.task_description,
+        status: found.need.status,
+      });
+      return;
+    }
+    const rotateClient = /^\/api\/clients\/([^/]+)\/rotate$/.exec(path);
+    if (method === "POST" && rotateClient) {
+      const op = requireOperator(principal);
+      const out = await opts.kernel.rotateClient(
+        op.orgId,
+        op.userId,
+        decodeURIComponent(rotateClient[1] ?? ""),
+      );
+      json(res, 200, out);
       return;
     }
     const fulfillNeed = /^\/api\/need-items\/([^/]+)\/fulfill$/.exec(path);
@@ -324,7 +545,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (method === "POST" && path === "/api/grants/request") {
       const actor = requireModelOrOperator(principal);
       const orgId = actor.orgId;
-      if (!limiter.allow(orgId)) throw new HttpError(429, "request_grant rate limit");
+      if (!(await limiter.allow(orgId))) throw new HttpError(429, "request_grant rate limit");
       const body = await readJson(req);
       const clientId =
         actor.channel === "model" ? actor.clientId : String(body.client_id ?? body.clientId ?? "");
@@ -605,28 +826,45 @@ function sseKeepalive(res: ServerResponse): void {
   res.on("close", () => clearInterval(timer));
 }
 
+function originAllowed(origin: string, allowedHosts: string[]): boolean {
+  try {
+    return hostAllowed(new URL(origin).hostname, allowedHosts);
+  } catch {
+    return false;
+  }
+}
+
 function corsHeaders(): Record<string, string> {
-  return {
-    "access-control-allow-origin": "*",
-    "access-control-allow-headers": "Authorization, Content-Type, Mcp-Session-Id, X-Test-Channel, X-Test-User, X-Test-Org, X-Test-Client",
+  const testHeaders = corsState.testMode
+    ? ", X-Test-Channel, X-Test-User, X-Test-Org, X-Test-Client"
+    : "";
+  const headers: Record<string, string> = {
+    "access-control-allow-headers": `Authorization, Content-Type, Mcp-Session-Id, X-CSRF-Token${testHeaders}`,
     "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
     "access-control-expose-headers": "WWW-Authenticate, Mcp-Session-Id",
   };
+  const origin = typeof corsState.req?.headers.origin === "string" ? corsState.req.headers.origin : "";
+  if (origin && originAllowed(origin, corsState.allowed)) {
+    headers["access-control-allow-origin"] = origin;
+  }
+  return headers;
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
+function json(res: ServerResponse, status: number, body: unknown, skipSecurity = false): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
+    ...(skipSecurity ? {} : securityHeaders({ html: false })),
     ...corsHeaders(),
   });
   res.end(JSON.stringify(body));
 }
 
-function sendError(res: ServerResponse, err: unknown): void {
+function sendError(res: ServerResponse, err: unknown, path = ""): void {
   void captureException(err);
   if (isNeedItemError(err)) {
     const headers: Record<string, string> = {
       "content-type": "application/json; charset=utf-8",
+      ...securityHeaders({ html: false }),
       ...corsHeaders(),
     };
     res.writeHead(err.status, headers);
@@ -636,11 +874,17 @@ function sendError(res: ServerResponse, err: unknown): void {
   if (isHttpError(err)) {
     const headers: Record<string, string> = {
       "content-type": "application/json; charset=utf-8",
+      ...securityHeaders({ html: false }),
       ...corsHeaders(),
     };
-    if (err.status === 401) headers["www-authenticate"] = `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
+    if (err.status === 401) {
+      headers["www-authenticate"] =
+        path === "/mcp" || path.startsWith("/mcp")
+          ? `Bearer realm="${WWW_AUTHENTICATE_REALM}", resource_metadata="/.well-known/oauth-protected-resource"`
+          : `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
+    }
     res.writeHead(err.status, headers);
-    res.end(JSON.stringify({ error: err.message }));
+    res.end(JSON.stringify({ error: err.message, ...err.extra }));
     return;
   }
   const message = err instanceof Error ? err.message : String(err);
@@ -663,3 +907,35 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 }
 
 export { KEEPALIVE_MS };
+
+function isPublicHtmlPath(path: string, hosted: boolean): boolean {
+  if (!hosted) return path === "/" || path === "/index.html" || path.startsWith("/collect/");
+  return isPublicSitePath(path) || path === "/console" || path.startsWith("/collect/") ||
+    path === "/sign-in" || path === "/sign-up" || path === "/enroll-totp" || path === "/consent" ||
+    path === "/device";
+}
+
+function robotsTxt(plane: "staging" | "production"): string {
+  if (plane === "staging") {
+    return "User-agent: *\nAllow: /\n";
+  }
+  return [
+    "User-agent: *",
+    "Allow: /",
+    "Allow: /docs",
+    "Disallow: /console",
+    "Disallow: /sign-in",
+    "Disallow: /sign-up",
+    "Disallow: /enroll-totp",
+    "Disallow: /consent",
+    "Disallow: /device",
+    "Disallow: /collect",
+    "Disallow: /api",
+    "Disallow: /mcp",
+    "Disallow: /approve",
+    "Disallow: /runtime",
+    "Disallow: /oauth",
+    "Disallow: /agentpass",
+    "",
+  ].join("\n");
+}

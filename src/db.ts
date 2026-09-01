@@ -168,6 +168,14 @@ export function getSecretEnvelope(
   return row;
 }
 
+export function listSecretEnvelopes(
+  db: DatabaseSync,
+): { name: string; iv: string; ciphertext: string; tag: string; last4: string }[] {
+  return db
+    .prepare("SELECT name, iv, ciphertext, tag, last4 FROM secrets ORDER BY name")
+    .all() as Pick<SecretRow, "name" | "iv" | "ciphertext" | "tag" | "last4">[];
+}
+
 export function insertGrant(db: DatabaseSync, grant: GrantRecord): void {
   db.prepare(
     `INSERT INTO grants (

@@ -42,6 +42,13 @@ export function operatorHtml(): string {
     </div>
     <p id="flash"></p>
 
+    <h2>Loopback token</h2>
+    <form id="token-form" novalidate>
+      <label for="loopback-token">Bearer printed by vault serve</label>
+      <input id="loopback-token" name="token" type="password" autocomplete="off" />
+      <p><button type="submit">Save token</button></p>
+    </form>
+
     <h2>Store a named secret</h2>
     <form id="store" novalidate>
       <div class="row">
@@ -108,7 +115,15 @@ export function operatorHtml(): string {
       el.textContent = msg;
       el.className = ok ? "ok" : "warn";
     };
-    const j = (path, opts) => fetch(path, opts).then(async (r) => {
+    const TOKEN_KEY = "botpasses-loopback";
+    const tokenHdr = () => {
+      const t = sessionStorage.getItem(TOKEN_KEY) || "";
+      return t ? { authorization: "Bearer " + t } : {};
+    };
+    const j = (path, opts = {}) => fetch(path, {
+      ...opts,
+      headers: Object.assign({}, opts.headers || {}, tokenHdr()),
+    }).then(async (r) => {
       const body = await r.json();
       if (!r.ok) throw new Error(body.error || r.statusText);
       return body;
@@ -181,7 +196,20 @@ export function operatorHtml(): string {
         await refresh();
       } catch (err) { flash(err.message, false); }
     });
-    refresh().catch((err) => flash(err.message, false));
+    document.getElementById("token-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const next = document.getElementById("loopback-token").value.trim();
+      if (!next) { flash("Paste the loopback token printed by vault serve", false); return; }
+      sessionStorage.setItem(TOKEN_KEY, next);
+      document.getElementById("loopback-token").value = "";
+      flash("Token saved", true);
+      refresh().catch((err) => flash(err.message, false));
+    });
+    if (sessionStorage.getItem(TOKEN_KEY)) {
+      refresh().catch((err) => flash(err.message, false));
+    } else {
+      flash("Paste the loopback token printed by vault serve", false);
+    }
   </script>
 </body>
 </html>`;

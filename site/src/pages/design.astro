@@ -1,0 +1,32 @@
+---
+import Base from "../layouts/Base.astro";
+
+const tokens = [
+  ["bg", "#0B0F0C"],
+  ["bg-elev", "#151C17"],
+  ["fg", "#F2F5F2"],
+  ["muted", "#C5D0C7"],
+  ["line", "#2A332C"],
+  ["accent", "#7DDA88"],
+  ["accent-dim", "#244024"],
+  ["danger", "#E07070"],
+] as const;
+---
+<Base title="Design — Botpasses" description="Botpasses visual tokens and mark.">
+  <h1>Design</h1>
+  <p>The living style guide. Hex is the source of truth. CSS also emits oklch twins.</p>
+  <h2>Mark</h2>
+  <p><img src="/favicon.svg" alt="Botpasses mark" width="48" height="48" /></p>
+  <h2>Tokens</h2>
+  <div class="swatches">
+    {tokens.map(([name, hex]) => (
+      <div class="swatch">
+        <div class="chip" style={`background:${hex}`}></div>
+        <strong>{name}</strong>
+        <code>{hex}</code>
+      </div>
+    ))}
+  </div>
+  <h2>Type</h2>
+  <p>Display Fraunces. Body IBM Plex Sans. Mono IBM Plex Mono. Self-hosted OFL files. No Google Fonts runtime.</p>
+</Base>

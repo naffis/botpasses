@@ -134,8 +134,11 @@ test("vault login prints hosted stdio steps and never a canary", async () => {
   try {
     assert.equal(await main(["login"], io), 0);
     const out = [...io.stdout, ...io.stderr].join("\n");
-    assert.match(out, /VAULT_USER_JWT/);
+    assert.match(out, /\/sign-in/);
+    assert.match(out, /\/console/);
+    assert.match(out, /\/device/);
     assert.match(out, /vault mcp --user-jwt/);
+    assert.doesNotMatch(out, /Clerk/);
     assert.ok(out.includes(STAGING_ORIGIN));
     assert.ok(!out.includes(CANARY));
     assert.ok(!out.includes("sk_live"));
@@ -178,6 +181,14 @@ test("vault mcp --user-jwt without VAULT_PUBLIC_URL exits 1", async () => {
     if (prevJwt === undefined) delete process.env.VAULT_USER_JWT;
     else process.env.VAULT_USER_JWT = prevJwt;
   }
+});
+
+test("help mentions the loopback bearer for vault serve", async () => {
+  const io = captureIo();
+  assert.equal(await main(["--help"], io), 0);
+  const out = io.stdout.join("\n");
+  assert.match(out, /loopback bearer/);
+  assert.match(out, /Authorization/);
 });
 
 function spawnCapture(

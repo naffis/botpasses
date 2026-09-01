@@ -1,0 +1,14 @@
+---
+import Docs from "../../../layouts/Docs.astro";
+---
+<Docs title="Grant access — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }, { href: "/docs/how-to/grant-access", label: "Grant access" }]}>
+  <h1>Grant access</h1>
+  <p>An agent calls <code>http.request</code> or <code>request_grant</code>. You approve in the console inbox or with the 8-digit code. The runtime receives the value. The model does not.</p>
+  <ol>
+    <li>Connect an MCP client. Issue a model token from the console, or complete OAuth on this origin.</li>
+    <li>Ask for the task in plain language (get my Spotify profile). The client should call <code>http.request</code>.</li>
+    <li>If the grant is pending, open the inbox. Choose <code>prompt</code> (one call), <code>session</code> (until TTL), or a standing policy.</li>
+    <li><code>folder_standing</code> is owner-only and asks you to type the folder or environment name.</li>
+  </ol>
+  <p>You can also POST <code>/api/grants/:id/approve</code> or <code>/api/grants/approve-by-code</code>. See <a href="/docs/reference/http-api">HTTP API</a> and <a href="/docs/reference/mcp-tools">MCP tools</a>.</p>
+</Docs>

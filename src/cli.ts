@@ -9,7 +9,11 @@ import {
   resolvePublicOrigin,
   STAGING_ORIGIN,
 } from "./brand.ts";
+import { generateMasterKey, parseMasterKey } from "./crypto.ts";
 import { maskLast4 } from "./ids.ts";
+import { HostedKernel } from "./hosted/kernel.ts";
+import { awsKmsEncrypt, kekEncryptionContext } from "./hosted/kms.ts";
+import { PostgresStore } from "./store/postgres.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
 import { defaultHome, initVaultHome, loadMasterKey, Vault } from "./vault.ts";
@@ -42,15 +46,18 @@ Usage:
   vault audit
   vault run --with NAME [--with NAME] --agent AGENT --tool TOOL -- COMMAND
   vault serve [--host 127.0.0.1] [--port 8788]
+    prints a loopback bearer (HMAC of the master key); send it as Authorization on /api and POST /mcp
   vault login
   vault mcp [--user-jwt JWT]
+  vault kek-wrap
+  vault kek-rotate
 
 Env:
   VAULT_MASTER_KEY   32-byte key as 64 hex chars (preferred) or base64
   VAULT_HOME         data dir (default ~/${DEFAULT_HOME_DIRNAME})
   VAULT_ACTOR        audit actor (default $USER)
   VAULT_PUBLIC_URL   hosted origin for vault mcp --user-jwt
-  VAULT_USER_JWT     Clerk session JWT (never the Clerk secret)
+  VAULT_USER_JWT     operator or MCP access token from this origin
 `;
 
 export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Promise<number> {
@@ -80,6 +87,10 @@ export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Pr
       return cmdLogin(io);
     case "mcp":
       return cmdMcp(rest, io);
+    case "kek-wrap":
+      return cmdKekWrap(io);
+    case "kek-rotate":
+      return cmdKekRotate(io);
     default:
       io.error(`Unknown command: ${command}`);
       io.error(USAGE);
@@ -305,6 +316,7 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   const http = createVaultServer({ vault, host: values.host, port });
   const addr = await http.listen();
   io.error(`${PRODUCT_NAME} listening on http://${addr.host}:${addr.port}`);
+  io.error(`Loopback token: ${vault.loopbackToken()}`);
   io.error("Operator console shows names + last-4 only. MCP is POST /mcp. Bind is loopback by default.");
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -329,14 +341,11 @@ function cmdLogin(io: Io): number {
     }
   }
   const url = raw ? resolvePublicOrigin(raw) : STAGING_ORIGIN;
-  io.log("Hosted MCP stdio uses your Clerk session JWT, never CLERK_SECRET_KEY.");
-  io.log(`1. Sign in at ${url} (Clerk Organizations must be enabled).`);
-  io.log("2. Copy the session JWT from the Clerk dashboard session or browser cookie.");
-  io.log("3. Export it and start stdio MCP:");
+  io.log(`Sign in at ${url}/sign-in then open ${url}/console.`);
+  io.log(`Device login: ${url}/device`);
+  io.log("Connect MCP to this origin. Clients discover the authorization server here.");
   io.log("     export VAULT_PUBLIC_URL=" + url);
-  io.log("     export VAULT_USER_JWT=eyJ...");
   io.log("     vault mcp --user-jwt");
-  io.log("Do not put the Clerk secret in mcp.json.");
   return 0;
 }
 
@@ -371,6 +380,74 @@ async function cmdMcp(argv: string[], io: Io): Promise<number> {
     return 0;
   } finally {
     vault.close();
+  }
+}
+
+function refuseMachineKekCli(io: Io): boolean {
+  if (process.env.VAULT_MODE === "hosted" && process.env.FLY_ALLOC_ID) {
+    io.error("vault kek-wrap / kek-rotate run on an operator laptop, not on the Fly Machine.");
+    return true;
+  }
+  return false;
+}
+
+async function cmdKekWrap(io: Io): Promise<number> {
+  if (refuseMachineKekCli(io)) return 1;
+  const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
+  const plane = process.env.VAULT_DEPLOY_PLANE;
+  const app = process.env.FLY_APP_NAME?.trim() ?? "";
+  if (!keyId || (plane !== "staging" && plane !== "production") || !app) {
+    io.error(
+      "vault kek-wrap requires VAULT_KMS_KEY_ID, VAULT_DEPLOY_PLANE=staging|production, FLY_APP_NAME, and laptop AWS credentials (SSO or console Encrypt). Fly OIDC is Machine-only.",
+    );
+    return 1;
+  }
+  const raw = (await io.readStdin()).trim();
+  if (!raw) {
+    io.error("Pass the raw 32-byte KEK on stdin (64 hex chars).");
+    return 1;
+  }
+  const key = parseMasterKey(raw);
+  try {
+    const cipher = await awsKmsEncrypt(keyId)(key, kekEncryptionContext({ plane, app }));
+    io.log(cipher.toString("base64"));
+    return 0;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    io.error(`KMS Encrypt failed. Use AWS SSO or the console Encrypt API. ${message}`);
+    return 1;
+  }
+}
+
+async function cmdKekRotate(io: Io): Promise<number> {
+  if (refuseMachineKekCli(io)) return 1;
+  const db = process.env.DATABASE_URL?.trim() ?? "";
+  const oldRaw = process.env.VAULT_KEK?.trim() ?? "";
+  if (!db || !oldRaw) {
+    io.error("vault kek-rotate requires DATABASE_URL and VAULT_KEK (the current raw platform KEK).");
+    return 1;
+  }
+  const oldKek = parseMasterKey(oldRaw);
+  const newHex = generateMasterKey();
+  const newKek = parseMasterKey(newHex);
+  const store = await PostgresStore.open(db);
+  try {
+    const kernel = new HostedKernel({ store, kek: oldKek });
+    const result = await kernel.rotateKek(oldKek, newKek);
+    io.error(`rewrapped=${result.rewrapped} skipped=${result.skipped}`);
+    const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
+    const plane = process.env.VAULT_DEPLOY_PLANE;
+    const app = process.env.FLY_APP_NAME?.trim() ?? "";
+    if (keyId && (plane === "staging" || plane === "production") && app) {
+      const cipher = await awsKmsEncrypt(keyId)(newKek, kekEncryptionContext({ plane, app }));
+      io.log(cipher.toString("base64"));
+    } else {
+      io.log(newHex);
+      io.error("Set VAULT_KMS_KEY_ID, VAULT_DEPLOY_PLANE, and FLY_APP_NAME to print a KMS-wrapped blob instead of raw hex.");
+    }
+    return 0;
+  } finally {
+    await store.close();
   }
 }
 

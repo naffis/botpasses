@@ -1,0 +1,13 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base title="Security — Botpasses">
+  <h1>Security</h1>
+  <p>Secrets stay in the vault process. MCP lists names and requests grants. There is no get_secret. Values are injected into tool or runtime env only.</p>
+  <h2>Operator identity</h2>
+  <p>Create account and sign in use email one-time codes plus required TOTP. Sessions are HttpOnly cookies we issue. We do not use a third-party identity vendor.</p>
+  <h2>OAuth for agents</h2>
+  <p>This origin is the authorization server. MCP clients use PKCE S256. Access tokens are JWTs bound to this origin&apos;s /mcp resource. You can revoke a client, grant, or session from the console Access panel.</p>
+  <h2>Access ledger</h2>
+  <p>Every issued operator session, machine bearer, and OAuth token is recorded. The Access panel lists who still holds a credential and the issuance history. Revoke from that one screen.</p>
+</Base>

@@ -76,7 +76,65 @@ export type ClientRecord = {
   name: string;
   hashedSecret: string | null;
   clerkOauthUserId: string | null;
+  oauthClientId: string | null;
   environment: VaultEnvName;
+  revokedAt: string | null;
+  lastTokenAt: string | null;
+  lastSeenAt: string | null;
+  consentedByUserId: string | null;
+};
+
+export function emptyClientFields(): Pick<
+  ClientRecord,
+  "oauthClientId" | "revokedAt" | "lastTokenAt" | "lastSeenAt" | "consentedByUserId"
+> {
+  return {
+    oauthClientId: null,
+    revokedAt: null,
+    lastTokenAt: null,
+    lastSeenAt: null,
+    consentedByUserId: null,
+  };
+}
+
+export type UserRecord = {
+  id: string;
+  email: string;
+  emailVerifiedAt: string | null;
+  totpWrappedIv: string | null;
+  totpWrappedCiphertext: string | null;
+  totpWrappedTag: string | null;
+  totpLastStep: number | null;
+  createdAt: string;
+};
+
+export type EmailOtpRecord = {
+  id: string;
+  email: string;
+  codeScrypt: string;
+  expiresAt: string;
+  attempts: number;
+  sentAt: string;
+};
+
+export type OperatorSessionRecord = {
+  idHash: string;
+  userId: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+};
+
+export type AccessEventRecord = {
+  id: string;
+  orgId: string;
+  clientId: string | null;
+  actorUserId: string | null;
+  kind: "oauth_access" | "oauth_refresh" | "machine" | "session";
+  jtiHash: string;
+  issuedAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
 };
 
 export type PolicyRecord = {

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { dbPath } from "../src/db.ts";
-import { Vault } from "../src/vault.ts";
-import { CANARY, cleanup, makeVault } from "./helpers.ts";
+import { decrypt, encrypt, generateMasterKey, keyFingerprint, parseMasterKey } from "../src/crypto.ts";
+import { dbPath, getMeta, getSecretEnvelope, listSecretEnvelopes, openDb, setMeta, upsertSecret } from "../src/db.ts";
+import { loopbackBearer, Vault } from "../src/vault.ts";
+import { CANARY, cleanup, makeVault, tempHome } from "./helpers.ts";
 
 test("store returns last-4 only and database has no plaintext", () => {
   const { vault, home } = makeVault();
@@ -154,4 +154,55 @@ test("wrong master key refuses to open the vault", () => {
     other.close();
   }, /fingerprint/);
   cleanup(home);
+});
+
+test("name-bound AAD rejects a swapped envelope (AC-06)", () => {
+  const { vault, home, keyHex } = makeVault();
+  try {
+    vault.setSecret("STRIPE_KEY", CANARY);
+    const row = getSecretEnvelope(openDb(home), "STRIPE_KEY");
+    assert.ok(row);
+    const key = parseMasterKey(keyHex);
+    assert.equal(decrypt(row, key, "STRIPE_KEY"), CANARY);
+    assert.throws(() => decrypt(row, key, "OTHER_KEY"));
+    assert.notEqual(loopbackBearer(key), keyHex);
+    assert.match(loopbackBearer(key), /^[0-9a-f]{64}$/);
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
+test("pre-AAD rows migrate on open (AC-07)", () => {
+  const home = tempHome();
+  const key = parseMasterKey(generateMasterKey());
+  const db = openDb(home);
+  setMeta(db, "key_fingerprint", keyFingerprint(key));
+  const empty = encrypt(CANARY, key);
+  upsertSecret(db, {
+    name: "STRIPE_KEY",
+    iv: empty.iv,
+    ciphertext: empty.ciphertext,
+    tag: empty.tag,
+    last4: CANARY.slice(-4),
+    at: new Date().toISOString(),
+  });
+  db.close();
+  const vault = new Vault({ home, masterKey: key, actor: "operator" });
+  try {
+    const opened = openDb(home);
+    assert.equal(getMeta(opened, "aad_version"), "1");
+    const migrated = getSecretEnvelope(opened, "STRIPE_KEY");
+    assert.ok(migrated);
+    assert.equal(decrypt(migrated, key, "STRIPE_KEY"), CANARY);
+    assert.throws(() => decrypt(migrated, key, "OTHER_KEY"));
+    assert.throws(() => decrypt(migrated, key, ""));
+    const swapped = listSecretEnvelopes(opened)[0];
+    assert.ok(swapped);
+    assert.throws(() => decrypt(swapped, key, "OTHER_KEY"));
+    opened.close();
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
 });

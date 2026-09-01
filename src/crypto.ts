@@ -54,6 +54,10 @@ export function encrypt(plaintext: string, key: Buffer, aad = ""): Envelope {
   };
 }
 
+export function zeroKey(buf: Buffer): void {
+  buf.fill(0);
+}
+
 export function decrypt(envelope: Envelope, key: Buffer, aad = ""): string {
   const decipher = createDecipheriv(
     ALGO,

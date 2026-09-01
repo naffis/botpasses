@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-label="Botpasses">
+  <rect x="2" y="5" width="20" height="14" rx="3" fill="#7DDA88"/>
+  <circle cx="8" cy="12" r="1.6" fill="#0B0F0C"/>
+  <path d="M12 9h7v2h-7V9zm0 4h5v2h-5v-2z" fill="#0B0F0C"/>
+</svg>

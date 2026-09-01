@@ -2,8 +2,10 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  AccessEventRecord,
   ApprovalChallengeRecord,
   ClientRecord,
+  EmailOtpRecord,
   EnvironmentRecord,
   FolderRecord,
   HostedAuditRecord,
@@ -11,13 +13,16 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
+  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
+  UserRecord,
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
-import { HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import { mapClientRow } from "./map-client.ts";
 import type { VaultStore } from "./types.ts";
 
 function mapOrg(r: Record<string, unknown>): OrgRecord {
@@ -75,6 +80,17 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(HOSTED_SCHEMA_SQLITE);
+  db.exec(HOSTED_SCHEMA_IDENTITY);
+  for (const stmt of HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE.trim().split(";")) {
+    const sql = stmt.trim();
+    if (!sql) continue;
+    try {
+      db.exec(sql);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("duplicate column")) throw err;
+    }
+  }
   return new SqliteHostedStore(db);
 }
 
@@ -106,6 +122,22 @@ export class SqliteHostedStore implements VaultStore {
         row.wrappedDekTag,
         row.createdAt,
       );
+  }
+
+  async listOrgs(): Promise<OrgRecord[]> {
+    const rows = this.#db.prepare("SELECT * FROM orgs").all() as Record<string, unknown>[];
+    return rows.map(mapOrg);
+  }
+
+  async updateOrgWrappedDek(
+    id: string,
+    patch: Pick<OrgRecord, "wrappedDekIv" | "wrappedDekCiphertext" | "wrappedDekTag">,
+  ): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE orgs SET wrapped_dek_iv = ?, wrapped_dek_ciphertext = ?, wrapped_dek_tag = ? WHERE id = ?`,
+      )
+      .run(patch.wrappedDekIv, patch.wrappedDekCiphertext, patch.wrappedDekTag, id);
   }
 
   async getOrg(id: string): Promise<OrgRecord | undefined> {
@@ -327,8 +359,9 @@ export class SqliteHostedStore implements VaultStore {
   async insertClient(row: ClientRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO clients (id, org_id, kind, name, hashed_secret, clerk_oauth_user_id, environment)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO clients (id, org_id, kind, name, hashed_secret, clerk_oauth_user_id, environment,
+          oauth_client_id, revoked_at, last_token_at, last_seen_at, consented_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -338,7 +371,36 @@ export class SqliteHostedStore implements VaultStore {
         row.hashedSecret,
         row.clerkOauthUserId,
         row.environment,
+        row.oauthClientId,
+        row.revokedAt,
+        row.lastTokenAt,
+        row.lastSeenAt,
+        row.consentedByUserId,
       );
+  }
+
+  async updateClientHashedSecret(id: string, hashedSecret: string): Promise<void> {
+    this.#db.prepare("UPDATE clients SET hashed_secret = ? WHERE id = ?").run(hashedSecret, id);
+  }
+
+  async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+    this.#db
+      .prepare(
+        `INSERT INTO rate_hits (org_id, kind, window_start, count) VALUES (?, ?, ?, 1)
+         ON CONFLICT(org_id, kind, window_start) DO UPDATE SET count = count + 1`,
+      )
+      .run(orgId, kind, windowStart);
+    const r = this.#db
+      .prepare("SELECT count FROM rate_hits WHERE org_id = ? AND kind = ? AND window_start = ?")
+      .get(orgId, kind, windowStart) as { count: number };
+    return Number(r.count);
+  }
+
+  async countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+    const r = this.#db
+      .prepare("SELECT count FROM rate_hits WHERE org_id = ? AND kind = ? AND window_start = ?")
+      .get(orgId, kind, windowStart) as { count: number } | undefined;
+    return r ? Number(r.count) : 0;
   }
 
   async getClient(id: string): Promise<ClientRecord | undefined> {
@@ -346,15 +408,7 @@ export class SqliteHostedStore implements VaultStore {
       | Record<string, unknown>
       | undefined;
     if (!r) return undefined;
-    return {
-      id: String(r.id),
-      orgId: String(r.org_id),
-      kind: r.kind as ClientRecord["kind"],
-      name: String(r.name),
-      hashedSecret: r.hashed_secret == null ? null : String(r.hashed_secret),
-      clerkOauthUserId: r.clerk_oauth_user_id == null ? null : String(r.clerk_oauth_user_id),
-      environment: r.environment as ClientRecord["environment"],
-    };
+    return mapClientRow(r);
   }
 
   async getClientByHashedSecret(
@@ -386,6 +440,15 @@ export class SqliteHostedStore implements VaultStore {
       if (c) out.push(c);
     }
     return out;
+  }
+
+  async findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined> {
+    const r = this.#db
+      .prepare(
+        "SELECT id FROM clients WHERE oauth_client_id = ? OR clerk_oauth_user_id = ? LIMIT 1",
+      )
+      .get(oauthClientId, oauthClientId) as { id: string } | undefined;
+    return r ? this.getClient(r.id) : undefined;
   }
 
   async insertPolicy(row: PolicyRecord): Promise<void> {
@@ -826,6 +889,261 @@ export class SqliteHostedStore implements VaultStore {
       throw err;
     }
   }
+
+  async listMembers(orgId: string): Promise<MemberRecord[]> {
+    const rows = this.#db.prepare("SELECT * FROM org_members WHERE org_id = ?").all(orgId) as Record<
+      string,
+      unknown
+    >[];
+    return rows.map((r) => ({
+      orgId: String(r.org_id),
+      userId: String(r.user_id),
+      role: r.role as MemberRecord["role"],
+    }));
+  }
+
+  async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
+    const rows = this.#db.prepare("SELECT * FROM org_members WHERE user_id = ?").all(userId) as Record<
+      string,
+      unknown
+    >[];
+    return rows.map((r) => ({
+      orgId: String(r.org_id),
+      userId: String(r.user_id),
+      role: r.role as MemberRecord["role"],
+    }));
+  }
+
+  async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
+    this.#db
+      .prepare(
+        `INSERT INTO oidc_payloads (id, kind, payload, expires_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
+      )
+      .run(row.id, row.kind, row.payload, row.expiresAt);
+  }
+
+  async getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined> {
+    const r = this.#db.prepare("SELECT * FROM oidc_payloads WHERE id = ? AND kind = ?").get(id, kind) as
+      | Record<string, unknown>
+      | undefined;
+    if (!r) return undefined;
+    return {
+      payload: String(r.payload),
+      expiresAt: r.expires_at == null ? null : String(r.expires_at),
+    };
+  }
+
+  async deleteOidcPayload(id: string, kind: string): Promise<void> {
+    this.#db.prepare("DELETE FROM oidc_payloads WHERE id = ? AND kind = ?").run(id, kind);
+  }
+
+  async listOidcPayloads(kind: string): Promise<{ id: string; payload: string }[]> {
+    const rows = this.#db.prepare("SELECT id, payload FROM oidc_payloads WHERE kind = ?").all(kind) as Record<
+      string,
+      unknown
+    >[];
+    return rows.map((r) => ({ id: String(r.id), payload: String(r.payload) }));
+  }
+
+  async insertUser(row: UserRecord): Promise<void> {
+    this.#db
+      .prepare(
+        `INSERT INTO users (id, email, email_verified_at, totp_wrapped_iv, totp_wrapped_ciphertext, totp_wrapped_tag, totp_last_step, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.email,
+        row.emailVerifiedAt,
+        row.totpWrappedIv,
+        row.totpWrappedCiphertext,
+        row.totpWrappedTag,
+        row.totpLastStep,
+        row.createdAt,
+      );
+  }
+
+  async getUser(id: string): Promise<UserRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM users WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapUser(r) : undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase()) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapUser(r) : undefined;
+  }
+
+  async updateUser(row: UserRecord): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE users SET email_verified_at = ?, totp_wrapped_iv = ?, totp_wrapped_ciphertext = ?,
+         totp_wrapped_tag = ?, totp_last_step = ? WHERE id = ?`,
+      )
+      .run(
+        row.emailVerifiedAt,
+        row.totpWrappedIv,
+        row.totpWrappedCiphertext,
+        row.totpWrappedTag,
+        row.totpLastStep,
+        row.id,
+      );
+  }
+
+  async insertEmailOtp(row: EmailOtpRecord): Promise<void> {
+    this.#db
+      .prepare(
+        "INSERT INTO email_otp_challenges (id, email, code_scrypt, expires_at, attempts, sent_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(row.id, row.email, row.codeScrypt, row.expiresAt, row.attempts, row.sentAt);
+  }
+
+  async latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined> {
+    const r = this.#db
+      .prepare("SELECT * FROM email_otp_challenges WHERE email = ? ORDER BY sent_at DESC LIMIT 1")
+      .get(email.toLowerCase()) as Record<string, unknown> | undefined;
+    return r ? mapOtp(r) : undefined;
+  }
+
+  async updateEmailOtp(row: EmailOtpRecord): Promise<void> {
+    this.#db
+      .prepare("UPDATE email_otp_challenges SET attempts = ?, expires_at = ? WHERE id = ?")
+      .run(row.attempts, row.expiresAt, row.id);
+  }
+
+  async countEmailOtpSince(email: string, sinceIso: string): Promise<number> {
+    const r = this.#db
+      .prepare("SELECT COUNT(*) AS n FROM email_otp_challenges WHERE email = ? AND sent_at >= ?")
+      .get(email.toLowerCase(), sinceIso) as { n: number };
+    return Number(r.n);
+  }
+
+  async insertBackupCode(userId: string, codeScrypt: string): Promise<void> {
+    this.#db.prepare("INSERT INTO backup_codes (user_id, code_scrypt, used_at) VALUES (?, ?, NULL)").run(
+      userId,
+      codeScrypt,
+    );
+  }
+
+  async listBackupCodes(userId: string): Promise<{ codeScrypt: string; usedAt: string | null }[]> {
+    const rows = this.#db.prepare("SELECT * FROM backup_codes WHERE user_id = ?").all(userId) as Record<
+      string,
+      unknown
+    >[];
+    return rows.map((r) => ({
+      codeScrypt: String(r.code_scrypt),
+      usedAt: r.used_at == null ? null : String(r.used_at),
+    }));
+  }
+
+  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE backup_codes SET used_at = ? WHERE user_id = ? AND code_scrypt = ? AND used_at IS NULL")
+      .run(usedAt, userId, codeScrypt);
+  }
+
+  async insertSession(row: OperatorSessionRecord): Promise<void> {
+    this.#db
+      .prepare(
+        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt);
+  }
+
+  async getSession(idHash: string): Promise<OperatorSessionRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM operator_sessions WHERE id_hash = ?").get(idHash) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapSess(r) : undefined;
+  }
+
+  async deleteSession(idHash: string): Promise<void> {
+    this.#db.prepare("DELETE FROM operator_sessions WHERE id_hash = ?").run(idHash);
+  }
+
+  async deleteOtherSessions(userId: string, keepHash: string): Promise<void> {
+    this.#db.prepare("DELETE FROM operator_sessions WHERE user_id = ? AND id_hash != ?").run(userId, keepHash);
+  }
+
+  async listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]> {
+    const rows = this.#db
+      .prepare(
+        `SELECT s.* FROM operator_sessions s
+         JOIN org_members m ON m.user_id = s.user_id
+         WHERE m.org_id = ?`,
+      )
+      .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapSess);
+  }
+
+  async touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE operator_sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?")
+      .run(lastSeenAt, expiresAt, idHash);
+  }
+
+  async insertAccessEvent(row: AccessEventRecord): Promise<void> {
+    this.#db
+      .prepare(
+        `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.orgId,
+        row.clientId,
+        row.actorUserId,
+        row.kind,
+        row.jtiHash,
+        row.issuedAt,
+        row.expiresAt,
+        row.revokedAt,
+      );
+  }
+
+  async listAccessEvents(orgId: string, limit = 200): Promise<AccessEventRecord[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM access_events WHERE org_id = ? ORDER BY issued_at DESC LIMIT ?")
+      .all(orgId, limit) as Record<string, unknown>[];
+    return rows.map(mapAccess);
+  }
+
+  async getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM access_events WHERE jti_hash = ?").get(jtiHash) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapAccess(r) : undefined;
+  }
+
+  async revokeAccessEventsForClient(clientId: string, at: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE access_events SET revoked_at = ? WHERE client_id = ? AND revoked_at IS NULL")
+      .run(at, clientId);
+  }
+
+  async revokeAccessEvent(jtiHash: string, at: string): Promise<void> {
+    this.#db.prepare("UPDATE access_events SET revoked_at = ? WHERE jti_hash = ?").run(at, jtiHash);
+  }
+
+  async setClientRevoked(id: string, at: string): Promise<void> {
+    this.#db.prepare("UPDATE clients SET revoked_at = ? WHERE id = ?").run(at, id);
+  }
+
+  async touchClientLastSeen(id: string, at: string): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE clients SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`,
+      )
+      .run(at, id, new Date(Date.parse(at) - 60_000).toISOString());
+  }
+
+  async setClientLastTokenAt(id: string, at: string): Promise<void> {
+    this.#db.prepare("UPDATE clients SET last_token_at = ? WHERE id = ?").run(at, id);
+  }
 }
 
 function mapPolicy(r: Record<string, unknown>): PolicyRecord {
@@ -849,6 +1167,54 @@ function mapChallenge(r: Record<string, unknown>): ApprovalChallengeRecord {
     expiresAt: String(r.expires_at),
     attempts: Number(r.attempts),
     kind: r.kind as ApprovalChallengeRecord["kind"],
+  };
+}
+
+function mapUser(r: Record<string, unknown>): UserRecord {
+  return {
+    id: String(r.id),
+    email: String(r.email),
+    emailVerifiedAt: r.email_verified_at == null ? null : String(r.email_verified_at),
+    totpWrappedIv: r.totp_wrapped_iv == null ? null : String(r.totp_wrapped_iv),
+    totpWrappedCiphertext: r.totp_wrapped_ciphertext == null ? null : String(r.totp_wrapped_ciphertext),
+    totpWrappedTag: r.totp_wrapped_tag == null ? null : String(r.totp_wrapped_tag),
+    totpLastStep: r.totp_last_step == null ? null : Number(r.totp_last_step),
+    createdAt: String(r.created_at),
+  };
+}
+
+function mapOtp(r: Record<string, unknown>): EmailOtpRecord {
+  return {
+    id: String(r.id),
+    email: String(r.email),
+    codeScrypt: String(r.code_scrypt),
+    expiresAt: String(r.expires_at),
+    attempts: Number(r.attempts),
+    sentAt: String(r.sent_at),
+  };
+}
+
+function mapSess(r: Record<string, unknown>): OperatorSessionRecord {
+  return {
+    idHash: String(r.id_hash),
+    userId: String(r.user_id),
+    createdAt: String(r.created_at),
+    lastSeenAt: String(r.last_seen_at),
+    expiresAt: String(r.expires_at),
+  };
+}
+
+function mapAccess(r: Record<string, unknown>): AccessEventRecord {
+  return {
+    id: String(r.id),
+    orgId: String(r.org_id),
+    clientId: r.client_id == null ? null : String(r.client_id),
+    actorUserId: r.actor_user_id == null ? null : String(r.actor_user_id),
+    kind: r.kind as AccessEventRecord["kind"],
+    jtiHash: String(r.jti_hash),
+    issuedAt: String(r.issued_at),
+    expiresAt: r.expires_at == null ? null : String(r.expires_at),
+    revokedAt: r.revoked_at == null ? null : String(r.revoked_at),
   };
 }
 

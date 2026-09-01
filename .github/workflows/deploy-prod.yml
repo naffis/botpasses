@@ -20,6 +20,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm --prefix site ci
+      - run: npm --prefix site run build
       - run: npm test
       - run: npm run typecheck
       - uses: superfly/flyctl-actions/setup-flyctl@master

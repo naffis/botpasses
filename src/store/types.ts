@@ -1,6 +1,8 @@
 import type {
+  AccessEventRecord,
   ApprovalChallengeRecord,
   ClientRecord,
+  EmailOtpRecord,
   EnvironmentRecord,
   FolderRecord,
   HostedAuditRecord,
@@ -8,9 +10,11 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
+  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
+  UserRecord,
   VaultRecord,
 } from "../hosted-types.ts";
 
@@ -20,10 +24,21 @@ export type VaultStore = {
 
   insertOrg(row: OrgRecord): Promise<void>;
   getOrg(id: string): Promise<OrgRecord | undefined>;
+  listOrgs(): Promise<OrgRecord[]>;
+  updateOrgWrappedDek(
+    id: string,
+    patch: Pick<OrgRecord, "wrappedDekIv" | "wrappedDekCiphertext" | "wrappedDekTag">,
+  ): Promise<void>;
   deleteOrg(orgId: string): Promise<void>;
 
   insertMember(row: MemberRecord): Promise<void>;
   getMember(orgId: string, userId: string): Promise<MemberRecord | undefined>;
+  listMembers(orgId: string): Promise<MemberRecord[]>;
+  listMembershipsForUser(userId: string): Promise<MemberRecord[]>;
+  upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void>;
+  getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined>;
+  deleteOidcPayload(id: string, kind: string): Promise<void>;
+  listOidcPayloads(kind: string): Promise<{ id: string; payload: string }[]>;
 
   insertVault(row: VaultRecord): Promise<void>;
   listVaults(orgId: string): Promise<VaultRecord[]>;
@@ -53,6 +68,10 @@ export type VaultStore = {
   getClientByHashedSecret(orgId: string, hashedSecret: string): Promise<ClientRecord | undefined>;
   findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined>;
   listClients(orgId: string): Promise<ClientRecord[]>;
+  findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined>;
+  updateClientHashedSecret(id: string, hashedSecret: string): Promise<void>;
+  incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
+  countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
 
   insertPolicy(row: PolicyRecord): Promise<void>;
   deletePolicy(id: string): Promise<void>;
@@ -124,6 +143,32 @@ export type VaultStore = {
   >;
   updateAgentPassStatus(id: string, status: string): Promise<void>;
   consumeAgentPass(id: string, consumedAt: string): Promise<boolean>;
+  insertUser(row: UserRecord): Promise<void>;
+  getUser(id: string): Promise<UserRecord | undefined>;
+  getUserByEmail(email: string): Promise<UserRecord | undefined>;
+  updateUser(row: UserRecord): Promise<void>;
+  insertEmailOtp(row: EmailOtpRecord): Promise<void>;
+  latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined>;
+  updateEmailOtp(row: EmailOtpRecord): Promise<void>;
+  countEmailOtpSince(email: string, sinceIso: string): Promise<number>;
+  insertBackupCode(userId: string, codeScrypt: string): Promise<void>;
+  listBackupCodes(userId: string): Promise<{ codeScrypt: string; usedAt: string | null }[]>;
+  markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void>;
+  insertSession(row: OperatorSessionRecord): Promise<void>;
+  getSession(idHash: string): Promise<OperatorSessionRecord | undefined>;
+  deleteSession(idHash: string): Promise<void>;
+  deleteOtherSessions(userId: string, keepHash: string): Promise<void>;
+  listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]>;
+  touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void>;
+  insertAccessEvent(row: AccessEventRecord): Promise<void>;
+  listAccessEvents(orgId: string, limit?: number): Promise<AccessEventRecord[]>;
+  getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined>;
+  revokeAccessEventsForClient(clientId: string, at: string): Promise<void>;
+  revokeAccessEvent(jtiHash: string, at: string): Promise<void>;
+  setClientRevoked(id: string, at: string): Promise<void>;
+  touchClientLastSeen(id: string, at: string): Promise<void>;
+  setClientLastTokenAt(id: string, at: string): Promise<void>;
+
   listAgentPasses(orgId: string): Promise<
     {
       id: string;

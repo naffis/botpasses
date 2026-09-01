@@ -11,7 +11,7 @@ The product shipped as Agent Grant Vault (`agent-vault`, MCP name `AgentVault`, 
 
 We will call the product **Botpasses**. Slug, MCP `serverInfo.name`, and `/health` `product` are `botpasses`. Prod origin is `https://botpasses.ai`. Staging is `https://staging.botpasses.ai`. `www` is a Cloudflare 301 to the apex, not a second OAuth resource.
 
-We will keep the `VAULT_*` process env prefix. We will not add `authorizedParties` on Clerk `verifyToken` (MCP `azp` is not the app origin).
+We will keep the `VAULT_*` process env prefix. Operator identity and the MCP authorization server are first-party on this origin (see [0003](0003-first-party-operator-identity.md) and [0004](0004-same-origin-oauth-as.md)). Clerk FAPI is not used.
 
 We will create Fly apps `botpasses-staging` and `botpasses-prod`, copy secrets (including reused Neon `DATABASE_URL`), and confirm the GitHub `FLY_API_TOKEN` can deploy those names **before** pushing renamed `fly.*.toml` files.
 
@@ -19,7 +19,7 @@ We will create Fly apps `botpasses-staging` and `botpasses-prod`, copy secrets (
 
 - CLI dual bin (`botpasses` + `vault`) until npm publish; docs still show `npx vault`.
 - Default sqlite home is `$HOME/.botpasses`. There is no auto-migrate from `~/.agent-vault`.
-- Two Clerk production instances with grey-cloud FAPI hosts `clerk.botpasses.ai` and `clerk.staging.botpasses.ai`.
+- Clerk FAPI hosts are retired. Sessions are `__Host-` cookies issued by this origin.
 - Resend domain `mail.botpasses.ai`; From `Botpasses <noreply@mail.botpasses.ai>` via `VAULT_EMAIL_FROM`.
 - GitHub rename to `naffis/botpasses` was planned after the first green staging deploy. It was executed 2026-08-30 at operator request; live staging was still blocked on Fly/DNS.
 

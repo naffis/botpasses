@@ -1,0 +1,19 @@
+---
+import Docs from "../../layouts/Docs.astro";
+---
+<Docs title="Start — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }, { href: "/docs/start", label: "Start" }]}>
+  <h1>Start</h1>
+  <p>Create an account on this origin. Confirm the email code. Enroll TOTP. Then store a named item in the console.</p>
+  <ol>
+    <li>Open <a href="/sign-up">Create account</a>.</li>
+    <li>Enter your email. We send an 8-digit code.</li>
+    <li>Enroll an authenticator app. Email alone is not enough to operate the vault.</li>
+    <li>Store a secret. Connect an MCP client. Approve the first grant.</li>
+  </ol>
+  <p>Local development still uses <code>npx vault</code> from this repository. The local console stays at <code>/</code>.</p>
+  <p>
+    Contracts: <a href="/docs/reference/mcp-tools">MCP tools</a>,
+    <a href="/docs/reference/http-api">HTTP API</a>,
+    <a href="/docs/reference/cli">CLI</a>.
+  </p>
+</Docs>

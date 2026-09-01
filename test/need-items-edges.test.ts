@@ -267,7 +267,7 @@ test("ensureNeedItem is 429 after the org limiter is exhausted (R-16)", async ()
   try {
     const t = Date.now();
     for (let i = 0; i < 30; i++) {
-      assert.equal(ctx.kernel.limiter.allow(ctx.orgId, t), true);
+      assert.equal(await ctx.kernel.limiter.allow(ctx.orgId, t), true);
     }
     await assert.rejects(
       () =>
