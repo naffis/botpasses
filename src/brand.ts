@@ -74,8 +74,7 @@ export function resolvePublicOrigin(
   return new URL(raw.trim()).origin;
 }
 
-export const MCP_INSTRUCTIONS_LOCAL =
-  "Botpasses. Tools return names and grant status only. Secret values are injected into tool processes, never into this conversation.";
-
-export const MCP_INSTRUCTIONS_HOSTED =
-  "Botpasses. Use find_items with an exact item_name and/or exact API host (for example api.spotify.com). On need_item, tell the operator to open collect_url on Botpasses and sign in. Never paste secrets into this conversation. After the operator stores the key, call http.request. Tools return names and grant status only.";
+export {
+  MCP_INSTRUCTIONS_HOSTED,
+  MCP_INSTRUCTIONS_LOCAL,
+} from "./prompts/mcp-hosted.ts";

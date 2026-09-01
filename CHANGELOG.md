@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4 — 2026-08-31
+
+MCP tells the model when to use Botpasses, so the user does not have to paste a procedure.
+
+- Hosted `initialize` instructions: if the user wants a third-party API called, run `http.request` **in the same turn**. Do not `list_items` first. Example: "get my Spotify profile" → `GET https://api.spotify.com/v1/me`. Never ask for a secret in chat.
+- `http.request` is the primary tool: `host` or a full https `path` URL is enough. It finds the credential, requests a grant when inject is denied, and returns `next.for_model` plus `next.arguments` to retry.
+- Concurrent prompt consume still hits the origin once. The other call returns a pending grant (not `inject_denied`), so the model can ask the operator to approve again.
+- `need_item` is not MCP `isError` (models stop on errors). `host_mismatch` still is.
+- Tool and param descriptions state when to use each tool versus siblings.
+- Operator console and README: after the Grok connector is on, ask for the task in plain language.
+
 ## 0.3.3 — 2026-08-31
 
 Public origins are **botpasses.com**, not botpasses.ai.

@@ -1,6 +1,6 @@
 {
   "name": "botpasses",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Botpasses: named secrets injected into tools, never into the model or transcript.",
   "type": "module",
   "engines": {
