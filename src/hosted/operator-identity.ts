@@ -13,6 +13,7 @@ import type { VaultStore } from "../store/types.ts";
 import { HttpError } from "./errors.ts";
 import type { EmailSender } from "./email.ts";
 import * as OTPAuth from "otpauth";
+import { otpauthQrSvg } from "./totp-qr.ts";
 
 const SCRYPT_OPTS = { N: 16384, r: 8, p: 1 } as const;
 
@@ -265,7 +266,7 @@ export class OperatorIdentity {
     return this.#issueSession(user, cookies);
   }
 
-  async startTotp(userId: string): Promise<{ otpauth_url: string }> {
+  async startTotp(userId: string): Promise<{ otpauth_url: string; qr_svg: string }> {
     const user = await this.store.getUser(userId);
     if (!user) throw new HttpError(401, "Authentication required");
     const secret = new OTPAuth.Secret({ size: 20 });
@@ -278,7 +279,8 @@ export class OperatorIdentity {
       period: 30,
       secret,
     });
-    return { otpauth_url: totp.toString() };
+    const otpauth_url = totp.toString();
+    return { otpauth_url, qr_svg: otpauthQrSvg(otpauth_url) };
   }
 
   async confirmTotp(

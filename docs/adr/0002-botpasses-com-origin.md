@@ -14,7 +14,7 @@ Product name, `VAULT_*` env prefix, and Fly app names in 0001 still hold. Clerk 
 
 We will use **botpasses.com** as the public zone. Prod origin is `https://botpasses.com`. Staging is `https://staging.botpasses.com`. `www.botpasses.com` is a Cloudflare 301 to the apex, not a second OAuth resource.
 
-This origin is the OAuth authorization server and resource server. Resend domain is `mail.botpasses.com`. Documented From is `Botpasses <noreply@mail.botpasses.com>` via `VAULT_EMAIL_FROM`.
+This origin is the OAuth authorization server and resource server. Resend sending domains are those same hosts. From is `Botpasses <noreply@staging.botpasses.com>` on staging and `Botpasses <noreply@botpasses.com>` on production, via `VAULT_EMAIL_FROM`.
 
 Canonical constants live in `src/brand.ts` (`STAGING_ORIGIN`, `PRODUCTION_ORIGIN`). Hosted boot (`VAULT_MODE=hosted`) requires `VAULT_PUBLIC_URL` to equal the plane origin. Loopback is only for local tests and `vault serve`. Platform default hostnames are not a public origin: they must not appear in MCP `collect_url`, CLI login, OAuth resource metadata, approval emails, or operator docs.
 

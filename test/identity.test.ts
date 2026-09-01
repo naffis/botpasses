@@ -210,9 +210,12 @@ test("AC-18 session without TOTP is 403 mfa_required; AC-23 TOTP replay rejected
       headers: { cookie: jar.cookie, "content-type": "application/json" },
       body: "{}",
     });
-    const started = (await start.json()) as { otpauth_url: string };
+    const started = (await start.json()) as { otpauth_url: string; qr_svg?: string };
     const secret = new URL(started.otpauth_url).searchParams.get("secret");
     assert.ok(secret);
+    assert.ok(started.qr_svg);
+    assert.match(started.qr_svg, /^<svg\b/);
+    assert.equal(started.qr_svg.includes(secret), false);
     const totp = new OTPAuth.TOTP({
       algorithm: "SHA1",
       digits: 6,

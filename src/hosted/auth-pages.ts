@@ -60,8 +60,15 @@ export function enrollTotpHtml(): string {
   return shell(
     "Enroll authenticator",
     "enroll-totp",
-    `<p>Scan or enter this otpauth URL in your authenticator app. Backup codes appear once after confirm.</p>
-    <pre id="otpauth"></pre>
+    `<p>Scan the QR code or open the link in your authenticator app. If you cannot scan, copy the key or the otpauth URL. Backup codes appear once after confirm.</p>
+    <figure id="totp-figure" hidden>
+      <div id="totp-qr" class="totp-qr" data-testid="totp-qr"></div>
+      <figcaption>Scan with your authenticator app</figcaption>
+    </figure>
+    <p><a id="otpauth-link" data-testid="otpauth-link" hidden>Open in authenticator app</a></p>
+    <p>Cannot scan? Enter this key:</p>
+    <p><code id="totp-secret" data-testid="totp-secret"></code></p>
+    <pre id="otpauth" data-testid="otpauth-url"></pre>
     <form id="totp-confirm">
       <label>Authenticator code <input name="code" inputmode="numeric" maxlength="6" required /></label>
       <button type="submit">Confirm</button>

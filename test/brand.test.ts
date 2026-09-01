@@ -168,7 +168,7 @@ test("createResendSender empty from throws before fetch", async () => {
 
 test("createResendSender uses VAULT_EMAIL_FROM in JSON", async () => {
   const orig = globalThis.fetch;
-  const from = "Botpasses <noreply@mail.botpasses.com>";
+  const from = "Botpasses <noreply@staging.botpasses.com>";
   let parsed: { from?: string } = {};
   globalThis.fetch = async (_url, init) => {
     parsed = JSON.parse(String(init?.body)) as { from?: string };

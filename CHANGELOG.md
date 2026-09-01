@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/enroll-totp` shows a local QR code, an `otpauth://` link, and the grouped secret after `POST /api/auth/totp/start`. The QR is SVG generated on this origin (not a third-party image).
+- Hosted mail sends through Resend on the verified public hosts. Staging From is `Botpasses <noreply@staging.botpasses.com>`; production is `Botpasses <noreply@botpasses.com>`. Fly uses a sending-access key per plane.
 - Public and internal MCP + HTTP API reference: hosted tools (`http.request`, find, grant), operator `/api`, OAuth, local `vault serve`. No `get_secret`.
 
 ## 0.4.1 — 2026-08-31

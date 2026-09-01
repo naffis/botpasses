@@ -35,7 +35,7 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/device` | RFC 8628 user-code page (oidc when the provider is mounted) |
 | POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true }` (same for unknown emails) |
 | POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session. `{ ok, enroll }` |
-| POST | `/api/auth/totp/start` | Session. Returns enroll material (no secret in HTML) |
+| POST | `/api/auth/totp/start` | Session. Returns `{ otpauth_url, qr_svg }`. QR is local SVG. No secret in HTML |
 | POST | `/api/auth/totp/confirm` | `{ code }` → ready session + `backup_codes` once |
 | POST | `/api/auth/logout` | Clears session cookies |
 | POST | `/consent` | JSON `{ uid, decision }`. CSRF required |
