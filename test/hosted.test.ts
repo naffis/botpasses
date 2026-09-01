@@ -599,7 +599,7 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       DATABASE_URL: "postgres://x",
       VAULT_KEK: "aa".repeat(32),
       RESEND_API_KEY: "re_test",
-      VAULT_EMAIL_FROM: "Botpasses <noreply@mail.botpasses.com>",
+      VAULT_EMAIL_FROM: "Botpasses <noreply@staging.botpasses.com>",
       VAULT_PUBLIC_URL: STAGING_ORIGIN,
       VAULT_DEPLOY_PLANE: "staging",
       VAULT_SESSION_SECRET: TEST_SESSION_SECRET,

@@ -7,6 +7,7 @@ import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
 import { signInHtml, signUpHtml, enrollTotpHtml, consentHtml, deviceHtml } from "../src/hosted/auth-pages.ts";
+import { AUTH_JS } from "../src/hosted/hosted-assets.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { TEST_SESSION_SECRET, cleanup, tempHome } from "./helpers.ts";
 
@@ -33,6 +34,15 @@ test("AC-14 auth HTML has one h1 and no secrets", () => {
   }
   assert.match(signInHtml(), /data-testid="sign-in"/);
   assert.match(enrollTotpHtml(), /data-testid="enroll-totp"/);
+  assert.match(enrollTotpHtml(), /data-testid="totp-qr"/);
+  assert.match(enrollTotpHtml(), /data-testid="otpauth-link"/);
+  assert.match(enrollTotpHtml(), /data-testid="totp-secret"/);
+  assert.doesNotMatch(enrollTotpHtml(), /otpauth:/);
+  assert.doesNotMatch(enrollTotpHtml(), /<img/);
+  assert.match(AUTH_JS, /otpauth-link/);
+  assert.match(AUTH_JS, /qr_svg/);
+  assert.match(AUTH_JS, /DOMParser/);
+  assert.doesNotMatch(AUTH_JS, /chart\.googleapis|api\.qrserver|qrserver\.com/);
   assert.match(consentHtml("Widgets", "u1"), /Widgets/);
   assert.doesNotMatch(consentHtml("Widgets", "u1"), /<img/);
   assert.match(deviceHtml(), /data-testid="device-code"/);

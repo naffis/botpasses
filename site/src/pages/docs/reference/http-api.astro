@@ -69,7 +69,7 @@ import Docs from "../../../layouts/Docs.astro";
     <tbody>
       <tr><td>POST</td><td><code>/api/auth/otp/send</code></td><td><code>{'{ "email" }'}</code> → <code>{'{ "ok": true }'}</code> for known and unknown emails</td></tr>
       <tr><td>POST</td><td><code>/api/auth/otp/verify</code></td><td><code>{'{ "email", "otp" }'}</code> sets the session cookie</td></tr>
-      <tr><td>POST</td><td><code>/api/auth/totp/start</code></td><td>Begin authenticator enroll</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/totp/start</code></td><td>Begin authenticator enroll. Returns <code>otpauth_url</code> and a local <code>qr_svg</code></td></tr>
       <tr><td>POST</td><td><code>/api/auth/totp/confirm</code></td><td><code>{'{ "code" }'}</code>. Returns backup codes once</td></tr>
       <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Clears cookies</td></tr>
     </tbody>

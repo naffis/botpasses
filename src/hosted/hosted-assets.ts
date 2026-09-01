@@ -15,6 +15,11 @@ a { color: var(--accent); }
 pre { white-space: pre-wrap; word-break: break-all; background: var(--bg-elev); padding: 0.6rem; border: 1px solid var(--line); }
 dialog { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--line); padding: 1.25rem; }
 #items > div, #inbox > div, #access-clients > div, #access-grants > div, #access-sessions > div { border-bottom: 1px solid var(--line); padding: 0.5rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.totp-qr { width: 14rem; height: 14rem; background: #fff; border: 1px solid var(--line); }
+.totp-qr svg { display: block; width: 100%; height: 100%; }
+#totp-secret { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em; word-break: break-all; }
+figure { margin: 1rem 0; }
+figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 0.4rem; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 `;
 
@@ -60,9 +65,35 @@ if (totpForm) {
   (async function() {
     const start = await fetch("/api/auth/totp/start", { method: "POST", credentials: "include", headers: headers(true), body: "{}" });
     const j = await start.json().catch(function() { return {}; });
+    if (!start.ok || !j.otpauth_url) {
+      flash(note, j.error || "Could not start authenticator enrollment");
+      return;
+    }
+    const link = document.getElementById("otpauth-link");
+    if (link) {
+      link.setAttribute("href", j.otpauth_url);
+      link.hidden = false;
+    }
     const uri = document.getElementById("otpauth");
-    if (uri && j.otpauth_url) uri.textContent = j.otpauth_url;
-  })();
+    if (uri) uri.textContent = j.otpauth_url;
+    const key = document.getElementById("totp-secret");
+    if (key) {
+      const secret = new URL(j.otpauth_url).searchParams.get("secret") || "";
+      key.textContent = secret.replace(/(.{4})(?=.)/g, "$1 ");
+    }
+    const box = document.getElementById("totp-qr");
+    const figure = document.getElementById("totp-figure");
+    if (box && typeof j.qr_svg === "string" && j.qr_svg.indexOf("<svg") === 0) {
+      const parsed = new DOMParser().parseFromString(j.qr_svg, "image/svg+xml");
+      const svg = parsed.documentElement;
+      if (svg && svg.nodeName.toLowerCase() === "svg" && !parsed.querySelector("parsererror")) {
+        svg.setAttribute("role", "img");
+        svg.setAttribute("aria-label", "QR code for authenticator enrollment");
+        box.replaceChildren(svg);
+        if (figure) figure.hidden = false;
+      }
+    }
+  })().catch(function() { flash(note, "Could not start authenticator enrollment"); });
   totpForm.addEventListener("submit", async function(e) {
     e.preventDefault();
     const r = await post("/api/auth/totp/confirm", { code: totpForm.code.value.trim() });

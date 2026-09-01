@@ -22,7 +22,7 @@ Grey-cloud (DNS only):
 | --- | --- | --- |
 | `_fly-ownership.botpasses.com` | TXT | value from `fly certs setup botpasses.com -a botpasses-prod` |
 | `_fly-ownership.staging.botpasses.com` | TXT | value from `fly certs setup staging.botpasses.com -a botpasses-staging` |
-| Resend records for `mail.botpasses.com` | DKIM CNAME, SPF TXT, MX | exactly as Resend shows |
+| Resend records for `botpasses.com` and `staging.botpasses.com` | DKIM CNAME (`resend._domainkey` / `resend._domainkey.staging`), SPF (`send` / `send.staging`) | grey-cloud, exactly as Resend shows |
 | `_dmarc.botpasses.com` | TXT | `v=DMARC1; p=none` |
 
 Also:
@@ -47,7 +47,7 @@ fly apps create botpasses-staging
 fly apps create botpasses-prod
 # copy secret names from agent-vault-staging / agent-vault-prod if those apps exist
 fly secrets set VAULT_PUBLIC_URL=https://staging.botpasses.com \
-  VAULT_EMAIL_FROM='Botpasses <noreply@mail.botpasses.com>' \
+  VAULT_EMAIL_FROM='Botpasses <noreply@staging.botpasses.com>' \
   VAULT_SESSION_SECRET='<32+ bytes>' \
   VAULT_OIDC_PRIVATE_JWK='<RS256 private JWK JSON>' \
   -a botpasses-staging
@@ -81,7 +81,7 @@ Set `VAULT_SESSION_SECRET` and `VAULT_OIDC_PRIVATE_JWK` before deploy. Confirm `
 
 ## Resend
 
-Domain `mail.botpasses.com`. Documented From: `Botpasses <noreply@mail.botpasses.com>`. All Resend records grey-cloud.
+Verified sending domains are the public hosts: `botpasses.com` and `staging.botpasses.com`. From matches the plane: `Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production. Fly `RESEND_API_KEY` is a Resend `sending_access` key scoped to that domain. Do not put a full-access Resend key on Fly. All Resend DNS records stay grey-cloud.
 
 ## Verify
 
@@ -106,5 +106,5 @@ DNS and staging health were completed 2026-08-31. Production is DNS-only until a
 | First green staging `/health` through Cloudflare | **done**. `curl -fsS https://staging.botpasses.com/health` → `{"ok":true,"product":"botpasses"}`. |
 | `https://botpasses.com/health` | **not yet**. Apex DNS points at `botpasses-prod` IPs. No prod Machine until promote. Expect Cloudflare 521/timeout. |
 | First-party auth secrets + delete `clerk.*` CNAMEs | **done** 2026-09-01. `VAULT_SESSION_SECRET` and `VAULT_OIDC_PRIVATE_JWK` set on staging. Clerk secrets were already absent. Delete leftover `clerk.*` CNAMEs in Cloudflare when you next edit DNS. |
-| Resend domain `mail.botpasses.com` verified | **open**. |
+| Resend domains `botpasses.com` and `staging.botpasses.com` verified; sending keys on Fly | **done** 2026-09-01. Staging `RESEND_API_KEY` + `VAULT_EMAIL_FROM` deployed. Prod email secrets staged (no Machines until promote). |
 | `gh repo rename botpasses` then update git remote | **done** 2026-08-30. Repo is `naffis/botpasses`. Do not create a new `naffis/agent-vault`. |
