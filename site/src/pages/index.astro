@@ -1,0 +1,26 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base title="Botpasses">
+  <Fragment slot="head">
+    <script type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      name: "Botpasses",
+      url: "https://botpasses.com",
+    })} />
+    <script type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      name: "Botpasses",
+      url: "https://botpasses.com",
+    })} />
+  </Fragment>
+  <h1>Named credentials for agents. The model never sees the value.</h1>
+  <p>Store a named secret once. An agent asks to use it. You approve. The runtime injects the value into the tool. Chat, logs, and the model never receive it.</p>
+  <div class="hero-actions">
+    <a class="btn" href="/sign-up">Create account</a>
+    <a class="btn btn-ghost" href="/sign-in">Sign in</a>
+    <a class="btn btn-ghost" href="/docs/start">Read the docs</a>
+  </div>
+</Base>

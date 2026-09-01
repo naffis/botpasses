@@ -1,0 +1,23 @@
+{
+  "name": "botpasses-site",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "dev": "astro dev --port 4321",
+    "build": "astro build && pagefind --site dist --output-path dist/pagefind",
+    "preview": "astro preview --port 4321"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.3.1",
+    "@fontsource/fraunces": "^5.2.5",
+    "@fontsource/ibm-plex-mono": "^5.2.5",
+    "@fontsource/ibm-plex-sans": "^5.2.5",
+    "astro": "^5.7.10"
+  },
+  "devDependencies": {
+    "pagefind": "1.5.2"
+  }
+}

@@ -1,3 +1,7 @@
+/**
+ * Local sqlite MCP JSON-RPC and tools. Public contract: docs/reference/mcp.md.
+ * Never returns secret values. There is no get_secret. Inject is vault run.
+ */
 import { MCP_INSTRUCTIONS_LOCAL, MCP_SERVER_NAME } from "./brand.ts";
 import { normalizeSecretName } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";

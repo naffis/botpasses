@@ -1,40 +1,35 @@
 import { PRODUCT_NAME } from "../brand.ts";
 
-export function hostedOperatorHtml(): string {
+export function hostedOperatorHtml(opts: { hosted?: boolean; nonce?: string } = {}): string {
+  const hosted = Boolean(opts.hosted);
+  const signin = hosted
+    ? `<p id="console-signin" data-testid="console-signin"><a href="/sign-in">Sign in</a> or <a href="/sign-up">Create account</a></p>`
+    : `<p id="console-signin" data-testid="console-signin">Local operator console. Sign in is not required on loopback.</p>`;
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${PRODUCT_NAME}</title>
-  <style>
-    :root { color-scheme: dark; --bg:#111; --fg:#eee; --muted:#9aa; --line:#333; }
-    html, body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ui-sans-serif, system-ui, sans-serif; }
-    main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
-    h1 { font-size: 1.35rem; }
-    p { color: var(--muted); }
-    .banner { border: 1px solid var(--line); padding: 12px 14px; margin: 16px 0 24px; }
-    label { display:block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
-    input, select, button { font: inherit; }
-    input, select { width: 100%; box-sizing: border-box; background:#1a1a1a; color:var(--fg); border:1px solid var(--line); padding:8px; }
-    button { background:#244024; color:var(--fg); border:1px solid #3a5; padding:8px 12px; cursor:pointer; }
-    pre { white-space: pre-wrap; word-break: break-all; background:#1a1a1a; padding:8px; border:1px solid var(--line); }
-    #flash { min-height: 1.4em; }
-  </style>
+  <link rel="stylesheet" href="/assets/console.css" />
 </head>
 <body>
   <main>
     <h1>${PRODUCT_NAME}</h1>
     <p>Store named credentials once. Agents request use. You authorize. The runtime gets the value. The model never does.</p>
-    <div class="banner">Paste your operator token to use this console. Issue a Grok Bot token once. After Grok is connected, ask it in plain language (for example get my Spotify profile). Grok calls the API in the same turn. You approve here if asked. You do not need to tell it to use Botpasses. Never paste a secret into Grok.</div>
-    <form id="signin">
-      <label>Operator token <input name="token" type="password" autocomplete="off" /></label>
-      <button type="submit">Use token</button>
-    </form>
-    <p id="flash"></p>
+    <div class="banner">Issue a Grok Bot token once. After Grok is connected, ask it in plain language (for example get my Spotify profile). Grok calls the API in the same turn. You approve here if asked. You do not need to tell it to use Botpasses. Never paste a secret into Grok.</div>
+    ${signin}
+    <details>
+      <summary>Bootstrap token</summary>
+      <form id="bootstrap">
+        <label>Break-glass token <input name="token" type="password" autocomplete="off" /></label>
+        <button type="submit">Use token</button>
+      </form>
+    </details>
+    <p id="flash" class="flash"></p>
     <h2>Grok Bot</h2>
     <p>MCP URL: <code id="mcp_url"></code></p>
-    <p>Connect that URL with <code>Authorization: Bearer avm_…</code>. Then say what you want (get my Spotify profile). Grok should call http.request immediately. Approve in the inbox when a grant is pending.</p>
+    <p>Connect that URL with Authorization Bearer on the issued token. Then say what you want (get my Spotify profile).</p>
     <form id="grok">
       <label>Client name <input name="name" value="grok" /></label>
       <button type="submit">Issue Grok Bot token</button>
@@ -76,122 +71,29 @@ export function hostedOperatorHtml(): string {
       <label>8-digit code <input name="code" maxlength="8" /></label>
       <button type="submit">Approve</button>
     </form>
+    <section id="access-panel" data-testid="access-panel">
+      <h2>Access</h2>
+      <p id="access-empty" data-testid="access-empty" hidden>No clients, grants, or other sessions.</p>
+      <h3>Clients</h3>
+      <div id="access-clients"></div>
+      <h3>Grants</h3>
+      <div id="access-grants"></div>
+      <h3>Sessions</h3>
+      <div id="access-sessions"></div>
+      <h3>Activity</h3>
+      <div id="access-activity"></div>
+    </section>
+    <dialog id="confirm" data-testid="item-delete-confirm">
+      <p>Confirm this change. It is not sent until you click Confirm.</p>
+      <button type="button" id="confirm-yes">Confirm</button>
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+    </dialog>
+    <dialog id="access-revoke" data-testid="access-revoke-confirm">
+      <p>Revoke this credential?</p>
+      <button type="button" id="revoke-yes">Confirm</button>
+    </dialog>
   </main>
-  <script>
-    const KEY = "vault_op_token";
-    const flash = (m) => { document.getElementById("flash").textContent = m; };
-    const opToken = () => sessionStorage.getItem(KEY) || "";
-    const headers = () => {
-      const h = { "content-type": "application/json" };
-      if (opToken()) h.Authorization = "Bearer " + opToken();
-      return h;
-    };
-    document.getElementById("mcp_url").textContent = location.origin + "/mcp";
-    document.getElementById("signin").onsubmit = (e) => {
-      e.preventDefault();
-      sessionStorage.setItem(KEY, e.target.token.value.trim());
-      e.target.token.value = "";
-      flash("Token saved in this tab");
-      loadInbox();
-      loadItems();
-    };
-    async function loadInbox() {
-      const r = await fetch("/api/inbox", { headers: headers() });
-      const j = await r.json();
-      const el = document.getElementById("inbox");
-      el.innerHTML = "";
-      for (const n of j.needs || []) {
-        const row = document.createElement("div");
-        row.textContent = [n.client_name, "needs", n.suggested_name, n.host, n.task_description]
-          .filter(Boolean).join(" ");
-        const a = document.createElement("a");
-        a.href = n.collect_path || ("/collect/" + n.id);
-        a.textContent = "Open collect";
-        row.appendChild(a);
-        el.appendChild(row);
-      }
-      for (const g of j.grants || []) {
-        const row = document.createElement("div");
-        row.textContent = g.id + " " + g.status + " " + (g.task_description || "");
-        const b = document.createElement("button");
-        b.textContent = "Approve prompt";
-        b.onclick = async () => {
-          await fetch("/api/grants/" + g.id + "/approve", {
-            method: "POST", headers: headers(), body: JSON.stringify({ policy: "prompt" })
-          });
-          loadInbox();
-        };
-        row.appendChild(b);
-        el.appendChild(row);
-      }
-    }
-    async function loadItems() {
-      const el = document.getElementById("items");
-      el.innerHTML = "";
-      for (const environment of ["staging", "production"]) {
-        const r = await fetch("/api/items?environment=" + environment, { headers: headers() });
-        const j = await r.json();
-        for (const i of j.items || []) {
-          const row = document.createElement("div");
-          row.textContent = environment + " " + i.name + " " + i.kind + " ••••" + i.last4 + " " + (i.username || "");
-          const del = document.createElement("button");
-          del.textContent = "Delete";
-          del.onclick = async () => {
-            await fetch("/api/items/" + i.id, { method: "DELETE", headers: headers() });
-            loadItems();
-          };
-          row.appendChild(del);
-          el.appendChild(row);
-        }
-      }
-    }
-    document.getElementById("store").onsubmit = async (e) => {
-      e.preventDefault();
-      const f = e.target;
-      const hosts = f.allowed_hosts.value.split(",").map((s) => s.trim()).filter(Boolean);
-      const body = {
-        name: f.name.value, kind: f.kind.value, environment: f.environment.value,
-        value: f.value.value, username: f.username.value || undefined,
-        allowed_hosts: hosts, inject: f.inject.value
-      };
-      const r = await fetch("/api/items", { method: "POST", headers: headers(), body: JSON.stringify(body) });
-      f.value.value = "";
-      flash(r.ok ? "Stored" : "Store failed");
-      loadItems();
-    };
-    document.getElementById("rotate").onsubmit = async (e) => {
-      e.preventDefault();
-      const f = e.target;
-      const r = await fetch("/api/items/" + f.id.value + "/rotate", {
-        method: "POST", headers: headers(), body: JSON.stringify({ value: f.value.value })
-      });
-      f.value.value = "";
-      flash(r.ok ? "Rotated" : "Rotate failed");
-      loadItems();
-    };
-    document.getElementById("code").onsubmit = async (e) => {
-      e.preventDefault();
-      const code = e.target.code.value;
-      const r = await fetch("/api/grants/approve-by-code", { method: "POST", headers: headers(), body: JSON.stringify({ code }) });
-      flash(r.ok ? "Approved" : "Code rejected");
-      loadInbox();
-    };
-    document.getElementById("grok").onsubmit = async (e) => {
-      e.preventDefault();
-      const name = e.target.name.value || "grok";
-      const r = await fetch("/api/clients/model", {
-        method: "POST", headers: headers(),
-        body: JSON.stringify({ name: name, environment: "staging" })
-      });
-      const j = await r.json();
-      const box = document.getElementById("grok_once");
-      if (!r.ok || !j.token) { flash("Could not issue Grok token"); box.textContent = ""; return; }
-      box.textContent = "Shown once. Grok Bot connector Authorization:\\nBearer " + j.token;
-      flash("Grok token issued. Copy it now.");
-    };
-    loadInbox();
-    loadItems();
-  </script>
+  <script${opts.nonce ? ` nonce="${opts.nonce}"` : ""} src="/assets/console.js"></script>
 </body>
 </html>`;
 }

@@ -1,0 +1,177 @@
+---
+import Docs from "../../../layouts/Docs.astro";
+---
+<Docs title="HTTP API — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }, { href: "/docs/reference/http-api", label: "HTTP API" }]}>
+  <h1>HTTP API</h1>
+  <p>
+    Hosted JSON lives under <code>/api</code>. MCP is <code>POST /mcp</code>
+    (<code>http.request</code>, <code>find_items</code>, <code>request_grant</code>,
+    <code>list_grants</code>; there is no <code>get_secret</code>). OAuth is
+    <code>/oauth/*</code> on this origin. Local <code>vault serve</code> is a smaller
+    loopback API (see the end of this page).
+  </p>
+  <p>
+    Operator JSON never includes secret values after submit. Model tokens cannot resolve
+    a value. Trusted tokens cannot call MCP.
+  </p>
+
+  <h2>Auth</h2>
+  <table>
+    <thead>
+      <tr><th>Who</th><th>Credential</th><th>May call</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Operator</td>
+        <td>HttpOnly session cookie after email OTP and TOTP. Send <code>X-CSRF-Token</code> on POST, PATCH, DELETE.</td>
+        <td>Console APIs, inbox, Access, approve, revoke</td>
+      </tr>
+      <tr>
+        <td>Model / agent</td>
+        <td>OAuth access JWT (<code>aud</code> is <code>https://&lt;origin&gt;/mcp</code>) or a console-issued <code>avm_…</code> Bearer</td>
+        <td><code>POST /mcp</code>, <code>POST /api/grants/request</code></td>
+      </tr>
+      <tr>
+        <td>Trusted runtime</td>
+        <td><code>avt_…</code> Bearer</td>
+        <td><code>POST /runtime/resolve</code> only</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    A session without TOTP is 403 <code>mfa_required</code> with
+    <code>enroll_url: "/enroll-totp"</code>. Cross-org ids are 404. JSON bodies over 128
+    KiB are 413. A disallowed browser <code>Origin</code> is 403 with no CORS allow header.
+  </p>
+  <p>
+    Invalid Bearer on marketing HTML is ignored (the page still loads). The same Bearer on
+    <code>/api</code> or <code>POST /mcp</code> is 401.
+  </p>
+
+  <h2>Discovery</h2>
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Path</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>GET</td><td><code>/health</code></td><td><code>{"{ ok, product: \"botpasses\" }"}</code>. No key fingerprint.</td></tr>
+      <tr><td>GET</td><td><code>/ready</code></td><td>200 or 503 from the database ping.</td></tr>
+      <tr><td>GET</td><td><code>/.well-known/oauth-protected-resource</code></td><td><code>resource</code> is <code>{"${origin}/mcp"}</code>. <code>authorization_servers</code> is this origin.</td></tr>
+      <tr><td>GET</td><td><code>/.well-known/oauth-authorization-server</code></td><td>Authorize, token, JWKS, register, device, revoke. PKCE <code>S256</code> only.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Sign-in JSON</h2>
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Path</th><th>Body</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>POST</td><td><code>/api/auth/otp/send</code></td><td><code>{'{ "email" }'}</code> → <code>{'{ "ok": true }'}</code> for known and unknown emails</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/otp/verify</code></td><td><code>{'{ "email", "otp" }'}</code> sets the session cookie</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/totp/start</code></td><td>Begin authenticator enroll</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/totp/confirm</code></td><td><code>{'{ "code" }'}</code>. Returns backup codes once</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Clears cookies</td></tr>
+    </tbody>
+  </table>
+  <p>HTML for the same flow: <code>/sign-up</code>, <code>/sign-in</code>, <code>/enroll-totp</code>. See <a href="/docs/start">Start</a>.</p>
+
+  <h2>Items and collect</h2>
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Path</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>GET</td><td><code>/api/items?environment=staging</code></td><td>Names, last-4, hosts, inject. No values.</td></tr>
+      <tr><td>POST</td><td><code>/api/items</code></td><td><code>name</code>, <code>value</code>, <code>environment</code>, <code>kind</code> (<code>secret</code> or <code>login</code>), <code>allowed_hosts</code>, <code>inject</code> (<code>bearer</code>, <code>basic</code>, or <code>header:Name</code>)</td></tr>
+      <tr><td>POST</td><td><code>/api/items/:id/rotate</code></td><td>Replace the value. Response is public metadata.</td></tr>
+      <tr><td>DELETE</td><td><code>/api/items/:id</code></td><td>Confirm in the console dialog first.</td></tr>
+      <tr><td>GET</td><td><code>/api/need-items/:id</code></td><td>Operator only. Unsigned GET is 404 (not public JSON).</td></tr>
+      <tr><td>POST</td><td><code>/api/need-items/:id/fulfill</code></td><td>Store the value from the collect page.</td></tr>
+    </tbody>
+  </table>
+  <p>Names must match <code>{"[A-Z][A-Z0-9_]{0,127}"}</code>. Duplicate name is 409.</p>
+
+  <h2>Clients, grants, inbox</h2>
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Path</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>POST</td><td><code>/api/clients/model</code></td><td>Issues an <code>avm_…</code> once, plus <code>mcp_url</code>.</td></tr>
+      <tr><td>POST</td><td><code>/api/clients/trusted</code></td><td>Issues an <code>avt_…</code> once for <code>/runtime/resolve</code>.</td></tr>
+      <tr><td>POST</td><td><code>/api/clients/:id/rotate</code></td><td>New token once. The old hash dies.</td></tr>
+      <tr><td>POST</td><td><code>/api/clients/:id/revoke</code></td><td>Later Bearer calls are 401. See <a href="/docs/how-to/revoke-access">Revoke access</a>.</td></tr>
+      <tr><td>POST</td><td><code>/api/grants/request</code></td><td>Model or operator. Rate limit 30 per org per hour.</td></tr>
+      <tr><td>POST</td><td><code>/api/grants/:id/approve</code></td><td><code>policy</code>: <code>prompt</code>, <code>session</code>, <code>item_standing</code>, <code>folder_standing</code> (owner + <code>confirm_name</code>)</td></tr>
+      <tr><td>POST</td><td><code>/api/grants/:id/revoke</code></td><td>Status becomes <code>revoked</code>. The row stays listed.</td></tr>
+      <tr><td>POST</td><td><code>/api/grants/approve-by-code</code></td><td>8-digit code from <code>request_grant</code>. Reuse is 409.</td></tr>
+      <tr><td>GET</td><td><code>/api/inbox</code></td><td>Pending grants and collect needs.</td></tr>
+      <tr><td>GET</td><td><code>/api/audit</code></td><td>Actions and names. No values.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Access</h2>
+  <table>
+    <thead>
+      <tr><th>Method</th><th>Path</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>GET</td><td><code>/api/access</code></td><td>Live snapshot: operators, clients, grants, sessions. No ledger array.</td></tr>
+      <tr><td>GET</td><td><code>/api/access/events</code></td><td>Issuance ledger, newest first, limit 200.</td></tr>
+      <tr><td>POST</td><td><code>/api/sessions/:id/revoke</code></td><td>Cannot revoke the current session (400). Use logout.</td></tr>
+      <tr><td>POST</td><td><code>/api/sessions/revoke-others</code></td><td>Ends every other operator session.</td></tr>
+    </tbody>
+  </table>
+  <p>The console Access panel calls these routes. Signed-out <code>GET /api/access</code> is 401.</p>
+
+  <h2>Trusted resolve</h2>
+  <p>
+    <code>POST /runtime/resolve</code> with an <code>avt_…</code> Bearer and
+    <code>{'{ "item_name": "STRIPE_KEY" }'}</code> injects the plaintext into the trusted
+    process. A model token is 403. This is the hosted equivalent of
+    <code>vault run</code>.
+  </p>
+
+  <h2>OAuth on this origin</h2>
+  <p>
+    PKCE S256 is required. Access tokens are JWTs, audience
+    <code>https://&lt;origin&gt;/mcp</code>, lifetime 600 seconds. Refresh tokens rotate.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Path</th><th>Role</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>/oauth/authorize</code></td><td>Browser consent after TOTP</td></tr>
+      <tr><td><code>/oauth/token</code></td><td>Code or refresh → JWT</td></tr>
+      <tr><td><code>/oauth/jwks</code></td><td>RS256 public keys</td></tr>
+      <tr><td><code>/oauth/register</code></td><td>Dynamic client registration. HTTPS redirects only (loopback http exception). No <code>javascript:</code> URIs.</td></tr>
+      <tr><td><code>/oauth/device/auth</code></td><td>Device code grant. The operator finishes at <code>/device</code></td></tr>
+      <tr><td><code>/oauth/revoke</code></td><td>RFC 7009. Marks that token in the Access ledger</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Local vault serve</h2>
+  <p>
+    <code>npx vault serve</code> listens on <code>127.0.0.1:8788</code>. The process prints
+    a loopback Bearer. Send it as <code>Authorization</code> on <code>/api</code> and
+    <code>POST /mcp</code>.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Path</th><th>Role</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>GET /</code></td><td>Local operator console</td></tr>
+      <tr><td><code>GET /api/secrets</code></td><td>Names and last-4</td></tr>
+      <tr><td><code>POST /api/secrets</code></td><td>Store <code>{"{ name, value }"}</code></td></tr>
+      <tr><td><code>GET/POST /api/grants</code></td><td>List or approve</td></tr>
+      <tr><td><code>POST /api/grants/request</code></td><td>Pending grant</td></tr>
+      <tr><td><code>POST /api/grants/:id/revoke</code></td><td>Revoke</td></tr>
+      <tr><td><code>GET /api/audit</code></td><td>Events, no values</td></tr>
+      <tr><td><code>POST /mcp</code></td><td>Local MCP JSON-RPC</td></tr>
+    </tbody>
+  </table>
+  <p>There is no OAuth or Access panel on the local plane. MCP tools: <a href="/docs/reference/mcp-tools">MCP tools</a>.</p>
+</Docs>

@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Public and internal MCP + HTTP API reference: hosted tools (`http.request`, find, grant), operator `/api`, OAuth, local `vault serve`. No `get_secret`.
+
+## 0.4.1 — 2026-08-31
+
+Grant-vault hardening: honest trust model, KMS-wrapped KEK, surface locks.
+
+- Hosted is a grant-vault, not zero-knowledge. ADRs [0003-grant-vault](docs/adr/0003-grant-vault-trust-model.md) and [0004-kms](docs/adr/0004-kms-wrapped-kek.md). Threat table: [docs/security/threat-model.md](docs/security/threat-model.md).
+- AWS KMS unwraps the platform KEK at boot (`VAULT_KEK_WRAPPED`). Expand/contract: raw `VAULT_KEK` still boots until `VAULT_KEK_REQUIRE_KMS=1`. `vault kek-wrap` / `vault kek-rotate` on a laptop. Runbook: [docs/ops/kek-rotation.md](docs/ops/kek-rotation.md).
+- Hosted HTML/JSON: CSP nonce, DENY frames, nosniff, HSTS, `no-store`. Disallowed CORS Origin is 403 with no ACAO.
+- Collect GET is a shell. Need details require an operator `GET /api/need-items/:id`.
+- Store-backed org rate limit. `POST /api/clients/:id/rotate` invalidates the old `avm_` / `avt_` hash.
+- Local envelopes bind AAD to the secret name (migrate-on-open). `vault serve` requires `HMAC-SHA256(master, "botpasses-loopback")` on `/api` and `POST /mcp`.
+- CI: `npm audit --omit=dev --audit-level=high`. Dependabot weekly for npm.
+
+## 0.4.0 — 2026-08-31
+
+Marketing site, first-party operator accounts, same-origin OAuth, and the Access panel. Clerk is removed.
+
+- Hosted `/` is the Astro marketing site. Console is `/console`. Design tokens live at `/design`.
+- Operators create an account with email OTP and required TOTP. Sessions are HttpOnly cookies plus signed CSRF.
+- This origin is the MCP authorization server (`oidc-provider` 9.12). PKCE S256 only. Access JWTs `aud=${origin}/mcp`, 600s. RFC 7009 `/oauth/revoke`.
+- Access panel lists operators, clients, grants, sessions, and the issuance ledger. Revoke a client, grant, or other session from that screen.
+- Env: `VAULT_SESSION_SECRET`, `VAULT_OIDC_PRIVATE_JWK`. No `CLERK_*`.
+- ADRs [0003](docs/adr/0003-first-party-operator-identity.md), [0004](docs/adr/0004-same-origin-oauth-as.md), [0005](docs/adr/0005-access-ledger.md).
+
 ## 0.3.4 — 2026-08-31
 
 MCP tells the model when to use Botpasses, so the user does not have to paste a procedure.

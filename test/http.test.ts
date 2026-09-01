@@ -3,15 +3,49 @@ import { test } from "node:test";
 import { createVaultServer } from "../src/server.ts";
 import { CANARY, cleanup, makeVault } from "./helpers.ts";
 
-test("HTTP operator API never returns secret values", async () => {
+function loopbackHeaders(vault: { loopbackToken(): string }, extra: Record<string, string> = {}) {
+  return {
+    authorization: `Bearer ${vault.loopbackToken()}`,
+    ...extra,
+  };
+}
+
+test("local API and MCP require the loopback bearer (AC-08)", async () => {
   const { vault, home } = makeVault();
   const http = createVaultServer({ vault, host: "127.0.0.1", port: 0 });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;
   try {
-    const stored = await fetch(`${base}/api/secrets`, {
+    const unauthApi = await fetch(`${base}/api/secrets`);
+    assert.equal(unauthApi.status, 401);
+    const unauthMcp = await fetch(`${base}/mcp`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+    });
+    assert.equal(unauthMcp.status, 401);
+    const health = await fetch(`${base}/health`);
+    assert.equal(health.status, 200);
+    const page = await fetch(`${base}/`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /loopback-token/);
+  } finally {
+    await http.close();
+    vault.close();
+    cleanup(home);
+  }
+});
+
+test("HTTP operator API never returns secret values", async () => {
+  const { vault, home } = makeVault();
+  const http = createVaultServer({ vault, host: "127.0.0.1", port: 0 });
+  const addr = await http.listen();
+  const base = `http://${addr.host}:${addr.port}`;
+  const auth = loopbackHeaders(vault, { "content-type": "application/json" });
+  try {
+    const stored = await fetch(`${base}/api/secrets`, {
+      method: "POST",
+      headers: auth,
       body: JSON.stringify({ name: "STRIPE_KEY", value: CANARY }),
     });
     const storedBody = (await stored.json()) as { secret: { last4: string } };
@@ -25,12 +59,12 @@ test("HTTP operator API never returns secret values", async () => {
     assert.doesNotMatch(page, /LastPass|1Password|Bitwarden/);
     assert.ok(!page.includes(CANARY));
 
-    const secrets = await (await fetch(`${base}/api/secrets`)).json();
+    const secrets = await (await fetch(`${base}/api/secrets`, { headers: auth })).json();
     assert.ok(!JSON.stringify(secrets).includes(CANARY));
 
     const granted = await fetch(`${base}/api/grants`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: auth,
       body: JSON.stringify({
         secretName: "STRIPE_KEY",
         agentId: "invoicer",
@@ -44,7 +78,7 @@ test("HTTP operator API never returns secret values", async () => {
 
     const mcp = await fetch(`${base}/mcp`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: auth,
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
@@ -55,7 +89,7 @@ test("HTTP operator API never returns secret values", async () => {
     const mcpBody = await mcp.json();
     assert.ok(!JSON.stringify(mcpBody).includes(CANARY));
 
-    const audit = (await (await fetch(`${base}/api/audit`)).json()) as {
+    const audit = (await (await fetch(`${base}/api/audit`, { headers: auth })).json()) as {
       audit: { action: string }[];
     };
     assert.ok(!JSON.stringify(audit).includes(CANARY));
@@ -69,7 +103,7 @@ test("HTTP operator API never returns secret values", async () => {
 
     const init = await fetch(`${base}/mcp`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: auth,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
     });
     const initBody = (await init.json()) as {

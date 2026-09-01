@@ -10,6 +10,8 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 - SQLite vault at `$VAULT_HOME` (default `$HOME/.botpasses`) · AES-256-GCM envelope encryption
 - MCP (stdio + HTTP) + CLI (`npx vault` / `npm run botpasses`) + loopback operator console
 - Hosted origins: `https://botpasses.com`, `https://staging.botpasses.com`. Never a platform default hostname.
+- Hosted identity is first-party (email OTP + TOTP). This origin is the MCP OAuth authorization server. No Clerk.
+- Hosted plane KEK: prefer `VAULT_KEK_WRAPPED` + KMS. `VAULT_KEK_REQUIRE_KMS=1` refuses raw-only. Do not claim zero-knowledge.
 
 ## Commands
 
@@ -21,7 +23,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 ## Conventions
 
 - Secrets are injected into **tool/runtime env only**. Never into model context, MCP tool results, operator console JSON, audit logs, or chat. There is no `get_secret`.
-- MCP may list names, find by exact name or API host, request a grant, report grant status. A miss returns a path-only Botpasses `collect_url` (no HMAC). The operator types the secret on that origin. Values stay in the vault process until `vault run` or `http.request`.
+- MCP may list names, find by exact name or API host, request a grant, report grant status. A miss returns a path-only Botpasses `collect_url` (no HMAC). The operator types the secret on that origin. Values stay in the vault process until `vault run` or `http.request`. Tool and HTTP contracts: `docs/reference/mcp.md`, `docs/reference/http-api.md`.
 - Tests must fail if a canary secret appears in a mocked LLM/agent conversation after store, grant, or use.
 - `master.key`, `.botpasses/`, `.vault/`, and `.env` stay out of git.
 

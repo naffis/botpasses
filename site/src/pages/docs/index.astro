@@ -1,0 +1,37 @@
+---
+import Docs from "../../layouts/Docs.astro";
+---
+<Docs title="Docs — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }]}>
+  <h1>Docs</h1>
+  <p>Start here, then connect a client, then revoke when you are done. MCP and HTTP contracts are in Reference.</p>
+
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/start">Create an account and store a named item</a></li>
+    <li><a href="/docs/explanation/why-the-model-never-sees-the-value">Why the model never sees the value</a></li>
+  </ul>
+
+  <h2>How to</h2>
+  <ul>
+    <li><a href="/docs/how-to/store-a-secret">Store a secret</a></li>
+    <li><a href="/docs/how-to/grant-access">Grant access</a></li>
+    <li><a href="/docs/how-to/revoke-access">Revoke access</a></li>
+    <li><a href="/docs/how-to/connect-cursor">Connect Cursor</a></li>
+    <li><a href="/docs/how-to/connect-claude-code">Connect Claude Code</a></li>
+  </ul>
+
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/connect/grok">Grok</a></li>
+    <li><a href="/docs/connect/claude">Claude</a></li>
+    <li><a href="/docs/connect/cursor">Cursor</a></li>
+    <li><a href="/docs/connect/openai">OpenAI</a></li>
+  </ul>
+
+  <h2>Reference</h2>
+  <ul>
+    <li><a href="/docs/reference/mcp-tools">MCP tools</a> (hosted <code>http.request</code>, find, grant; no <code>get_secret</code>)</li>
+    <li><a href="/docs/reference/http-api">HTTP API</a> (operator <code>/api</code>, OAuth, local <code>vault serve</code>)</li>
+    <li><a href="/docs/reference/cli">CLI</a></li>
+  </ul>
+</Docs>

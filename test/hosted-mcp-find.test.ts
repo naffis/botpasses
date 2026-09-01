@@ -5,6 +5,7 @@ import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
+import { COLLECT_JS } from "../src/hosted/hosted-assets.ts";
 import { handleHostedMcpRpc } from "../src/hosted/mcp.ts";
 import { callMcpTool } from "../src/mcp.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
@@ -270,7 +271,7 @@ test("model bearer cannot fulfill (AC-06)", async () => {
   }
 });
 
-test("collect HTML has password input and client name, no canary (AC-09)", async () => {
+test("unauthenticated collect HTML has no client or task (AC-11)", async () => {
   const ctx = await setup();
   try {
     const miss = await ctx.kernel.findItems({
@@ -285,15 +286,51 @@ test("collect HTML has password input and client name, no canary (AC-09)", async
     const res = await fetch(`${ctx.base}/collect/${miss.need_id}`);
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.match(html, /type="password"/);
-    assert.match(html, /grok/);
-    assert.match(html, /fetch playlists/);
+    assert.doesNotMatch(html, /grok/);
+    assert.doesNotMatch(html, /fetch playlists/);
+    assert.doesNotMatch(html, /api\.example\.com/);
     assert.ok(!html.includes(CANARY));
+    const csp = res.headers.get("content-security-policy") ?? "";
+    const nonce = /nonce-([A-Za-z0-9_-]+)/.exec(csp)?.[1];
+    assert.ok(nonce);
+    assert.match(html, new RegExp(`nonce="${nonce}"`));
+    assert.equal(res.headers.get("x-frame-options"), "DENY");
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(res.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+    assert.match(res.headers.get("permissions-policy") ?? "", /camera=\(\)/);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(res.headers.get("strict-transport-security"), "max-age=63072000");
+    assert.doesNotMatch(res.headers.get("strict-transport-security") ?? "", /preload|includeSubDomains/);
+    const meta = await fetch(`${ctx.base}/api/need-items/${miss.need_id}`, { headers: ctx.op });
+    assert.equal(meta.status, 200);
+    const body = (await meta.json()) as { client_name?: string; task_description?: string };
+    assert.equal(body.client_name, "grok");
+    assert.equal(body.task_description, "fetch playlists");
+    assert.ok(!JSON.stringify(body).includes(CANARY));
+    const { orgId: otherOrg } = await ctx.kernel.createOrg("other", "user_other");
+    const cross = await fetch(`${ctx.base}/api/need-items/${miss.need_id}`, {
+      headers: {
+        "x-test-channel": "operator",
+        "x-test-user": "user_other",
+        "x-test-org": otherOrg,
+      },
+    });
+    assert.equal(cross.status, 403);
+    const missing = await fetch(`${ctx.base}/collect/need_missing`);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.headers.get("x-frame-options"), "DENY");
+    assert.equal(missing.headers.get("cache-control"), "no-store");
+    assert.match(missing.headers.get("content-security-policy") ?? "", /nonce-/);
   } finally {
     await ctx.http.close();
     await ctx.store.close();
     cleanup(ctx.home);
   }
+});
+
+test("collect JS loads need without requiring a bootstrap token (D-06)", () => {
+  assert.match(COLLECT_JS, /loadNeed\(\);/);
+  assert.doesNotMatch(COLLECT_JS, /if \(bootstrapToken\(\)\) loadNeed/);
 });
 
 test("fulfill then http.request attaches bearer and redacts canary (AC-07)", async () => {

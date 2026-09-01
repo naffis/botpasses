@@ -1,8 +1,7 @@
 import { createInterface } from "node:readline";
 
 /**
- * Hosted stdio MCP: forward JSON-RPC lines to the remote vault with the operator JWT.
- * Never put CLERK_SECRET_KEY in mcp.json.
+ * Hosted stdio MCP: forward JSON-RPC lines to the remote vault with the operator token.
  */
 export async function runRemoteMcpStdio(opts: {
   publicUrl: string;

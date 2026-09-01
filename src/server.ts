@@ -1,5 +1,6 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { HEALTH_PRODUCT } from "./brand.ts";
+import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "./brand.ts";
 import { handleMcpRpc, type JsonRpcRequest } from "./mcp.ts";
 import { operatorHtml } from "./operator-page.ts";
 import type { Vault } from "./vault.ts";
@@ -49,10 +50,43 @@ export function createVaultServer(opts: ServerOptions) {
   };
 }
 
+function tokensEqual(a: string, b: string): boolean {
+  const left = createHash("sha256").update(a).digest();
+  const right = createHash("sha256").update(b).digest();
+  return timingSafeEqual(left, right);
+}
+
+function readBearer(req: IncomingMessage): string | undefined {
+  const auth = req.headers.authorization;
+  const raw = Array.isArray(auth) ? auth[0] : auth;
+  if (!raw?.startsWith("Bearer ")) return undefined;
+  return raw.slice("Bearer ".length).trim();
+}
+
+function needsLoopbackAuth(method: string, path: string): boolean {
+  return path.startsWith("/api/") || (method === "POST" && path === "/mcp");
+}
+
+function unauthorized(res: ServerResponse): void {
+  res.writeHead(401, {
+    "content-type": "application/json; charset=utf-8",
+    "www-authenticate": `Bearer realm="${WWW_AUTHENTICATE_REALM}"`,
+  });
+  res.end(JSON.stringify({ error: "Authentication required" }));
+}
+
 async function route(vault: Vault, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
   const path = url.pathname;
   const method = req.method ?? "GET";
+
+  if (needsLoopbackAuth(method, path)) {
+    const token = readBearer(req);
+    if (!token || !tokensEqual(token, vault.loopbackToken())) {
+      unauthorized(res);
+      return;
+    }
+  }
 
   if (method === "GET" && (path === "/" || path === "/index.html")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });

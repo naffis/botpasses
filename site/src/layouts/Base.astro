@@ -1,0 +1,62 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description?: string;
+  noindex?: boolean;
+}
+
+const {
+  title,
+  description = "Named credentials for agents. The model never sees the value.",
+  noindex = false,
+} = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={new URL("/og.png", Astro.site)} />
+    <meta property="og:type" content="website" />
+    <slot name="head" />
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <nav class="primary" aria-label="Primary">
+          <a class="brand" href="/"><img src="/favicon.svg" alt="" width="24" height="24" /> Botpasses</a>
+          <a href="/">Home</a>
+          <a href="/docs">Docs</a>
+          <a href="/security">Security</a>
+          <a href="/design">Design</a>
+          <a href="/sign-in">Sign in</a>
+        </nav>
+      </div>
+    </header>
+    <div class="wrap">
+      <main id="content">
+        <slot />
+      </main>
+    </div>
+    <footer class="site-footer">
+      <div class="wrap">
+        <nav aria-label="Footer">
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/changelog">Changelog</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

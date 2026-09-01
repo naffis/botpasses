@@ -1,4 +1,4 @@
-# Botpasses cutover (Fly, Cloudflare, Clerk, Resend, GitHub)
+# Botpasses cutover (Fly, Cloudflare, Resend, GitHub)
 
 Create the Fly apps and copy secrets **before** any `git push origin dev` that contains renamed `fly.staging.toml` / `fly.prod.toml`. Fly deploy tokens are per-app. A missing app or a token that can only deploy `agent-vault-*` surfaces as `Could not find App`.
 
@@ -22,8 +22,6 @@ Grey-cloud (DNS only):
 | --- | --- | --- |
 | `_fly-ownership.botpasses.com` | TXT | value from `fly certs setup botpasses.com -a botpasses-prod` |
 | `_fly-ownership.staging.botpasses.com` | TXT | value from `fly certs setup staging.botpasses.com -a botpasses-staging` |
-| `clerk.botpasses.com` | CNAME | Clerk dashboard FAPI value |
-| `clerk.staging.botpasses.com` | CNAME | Clerk dashboard FAPI value |
 | Resend records for `mail.botpasses.com` | DKIM CNAME, SPF TXT, MX | exactly as Resend shows |
 | `_dmarc.botpasses.com` | TXT | `v=DMARC1; p=none` |
 
@@ -33,11 +31,12 @@ Also:
 - SSL/TLS: Full (strict). Always Use HTTPS on. Flexible causes redirect loops with Fly `force_https`.
 - Cache Rule: bypass cache for `botpasses.com` and `staging.botpasses.com`.
 - WAF: managed rules on. Skip Bot Fight / challenge for `/health` and `/ready`.
-- CAA: allow Let's Encrypt and Google Trust Services (Clerk).
+- CAA: allow Let's Encrypt.
+- Delete leftover `clerk.*` CNAMEs after this SHA is live. Do not run Clerk and this origin's AS at the same time.
 - `fly ips list -a botpasses-prod` for apex A/AAAA. Staging uses A/AAAA the same way. Public origins are `botpasses.com` / `staging.botpasses.com` only.
 - `fly certs add` per hostname. If ACME stalls, Origin CA covering both hosts, then `fly certs import`.
 
-Clerk CNAME must stay grey-cloud. Orange-cloud fails Clerk's DNS check.
+Do not add `clerk.*` CNAMEs.
 
 Neon, Sentry, and R2 dashboard display names are cosmetic. Do not create new Neon projects; copy existing `DATABASE_URL` / `DATABASE_URL_DIRECT`. Do not print secret values when copying (`fly secrets list` shows names only).
 
@@ -49,8 +48,10 @@ fly apps create botpasses-prod
 # copy secret names from agent-vault-staging / agent-vault-prod if those apps exist
 fly secrets set VAULT_PUBLIC_URL=https://staging.botpasses.com \
   VAULT_EMAIL_FROM='Botpasses <noreply@mail.botpasses.com>' \
-  CLERK_FRONTEND_API=clerk.staging.botpasses.com \
+  VAULT_SESSION_SECRET='<32+ bytes>' \
+  VAULT_OIDC_PRIVATE_JWK='<RS256 private JWK JSON>' \
   -a botpasses-staging
+# then unset leftover Clerk secrets on both apps
 # reuse existing DATABASE_URL / DATABASE_URL_DIRECT (no new Neon project)
 fly certs setup botpasses.com -a botpasses-prod
 fly certs setup staging.botpasses.com -a botpasses-staging
@@ -60,9 +61,23 @@ Confirm GitHub `FLY_API_TOKEN` can deploy the **new** names (org token, or new p
 
 Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
 
-## Clerk
+## KMS wrap (after this image is live)
 
-Two **production** instances (not satellites). FAPI hosts `clerk.botpasses.com` and `clerk.staging.botpasses.com`, grey-cloud. `CLERK_FRONTEND_API` is the hostname only (code prefixes `https://`). Do not set `authorizedParties` on `verifyToken`.
+Do not set `VAULT_KEK_REQUIRE_KMS=1` until wrap is confirmed on that plane. Raw `VAULT_KEK` still boots when the flag is unset.
+
+| Secret | When |
+| --- | --- |
+| `VAULT_KEK` | Pre-cutover fallback. Unset after `VAULT_KEK_REQUIRE_KMS=1` is green. |
+| `VAULT_KEK_WRAPPED` | Base64 ciphertext from `vault kek-wrap` on a laptop. |
+| `VAULT_KMS_KEY_ID` | Staging or prod CMK ARN. |
+| `AWS_ROLE_ARN` | Fly OIDC role. No static AWS access keys. |
+| `VAULT_KEK_REQUIRE_KMS` | Set `1` only after health is 200 with wrapped unwrap. |
+
+Full procedure: [kek-rotation.md](kek-rotation.md).
+
+## First-party auth
+
+Set `VAULT_SESSION_SECRET` and `VAULT_OIDC_PRIVATE_JWK` before deploy. Confirm `/sign-up`, `/enroll-totp`, `/console`, well-known metadata, and unauthenticated `POST /mcp` 401 before promoting prod. Rollback: revert the Fly SHA. Do not run Clerk on this origin again.
 
 ## Resend
 
@@ -90,6 +105,6 @@ DNS and staging health were completed 2026-08-31. Production is DNS-only until a
 | Cloudflare orange-cloud A/AAAA to Fly IPs, `_fly-ownership` TXT, ACME CNAMEs, `www` 301, cache bypass, Always HTTPS, Full (strict) | **done** 2026-08-31. Let's Encrypt HTTP-01 cannot complete through Fly `force_https`; Origin CA was imported on both apps so Full (strict) works. |
 | First green staging `/health` through Cloudflare | **done**. `curl -fsS https://staging.botpasses.com/health` → `{"ok":true,"product":"botpasses"}`. |
 | `https://botpasses.com/health` | **not yet**. Apex DNS points at `botpasses-prod` IPs. No prod Machine until promote. Expect Cloudflare 521/timeout. |
-| Clerk production instances + FAPI CNAMEs `clerk.botpasses.com` / `clerk.staging.botpasses.com` | **open**. Staging console can use `VAULT_BOOTSTRAP_TOKEN` without Clerk. |
+| First-party auth secrets + delete `clerk.*` CNAMEs | **done** 2026-09-01. `VAULT_SESSION_SECRET` and `VAULT_OIDC_PRIVATE_JWK` set on staging. Clerk secrets were already absent. Delete leftover `clerk.*` CNAMEs in Cloudflare when you next edit DNS. |
 | Resend domain `mail.botpasses.com` verified | **open**. |
 | `gh repo rename botpasses` then update git remote | **done** 2026-08-30. Repo is `naffis/botpasses`. Do not create a new `naffis/agent-vault`. |

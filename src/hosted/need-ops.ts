@@ -147,7 +147,7 @@ export async function ensureNeedItem(
     alreadyLimited?: boolean;
   },
 ): Promise<NeedItemPayload> {
-  if (!input.alreadyLimited && !host.limiter.allow(input.orgId, host.now().getTime())) {
+  if (!input.alreadyLimited && !(await host.limiter.allow(input.orgId, host.now().getTime(), "need"))) {
     throw new HttpError(429, "request_grant rate limit");
   }
   const client = await host.clientInOrg(input.orgId, input.clientId);

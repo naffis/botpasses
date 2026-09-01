@@ -9,7 +9,7 @@ import { HostedKernel } from "../src/hosted/kernel.ts";
 import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
 import { assertAllowedHostname, isBlockedIp } from "../src/hosted/ssrf.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
-import { CANARY, cleanup, tempHome } from "./helpers.ts";
+import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
 
 const HMAC = Buffer.from("aa".repeat(32), "hex");
 
@@ -134,6 +134,7 @@ test("AC-14 /health has no fingerprint", async () => {
     assert.equal(body.product, "botpasses");
     assert.equal("fingerprint" in body, false);
     assert.ok(!JSON.stringify(body).includes("fingerprint"));
+    assert.equal(res.headers.get("content-security-policy"), null);
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -556,6 +557,7 @@ test("AC-13 operator revoke; MCP tools omit revoke_grant", async () => {
 });
 
 test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
+  const oidc = testOidcPrivateJwk();
   const err = hostedBootError({
     VAULT_MODE: "hosted",
     DATABASE_URL: "postgres://x",
@@ -563,6 +565,8 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     VAULT_KEK: "x",
     VAULT_PUBLIC_URL: STAGING_ORIGIN,
     VAULT_DEPLOY_PLANE: "staging",
+    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+    VAULT_OIDC_PRIVATE_JWK: oidc,
   });
   assert.match(err ?? "", /VAULT_HOME/);
   assert.equal(HOSTED_CONFIG_EXIT, 78);
@@ -573,6 +577,8 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       VAULT_KEK: "aa".repeat(32),
       VAULT_PUBLIC_URL: STAGING_ORIGIN,
       VAULT_DEPLOY_PLANE: "staging",
+      VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+      VAULT_OIDC_PRIVATE_JWK: oidc,
     }),
     undefined,
   );
@@ -596,6 +602,8 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       VAULT_EMAIL_FROM: "Botpasses <noreply@mail.botpasses.com>",
       VAULT_PUBLIC_URL: STAGING_ORIGIN,
       VAULT_DEPLOY_PLANE: "staging",
+      VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+      VAULT_OIDC_PRIVATE_JWK: oidc,
     }),
     undefined,
   );
@@ -629,6 +637,71 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
       VAULT_DEPLOY_PLANE: "staging",
     }) ?? "",
     /staging\.botpasses\.com/,
+  );
+});
+
+function bootEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    VAULT_MODE: "hosted",
+    DATABASE_URL: "postgres://x",
+    VAULT_PUBLIC_URL: STAGING_ORIGIN,
+    VAULT_DEPLOY_PLANE: "staging",
+    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
+    ...extra,
+  };
+}
+
+test("AC-02 REQUIRE_KMS refuses raw-only on a production plane", () => {
+  const err = hostedBootError(
+    bootEnv({
+      VAULT_DEPLOY_PLANE: "production",
+      VAULT_PUBLIC_URL: "https://botpasses.com",
+      VAULT_KEK: "aa".repeat(32),
+      VAULT_KEK_REQUIRE_KMS: "1",
+    }),
+  );
+  assert.match(err ?? "", /VAULT_KEK_REQUIRE_KMS|VAULT_KEK_WRAPPED/);
+});
+
+test("AC-02b raw-only on a plane boots when REQUIRE_KMS is unset", () => {
+  assert.equal(
+    hostedBootError(
+      bootEnv({
+        VAULT_DEPLOY_PLANE: "production",
+        VAULT_PUBLIC_URL: "https://botpasses.com",
+        VAULT_KEK: "aa".repeat(32),
+      }),
+    ),
+    undefined,
+  );
+});
+
+test("AC-02c both wrapped and raw prefer wrapped and do not fail boot", () => {
+  assert.equal(
+    hostedBootError(
+      bootEnv({
+        VAULT_KEK: "aa".repeat(32),
+        VAULT_KEK_WRAPPED: "d3JhcA==",
+        VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
+        FLY_APP_NAME: "botpasses-staging",
+      }),
+    ),
+    undefined,
+  );
+});
+
+test("AC-12 test auth mode is refused on a deploy plane", () => {
+  assert.match(
+    hostedBootError(
+      bootEnv({
+        VAULT_KEK: "aa".repeat(32),
+        VAULT_AUTH_MODE: "test",
+        VAULT_DEPLOY_PLANE: "production",
+        VAULT_PUBLIC_URL: "https://botpasses.com",
+      }),
+    ) ?? "",
+    /VAULT_AUTH_MODE/,
   );
 });
 
@@ -981,6 +1054,17 @@ test("hosted operator page is Botpasses", async () => {
     assert.equal(res.status, 200);
     assert.match(html, /Botpasses/);
     assert.doesNotMatch(html, /Agent Grant Vault/);
+    const csp = res.headers.get("content-security-policy") ?? "";
+    const nonce = /nonce-([A-Za-z0-9_-]+)/.exec(csp)?.[1];
+    assert.ok(nonce);
+    assert.match(html, new RegExp(`nonce="${nonce}"`));
+    assert.equal(res.headers.get("x-frame-options"), "DENY");
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(res.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+    assert.match(res.headers.get("permissions-policy") ?? "", /camera=\(\)/);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(res.headers.get("strict-transport-security"), "max-age=63072000");
+    assert.doesNotMatch(res.headers.get("strict-transport-security") ?? "", /preload|includeSubDomains/);
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -1008,6 +1092,193 @@ test("hosted MCP initialize name is botpasses", async () => {
     assert.match(result.instructions ?? "", /Botpasses/);
     assert.match(result.instructions ?? "", /does not need to say Botpasses/);
     assert.doesNotMatch(result.instructions ?? "", /Agent grant vault/);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("CORS disallowed Origin is 403 without ACAO (AC-10)", async () => {
+  const ctx = await setup();
+  try {
+    const evil = await fetch(`${ctx.base}/mcp`, {
+      method: "OPTIONS",
+      headers: { origin: "https://evil.example" },
+    });
+    assert.equal(evil.status, 403);
+    assert.equal(evil.headers.get("access-control-allow-origin"), null);
+    assert.equal(evil.headers.get("x-frame-options"), "DENY");
+    assert.equal(evil.headers.get("cache-control"), "no-store");
+    const post = await fetch(`${ctx.base}/api/items`, {
+      headers: { ...ctx.op, origin: "https://evil.example" },
+    });
+    assert.equal(post.status, 403);
+    assert.equal(post.headers.get("access-control-allow-origin"), null);
+    const ok = await fetch(`${ctx.base}/mcp`, {
+      method: "OPTIONS",
+      headers: { origin: "http://127.0.0.1:8788" },
+    });
+    assert.equal(ok.status, 204);
+    assert.equal(ok.headers.get("access-control-allow-origin"), "http://127.0.0.1:8788");
+    const noOrigin = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: ctx.modelH,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: "list_items", arguments: {} },
+      }),
+    });
+    assert.equal(noOrigin.status, 200);
+    assert.equal(noOrigin.headers.get("access-control-allow-origin"), null);
+    assert.match(await noOrigin.text(), /STRIPE_KEY/);
+    const prod = createHostedServer({
+      kernel: ctx.kernel,
+      host: "127.0.0.1",
+      port: 0,
+      publicUrl: "https://botpasses.com",
+      deployPlane: "production",
+    });
+    const prodAddr = await prod.listen();
+    try {
+      const allowed = await fetch(`http://${prodAddr.host}:${prodAddr.port}/mcp`, {
+        method: "OPTIONS",
+        headers: { origin: "https://botpasses.com" },
+      });
+      assert.equal(allowed.status, 204);
+      assert.equal(allowed.headers.get("access-control-allow-origin"), "https://botpasses.com");
+    } finally {
+      await prod.close();
+    }
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("MCP session header does not bind principals (AC-13)", async () => {
+  const ctx = await setup();
+  try {
+    const other = await ctx.kernel.createModelClient({
+      orgId: ctx.orgId,
+      name: "other",
+      environment: "staging",
+      issueBearer: true,
+    });
+    const a = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...ctx.modelH, "mcp-session-id": "S1" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "list_items", arguments: {} },
+      }),
+    });
+    assert.equal(a.status, 200);
+    const b = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: {
+        "x-test-channel": "model",
+        "x-test-client": other.client.id,
+        "content-type": "application/json",
+        "mcp-session-id": "S1",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "list_items", arguments: {} },
+      }),
+    });
+    assert.equal(b.status, 200);
+    const text = await b.text();
+    assert.match(text, /STRIPE_KEY/);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("GET /runtime/resolve is not a value path (AC-17)", async () => {
+  const ctx = await setup();
+  try {
+    const get = await fetch(`${ctx.base}/runtime/resolve`, { headers: ctx.modelH });
+    assert.ok(get.status === 404 || get.status === 405);
+    const modelPost = await fetch(`${ctx.base}/runtime/resolve`, {
+      method: "POST",
+      headers: ctx.modelH,
+      body: JSON.stringify({ item_name: "STRIPE_KEY", environment: "staging" }),
+    });
+    assert.equal(modelPost.status, 403);
+    await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: ctx.trusted.client.id,
+      itemName: "STRIPE_KEY",
+      environment: "staging",
+    });
+    const grants = await ctx.kernel.inbox(ctx.orgId);
+    await ctx.kernel.approveGrant({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      role: "owner",
+      grantId: grants[0]!.id,
+      policy: "prompt",
+    });
+    const trustedPost = await fetch(`${ctx.base}/runtime/resolve`, {
+      method: "POST",
+      headers: {
+        "x-test-channel": "trusted",
+        "x-test-client": ctx.trusted.client.id,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ item_name: "STRIPE_KEY", environment: "staging" }),
+    });
+    assert.equal(trustedPost.status, 200);
+    const body = (await trustedPost.json()) as { value?: string };
+    assert.equal(body.value, CANARY);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("client rotate invalidates the old secret (AC-15)", async () => {
+  const ctx = await setup();
+  try {
+    const issued = await ctx.kernel.createModelClient({
+      orgId: ctx.orgId,
+      name: "rot",
+      environment: "staging",
+      issueBearer: true,
+    });
+    assert.ok(issued.plaintext);
+    const before = await fetch(`${ctx.base}/mcp/tools`, {
+      headers: { authorization: `Bearer ${issued.plaintext}` },
+    });
+    assert.equal(before.status, 200);
+    const rot = await fetch(`${ctx.base}/api/clients/${issued.client.id}/rotate`, {
+      method: "POST",
+      headers: ctx.op,
+      body: "{}",
+    });
+    assert.equal(rot.status, 200);
+    const out = (await rot.json()) as { token?: string; client_id?: string };
+    assert.ok(out.token?.startsWith("avm_"));
+    assert.notEqual(out.token, issued.plaintext);
+    const after = await fetch(`${ctx.base}/mcp/tools`, {
+      headers: { authorization: `Bearer ${issued.plaintext}` },
+    });
+    assert.equal(after.status, 401);
+    const next = await fetch(`${ctx.base}/mcp/tools`, {
+      headers: { authorization: `Bearer ${out.token}` },
+    });
+    assert.equal(next.status, 200);
   } finally {
     await ctx.http.close();
     await ctx.store.close();

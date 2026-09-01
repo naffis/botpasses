@@ -1,3 +1,7 @@
+/**
+ * Hosted MCP JSON-RPC and tools. Public contract: docs/reference/mcp.md.
+ * Never returns secret values. There is no get_secret.
+ */
 import { MCP_SERVER_NAME } from "../brand.ts";
 import {
   HOSTED_TOOL_DESCRIPTIONS,

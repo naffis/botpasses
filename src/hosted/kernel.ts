@@ -10,16 +10,19 @@ import { decrypt, encrypt } from "../crypto.ts";
 import { resolvePublicOrigin } from "../brand.ts";
 import { last4, normalizeSecretName } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
-import type {
-  ClientRecord,
-  FindItemsResult,
-  GrantPolicy,
-  HostedGrantRecord,
-  ItemKind,
-  ItemPublic,
-  MemberRole,
-  VaultEnvName,
+import {
+  emptyClientFields,
+  type AccessEventRecord,
+  type ClientRecord,
+  type FindItemsResult,
+  type GrantPolicy,
+  type HostedGrantRecord,
+  type ItemKind,
+  type ItemPublic,
+  type MemberRole,
+  type VaultEnvName,
 } from "../hosted-types.ts";
+import { isUniqueViolation, StoreConflictError } from "../store/conflict.ts";
 import type { VaultStore } from "../store/types.ts";
 import { HttpError } from "./errors.ts";
 import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
@@ -32,6 +35,7 @@ import {
   needItemError,
   type NeedHost,
 } from "./need-ops.ts";
+import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import { logVaultEvent } from "./observe.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
@@ -41,7 +45,7 @@ const CODE_TTL_MS = 10 * 60 * 1000;
 const MAGIC_TTL_MS = 15 * 60 * 1000;
 const MAX_ITEM_BYTES = 64 * 1024;
 
-/** Single-operator org when `VAULT_BOOTSTRAP_TOKEN` is set (Clerk not required). */
+/** Single-operator org when `VAULT_BOOTSTRAP_TOKEN` is set. */
 export const BOOTSTRAP_ORG_ID = "org_bootstrap";
 export const BOOTSTRAP_USER_ID = "user_bootstrap";
 
@@ -97,7 +101,7 @@ export class HostedKernel {
       plane: this.deployPlane,
       allowLoopback: true,
     });
-    this.limiter = opts.limiter ?? new OrgRateLimiter();
+    this.limiter = opts.limiter ?? new OrgRateLimiter(opts.store);
   }
 
   async ping(): Promise<void> {
@@ -197,6 +201,51 @@ export class HostedKernel {
       this.#kek,
       orgId,
     );
+  }
+
+  async rotateKek(
+    oldKek: Buffer,
+    newKek: Buffer,
+  ): Promise<{ rewrapped: number; skipped: number }> {
+    const orgs = await this.store.listOrgs();
+    let rewrapped = 0;
+    let skipped = 0;
+    for (const org of orgs) {
+      const envelope = {
+        iv: org.wrappedDekIv,
+        ciphertext: org.wrappedDekCiphertext,
+        tag: org.wrappedDekTag,
+      };
+      try {
+        unwrapDek(envelope, newKek, org.id);
+        skipped += 1;
+        continue;
+      } catch {
+        // still on old KEK
+      }
+      const dek = unwrapDek(envelope, oldKek, org.id);
+      const next = wrapDek(dek, newKek, org.id);
+      await this.store.updateOrgWrappedDek(org.id, {
+        wrappedDekIv: next.iv,
+        wrappedDekCiphertext: next.ciphertext,
+        wrappedDekTag: next.tag,
+      });
+      rewrapped += 1;
+    }
+    return { rewrapped, skipped };
+  }
+
+  async rotateClient(
+    orgId: string,
+    actor: string,
+    clientId: string,
+  ): Promise<{ token: string; client_id: string }> {
+    const client = await this.#clientInOrg(orgId, clientId);
+    const prefix = client.kind === "trusted" ? "avt_" : "avm_";
+    const plaintext = `${prefix}${randomBytes(24).toString("hex")}`;
+    await this.store.updateClientHashedSecret(client.id, hashSecret(plaintext));
+    await this.#audit(orgId, "client_rotate", actor, null, client.id);
+    return { token: plaintext, client_id: client.id };
   }
 
   async createItem(input: {
@@ -414,8 +463,10 @@ export class HostedKernel {
       hashedSecret: hashSecret(plaintext),
       clerkOauthUserId: null,
       environment: input.environment,
+      ...emptyClientFields(),
     };
     await this.store.insertClient(row);
+    await this.#recordMachineIssue(row, plaintext);
     return { client: row, plaintext };
   }
 
@@ -436,8 +487,11 @@ export class HostedKernel {
       hashedSecret: plaintext ? hashSecret(plaintext) : null,
       clerkOauthUserId: input.clerkOauthUserId ?? null,
       environment: input.environment,
+      ...emptyClientFields(),
+      oauthClientId: input.clerkOauthUserId ?? null,
     };
     await this.store.insertClient(row);
+    if (plaintext) await this.#recordMachineIssue(row, plaintext);
     return { client: row, plaintext };
   }
 
@@ -449,7 +503,9 @@ export class HostedKernel {
   }): Promise<ClientRecord> {
     const clients = await this.store.listClients(input.orgId);
     const existing = clients.find(
-      (c) => c.kind === "model" && c.clerkOauthUserId === input.clerkOauthUserId,
+      (c) =>
+        c.kind === "model" &&
+        (c.oauthClientId === input.clerkOauthUserId || c.clerkOauthUserId === input.clerkOauthUserId),
     );
     if (existing) return existing;
     const created = await this.createModelClient(input);
@@ -542,7 +598,7 @@ export class HostedKernel {
       try {
         const link = magicToken
           ? `${this.publicUrl}/approve?token=${encodeURIComponent(magicToken)}`
-          : `${this.publicUrl}/`;
+          : `${this.publicUrl.replace(/\/$/, "")}/console`;
         await this.sendEmail(
           input.operatorEmail,
           `Grant request ${item.name}`,
@@ -885,6 +941,153 @@ export class HostedKernel {
     };
     assertSafePublicObject("item", pub);
     return pub;
+  }
+
+  async ensureVaultOrgForUser(userId: string): Promise<{ orgId: string; role: MemberRole }> {
+    const existing = await this.store.listMembershipsForUser(userId);
+    if (existing[0]) return { orgId: existing[0].orgId, role: existing[0].role };
+    const orgId = `org_${userId.replace(/^usr_/, "")}`;
+    try {
+      await this.#provisionOrg(orgId, "workspace", userId);
+    } catch (err) {
+      if (!(err instanceof StoreConflictError) && !isUniqueViolation(err)) {
+        const again = await this.store.listMembershipsForUser(userId);
+        if (again[0]) return { orgId: again[0].orgId, role: again[0].role };
+        throw err;
+      }
+      if (!(await this.store.getMember(orgId, userId))) {
+        await this.store.insertMember({ orgId, userId, role: "owner" });
+      }
+    }
+    const again = await this.store.listMembershipsForUser(userId);
+    if (again[0]) return { orgId: again[0].orgId, role: again[0].role };
+    const role = await this.requireMember(orgId, userId);
+    return { orgId, role };
+  }
+
+  async recordAccessEvent(input: Omit<AccessEventRecord, "id" | "revokedAt">): Promise<void> {
+    await this.store.insertAccessEvent({
+      id: `aev_${randomUUID()}`,
+      ...input,
+      revokedAt: null,
+    });
+  }
+
+  async writeAudit(
+    orgId: string,
+    action: string,
+    actor: string,
+    itemName: string | null,
+    clientId: string | null,
+  ): Promise<void> {
+    await this.#audit(orgId, action, actor, itemName, clientId);
+  }
+
+  async listAccess(orgId: string, currentSessionHash?: string) {
+    const [members, clients, grants, sessions] = await Promise.all([
+      this.store.listMembers(orgId),
+      this.store.listClients(orgId),
+      this.store.listGrants(orgId),
+      this.store.listOperatorSessions(orgId),
+    ]);
+    const users = await Promise.all(members.map((m) => this.store.getUser(m.userId)));
+    const operators = members.map((m, i) => ({
+      user_id: m.userId,
+      role: m.role,
+      email: users[i]?.email ?? "",
+    }));
+    const clientRows = await Promise.all(
+      clients.map(async (c) => {
+        const actor = c.consentedByUserId ? await this.store.getUser(c.consentedByUserId) : undefined;
+        return {
+          id: c.id,
+          name: c.name,
+          kind: c.oauthClientId ? "oauth" : c.kind,
+          environment: c.environment,
+          status: c.revokedAt ? "revoked" : "active",
+          created_at: c.lastTokenAt ? c.lastTokenAt : null,
+          last_token_at: c.lastTokenAt,
+          last_seen_at: c.lastSeenAt,
+          consented_by_email: actor?.email ?? null,
+        };
+      }),
+    );
+    const itemNames = new Map<string, string>();
+    const clientNames = new Map(clients.map((c) => [c.id, c.name]));
+    const grantRows = [];
+    for (const g of grants) {
+      let itemName = "";
+      if (g.itemId) {
+        const cached = itemNames.get(g.itemId);
+        if (cached) itemName = cached;
+        else {
+          const item = await this.store.getItem(g.itemId);
+          itemName = item?.name ?? "";
+          if (g.itemId) itemNames.set(g.itemId, itemName);
+        }
+      }
+      grantRows.push({
+        id: g.id,
+        item_name: itemName,
+        client_name: clientNames.get(g.clientId) ?? g.clientId,
+        status: g.status,
+        created_at: g.createdAt,
+        approved_at: g.approvedAt,
+      });
+    }
+    const sessionRows = sessions.map((s) => ({
+      id: s.idHash.slice(0, 12),
+      created_at: s.createdAt,
+      last_seen_at: s.lastSeenAt,
+      current: Boolean(currentSessionHash && s.idHash === currentSessionHash),
+      hash: s.idHash,
+    }));
+    return {
+      operators,
+      clients: clientRows,
+      grants: grantRows,
+      sessions: sessionRows.map(({ hash: _h, ...rest }) => rest),
+      sessionHashes: sessionRows,
+    };
+  }
+
+  async revokeClient(orgId: string, actor: string, clientId: string): Promise<void> {
+    const client = await this.store.getClient(clientId);
+    if (!client || client.orgId !== orgId) throw new HttpError(404, "Unknown client");
+    const at = nowIso(this.now());
+    await this.store.setClientRevoked(clientId, at);
+    await this.store.revokeAccessEventsForClient(clientId, at);
+    const grants = await this.store.listGrants(orgId);
+    for (const g of grants) {
+      if (g.clientId === clientId && (g.status === "active" || g.status === "pending")) {
+        await this.store.updateGrant({ ...g, status: "revoked" });
+      }
+    }
+    await destroyOidcPayloadsForClient(this.store, client);
+    await this.#audit(orgId, "client_revoked", actor, null, clientId);
+  }
+
+  async revokeSession(orgId: string, actorHash: string, sessionPrefix: string): Promise<void> {
+    const sessions = await this.store.listOperatorSessions(orgId);
+    const match = sessions.find((s) => s.idHash.startsWith(sessionPrefix) || s.idHash === sessionPrefix);
+    if (!match) throw new HttpError(404, "Unknown session");
+    if (match.idHash === actorHash) throw new HttpError(400, "cannot_revoke_current");
+    await this.store.deleteSession(match.idHash);
+  }
+
+  async #recordMachineIssue(row: ClientRecord, plaintext: string): Promise<void> {
+    const at = nowIso(this.now());
+    await this.store.setClientLastTokenAt(row.id, at);
+    await this.recordAccessEvent({
+      orgId: row.orgId,
+      clientId: row.id,
+      actorUserId: null,
+      kind: "machine",
+      jtiHash: hashSecret(plaintext),
+      issuedAt: at,
+      expiresAt: null,
+    });
+    await this.writeAudit(row.orgId, "token_issued", row.id, null, row.id);
   }
 
   async #audit(

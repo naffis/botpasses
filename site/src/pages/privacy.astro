@@ -1,0 +1,17 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base title="Privacy — Botpasses">
+  <h1>Privacy</h1>
+  <p>This page describes implemented flows. It is not legal counsel.</p>
+  <p>We process account email, TOTP enrollment metadata, session identifiers, and vault item ciphertext. Secret values are encrypted at rest and are not written to logs, MCP results, or operator JSON.</p>
+  <h2>Processors</h2>
+  <ul>
+    <li>Fly — application hosting</li>
+    <li>Neon — hosted Postgres</li>
+    <li>Cloudflare — DNS and cache for static assets</li>
+    <li>Resend — email one-time codes and grant notices</li>
+    <li>Sentry — error reports (no secret values)</li>
+  </ul>
+  <p>We do not send operator identity to a third-party auth vendor.</p>
+</Base>

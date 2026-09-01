@@ -1,0 +1,23 @@
+---
+import Base from "./Base.astro";
+
+interface Props {
+  title: string;
+  description?: string;
+  crumbs: { href: string; label: string }[];
+}
+
+const { title, description, crumbs } = Astro.props;
+---
+<Base title={title} description={description}>
+  <nav class="crumbs" aria-label="Breadcrumb">
+    {crumbs.map((c) => (
+      <a href={c.href}>{c.label}</a>
+    ))}
+  </nav>
+  <div class="search" data-testid="docs-search">
+    <label for="docs-q">Search docs</label>
+    <input id="docs-q" type="search" name="q" />
+  </div>
+  <slot />
+</Base>

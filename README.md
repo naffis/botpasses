@@ -12,7 +12,7 @@ An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAU
 
 You store named credentials **once**. Agents request use. You authorize with a policy. The runtime gets the value. The model never does.
 
-Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault run`. Hosted (`VAULT_MODE=hosted`) is the multi-user product: Clerk orgs, Neon Postgres, Fly (one Machine), Cloudflare WAF.
+Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault run`. Hosted (`VAULT_MODE=hosted`) is the multi-user product: first-party operator accounts (email OTP + TOTP), same-origin OAuth, Neon Postgres, Fly (one Machine), Cloudflare WAF.
 
 ## v1 local path
 
@@ -25,7 +25,7 @@ Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault 
 
 ## Hosted path
 
-Operators in a Clerk Organization store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http.request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects.
+Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http.request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
 
 Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` is `botpasses`.
 
@@ -36,14 +36,14 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 | Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. After it is connected, ask in plain language (get my Spotify profile). Grok should call `http.request` in the same turn. You approve in the inbox if asked. You do not need to name Botpasses tools. |
 | Grok Build | `grok mcp add --transport http botpasses https://<origin>/mcp --header "Authorization: Bearer ${BOTPASSES_MODEL_TOKEN}"` |
 | Claude | Remote connector named `Botpasses` + OAuth |
-| ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration (enable DCR on the Clerk instance) |
+| ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration on this origin |
 | Cursor | Remote MCP URL or local `npx vault mcp` stdio. Hosted stdio: `npx vault login`, then `npx vault mcp --user-jwt` |
 
 Until the package is published on npm, use `npx vault` from this repo or `npm run botpasses`.
 
 ### Hosted MCP stdio
 
-Do not put `CLERK_SECRET_KEY` in `mcp.json`. Sign in at the hosted origin, copy the Clerk **session** JWT, then:
+Sign in at `/sign-in`, then open `/console`. Device login is `/device`. Connect MCP to this origin (it is the authorization server):
 
 ```bash
 export VAULT_PUBLIC_URL=https://staging.botpasses.com
@@ -65,12 +65,14 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 
 ## What this is not
 
-- A LastPass / 1Password / Bitwarden clone
+- A LastPass / 1Password / Bitwarden clone. Botpasses is a **grant-vault**: the hosted process decrypts at inject. The vendor can read keys if it has the KMS role and the database. We do not claim otherwise.
 - Browser login filling, TOTP, or passkeys as a product
 - An MCP/API tool that returns plaintext to the model (`get_secret` does not exist)
-- Two Fly Machines in v1 (MCP Streamable HTTP session is in-process)
+- Two Fly Machines in v1 (MCP Streamable HTTP is stateless per request)
 
 ## Threat model
+
+Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0003](docs/adr/0003-grant-vault-trust-model.md), [0004](docs/adr/0004-kms-wrapped-kek.md).
 
 | Surface | Sees secret value? |
 | --- | --- |
@@ -80,6 +82,9 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 | Audit table | **No** — no value column |
 | Items table | Ciphertext only (AES-256-GCM) |
 | `vault run` child env / trusted `/runtime/resolve` / connector origin | **Yes** — that is the inject |
+| Hosted Fly process / KMS role (after unwrap) | **Yes** at inject. Required for `http.request`. |
+| Botpasses staff without KMS + DB | **No** |
+| Neon dump without the platform KEK / KMS | **No** |
 | Model context / chat transcript | **Must not.** Tests fail if a canary appears |
 
 ## Hard rules
@@ -94,7 +99,7 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 
 - Node.js 22.14+
 - Local: `VAULT_MASTER_KEY` — 32 bytes as **64 hex characters** (preferred) or standard base64
-- Hosted: `VAULT_KEK` (same encoding) plus Neon `DATABASE_URL`
+- Hosted: Neon `DATABASE_URL` plus `VAULT_KEK_WRAPPED` (after cutover) or raw `VAULT_KEK` (pre-cutover fallback)
 
 ## How to run locally
 
@@ -160,29 +165,42 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 | `vault revoke --id GRANT_ID` | Stop future injects |
 | `vault audit` | Grant/revoke/store/inject events, no values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject into child env without printing |
-| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788) |
-| `vault login` | Print hosted stdio steps (`VAULT_PUBLIC_URL` + Clerk session JWT) |
-| `vault mcp` | MCP stdio (local sqlite). `vault mcp --user-jwt` proxies hosted MCP over the session JWT |
+| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788). Prints an HMAC loopback bearer. Required on `/api` and `POST /mcp`. |
+| `vault login` | Print `/sign-in`, `/console`, and `/device` on the hosted origin |
+| `vault mcp` | MCP stdio (local sqlite). `vault mcp --user-jwt` proxies hosted MCP over an access token |
 
 `VAULT_MODE=hosted` on `vault serve` starts the hosted process (Postgres). Do not set `VAULT_HOME` in that mode (exit 78).
 
 ## Encryption
 
-Local: AES-256-GCM envelope with `VAULT_MASTER_KEY`. Hosted: platform `VAULT_KEK` wraps a per-org DEK; item encrypt uses the org DEK with AAD `org_id`.
+Local: AES-256-GCM envelope with `VAULT_MASTER_KEY` (AAD is the secret name). Hosted: AWS KMS unwraps the platform KEK at boot (`VAULT_KEK_WRAPPED`); that KEK wraps a per-org DEK; item encrypt uses the org DEK with AAD `org_id`. Before cutover, raw `VAULT_KEK` still boots (`VAULT_KEK_REQUIRE_KMS` unset). After cutover, set `VAULT_KEK_REQUIRE_KMS=1` and unset the raw key. Runbook: [docs/ops/kek-rotation.md](docs/ops/kek-rotation.md).
 
 ## Hosted deploy (Fly + Neon + Cloudflare)
 
-Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `iad`. Staging and production keep **separate Neon databases** (reuse the existing `DATABASE_URL` secrets; do not branch prod from staging). Cloudflare orange-cloud DNS + WAF, SSL Full (strict). Cutover steps: [docs/ops/botpasses-cutover.md](docs/ops/botpasses-cutover.md). Identity decisions: [docs/adr/0001-botpasses-identity.md](docs/adr/0001-botpasses-identity.md), origins [docs/adr/0002-botpasses-com-origin.md](docs/adr/0002-botpasses-com-origin.md).
+Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `iad`. Staging and production keep **separate Neon databases** (reuse the existing `DATABASE_URL` secrets; do not branch prod from staging). Cloudflare orange-cloud DNS + WAF, SSL Full (strict). Cutover steps: [docs/ops/botpasses-cutover.md](docs/ops/botpasses-cutover.md). Identity: [0001](docs/adr/0001-botpasses-identity.md), origins [0002](docs/adr/0002-botpasses-com-origin.md), operator auth [0003](docs/adr/0003-first-party-operator-identity.md), OAuth [0004](docs/adr/0004-same-origin-oauth-as.md), Access [0005](docs/adr/0005-access-ledger.md).
 
 **DNS:** orange-cloud `A`/`AAAA` for `botpasses.com` and `staging.botpasses.com`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.com` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK`, `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; operator login until Clerk), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API` (hostname only, e.g. `clerk.staging.botpasses.com`), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.com>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty.
+**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations and `pg_dump`), `VAULT_SESSION_SECRET` (≥32 bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass), `RESEND_API_KEY`, `VAULT_EMAIL_FROM` (`Botpasses <noreply@mail.botpasses.com>`), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Prod also: `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, or if `site/dist/index.html` is missing.
 
 Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong.
 
 Push to `dev` runs tests then `flyctl deploy -c fly.staging.toml`. Production is `workflow_dispatch` after a named staging SHA is green. Nightly `backup-prod.yml` (`0 4 * * *` UTC) dumps via `DATABASE_URL_DIRECT`, AES-256-GCM with `BACKUP_KEY`, puts `botpasses-${STAMP}.dump.enc` in R2.
 
 AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
+
+## Documentation
+
+Public (this origin after `site` build):
+
+- [MCP tools](site/src/pages/docs/reference/mcp-tools.astro)
+- [HTTP API](site/src/pages/docs/reference/http-api.astro)
+- [CLI](site/src/pages/docs/reference/cli.astro)
+
+Internal (engineers, file pointers, local vs hosted):
+
+- [docs/reference/mcp.md](docs/reference/mcp.md)
+- [docs/reference/http-api.md](docs/reference/http-api.md)
 
 ## Tests
 
