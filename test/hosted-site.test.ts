@@ -130,6 +130,11 @@ test("AC-02 GET /console is the hosted console", async () => {
     assert.match(html, /data-testid="console-signin"/);
     assert.match(html, /data-testid="access-panel"/);
     assert.match(html, /data-testid="access-revoke-confirm"/);
+    assert.match(html, /data-testid="app-shell"/);
+    assert.match(res.headers.get("content-security-policy") ?? "", /font-src 'self'/);
+    assert.match(res.headers.get("content-security-policy") ?? "", /img-src 'self'/);
+    assert.match(html, /data-environments="staging"/);
+    assert.doesNotMatch(html, /<option value="production">/);
   } finally {
     await ctx.http.close();
     await ctx.store.close();

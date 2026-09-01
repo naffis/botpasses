@@ -48,7 +48,7 @@ All require `operatorReady` unless noted.
 
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
-| GET | `/api/items` | `?environment=staging\|production` | `{ items }` public fields (name, last4, hosts, inject). No values |
+| GET | `/api/items` | omit `environment` for every env this deploy plane serves; or `?environment=staging\|production` | `{ items }` public fields (name, last4, hosts, inject). No values. Staging deploy: `environment=production` is 404 |
 | POST | `/api/items` | `name`, `value`, `environment`, `kind` (`secret`\|`login`), `allowed_hosts`, `inject`, optional `username`, `folder_name` | `{ item }` public |
 | POST | `/api/items/:id/rotate` | `{ value }` | `{ item }` |
 | DELETE | `/api/items/:id` | | `{ ok: true }` |

@@ -466,6 +466,7 @@ test("unknown collect id is 404 HTML not JSON", async () => {
     const html = await res.text();
     assert.equal(res.status, 404);
     assert.match(html, /Unknown collect request/);
+    assert.match(html, /Back to console/);
     assert.doesNotMatch(html, /collect_url/);
   } finally {
     await ctx.http.close();
