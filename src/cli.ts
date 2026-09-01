@@ -2,7 +2,13 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { stdin as input } from "node:process";
-import { DEFAULT_HOME_DIRNAME, PRODUCT_NAME, STAGING_ORIGIN } from "./brand.ts";
+import {
+  DEFAULT_HOME_DIRNAME,
+  PRODUCT_NAME,
+  publicOriginError,
+  resolvePublicOrigin,
+  STAGING_ORIGIN,
+} from "./brand.ts";
 import { maskLast4 } from "./ids.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
@@ -314,7 +320,15 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
 }
 
 function cmdLogin(io: Io): number {
-  const url = process.env.VAULT_PUBLIC_URL ?? STAGING_ORIGIN;
+  const raw = process.env.VAULT_PUBLIC_URL;
+  if (raw) {
+    const err = publicOriginError(raw, { allowLoopback: true });
+    if (err) {
+      io.error(err);
+      return 1;
+    }
+  }
+  const url = raw ? resolvePublicOrigin(raw) : STAGING_ORIGIN;
   io.log("Hosted MCP stdio uses your Clerk session JWT, never CLERK_SECRET_KEY.");
   io.log(`1. Sign in at ${url} (Clerk Organizations must be enabled).`);
   io.log("2. Copy the session JWT from the Clerk dashboard session or browser cookie.");
@@ -333,11 +347,17 @@ async function cmdMcp(argv: string[], io: Io): Promise<number> {
     const next = jwtIdx >= 0 ? argv[jwtIdx + 1] : undefined;
     const token =
       next && !next.startsWith("-") ? next : process.env.VAULT_USER_JWT;
-    const publicUrl = process.env.VAULT_PUBLIC_URL;
-    if (!publicUrl) {
+    const rawUrl = process.env.VAULT_PUBLIC_URL;
+    if (!rawUrl) {
       io.error("VAULT_PUBLIC_URL is required for hosted stdio MCP.");
       return 1;
     }
+    const originErr = publicOriginError(rawUrl, { allowLoopback: true });
+    if (originErr) {
+      io.error(originErr);
+      return 1;
+    }
+    const publicUrl = resolvePublicOrigin(rawUrl);
     if (!token) {
       io.error("Pass --user-jwt <token> or set VAULT_USER_JWT. Run `vault login`.");
       return 1;

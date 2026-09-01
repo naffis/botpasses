@@ -8,6 +8,8 @@ import {
   MCP_SERVER_NAME,
   PRODUCT_NAME,
   PRODUCTION_ORIGIN,
+  publicOriginError,
+  resolvePublicOrigin,
   STAGING_ORIGIN,
   WWW_AUTHENTICATE_REALM,
 } from "../src/brand.ts";
@@ -19,8 +21,8 @@ test("brand constants are Botpasses", () => {
   assert.equal(MCP_SERVER_NAME, "botpasses");
   assert.equal(HEALTH_PRODUCT, "botpasses");
   assert.equal(DEFAULT_HOME_DIRNAME, ".botpasses");
-  assert.equal(STAGING_ORIGIN, "https://staging.botpasses.ai");
-  assert.equal(PRODUCTION_ORIGIN, "https://botpasses.ai");
+  assert.equal(STAGING_ORIGIN, "https://staging.botpasses.com");
+  assert.equal(PRODUCTION_ORIGIN, "https://botpasses.com");
   assert.equal(WWW_AUTHENTICATE_REALM, "botpasses");
 });
 
@@ -40,11 +42,13 @@ test("package.json name and dual bin", () => {
     name: string;
     bin: Record<string, string>;
     keywords: string[];
+    homepage: string;
   };
   assert.equal(pkg.name, "botpasses");
   assert.equal(pkg.bin.botpasses, "./bin/vault.js");
   assert.equal(pkg.bin.vault, "./bin/vault.js");
   assert.ok(pkg.keywords.includes("botpasses"));
+  assert.equal(pkg.homepage, PRODUCTION_ORIGIN);
 });
 
 test("fly tomls use botpasses app names", () => {
@@ -52,6 +56,8 @@ test("fly tomls use botpasses app names", () => {
   const prod = readFileSync(join(process.cwd(), "fly.prod.toml"), "utf8");
   assert.match(staging, /^app = "botpasses-staging"$/m);
   assert.match(prod, /^app = "botpasses-prod"$/m);
+  assert.match(staging, /^  VAULT_PUBLIC_URL = "https:\/\/staging\.botpasses\.com"$/m);
+  assert.match(prod, /^  VAULT_PUBLIC_URL = "https:\/\/botpasses\.com"$/m);
 });
 
 const FORBIDDEN_BRAND = /Agent Grant Vault|AgentVault|agent-grant-vault|staging\.vault\.example\.com|mail\.agent-vault\.invalid|Agent grant vault|Agent Vault/;
@@ -83,6 +89,67 @@ test("src scripts README AGENTS env package have no leftover Agent Grant Vault c
   assert.deepEqual(hits, []);
 });
 
+test("live product surfaces do not use botpasses.ai", () => {
+  const cwd = process.cwd();
+  const files = [
+    ...walkFiles(join(cwd, "src")),
+    ...walkFiles(join(cwd, "scripts")),
+    ...walkFiles(join(cwd, "docs/ops")),
+    ...walkFiles(join(cwd, "test")).filter((f) => !f.endsWith("brand.test.ts")),
+    join(cwd, "README.md"),
+    join(cwd, "AGENTS.md"),
+    join(cwd, ".env.example"),
+    join(cwd, "package.json"),
+  ];
+  const hits: string[] = [];
+  for (const file of files) {
+    if (readFileSync(file, "utf8").includes("botpasses.ai")) hits.push(file);
+  }
+  assert.deepEqual(hits, []);
+  assert.ok(readFileSync(join(cwd, "README.md"), "utf8").includes(STAGING_ORIGIN));
+  assert.ok(readFileSync(join(cwd, "AGENTS.md"), "utf8").includes(PRODUCTION_ORIGIN));
+});
+
+test("public origin allowlist is botpasses.com or loopback", () => {
+  assert.equal(publicOriginError(STAGING_ORIGIN), undefined);
+  assert.equal(publicOriginError(PRODUCTION_ORIGIN), undefined);
+  assert.equal(publicOriginError("http://127.0.0.1:8788"), undefined);
+  assert.equal(resolvePublicOrigin(STAGING_ORIGIN, { plane: "staging" }), STAGING_ORIGIN);
+  assert.match(publicOriginError("https://example.com") ?? "", /botpasses\.com/);
+  const platformDefault = `https://botpasses-staging.${["fly", "dev"].join(".")}`;
+  assert.match(publicOriginError(platformDefault) ?? "", /botpasses\.com/);
+  assert.match(
+    publicOriginError(platformDefault, { plane: "staging", allowLoopback: false }) ?? "",
+    /staging\.botpasses\.com/,
+  );
+  assert.match(
+    publicOriginError("http://127.0.0.1:8788", { plane: "staging", allowLoopback: false }) ?? "",
+    /staging\.botpasses\.com/,
+  );
+  assert.match(publicOriginError(PRODUCTION_ORIGIN, { plane: "staging" }) ?? "", /staging\.botpasses\.com/);
+});
+
+test("live product surfaces do not name a platform default hostname", () => {
+  const cwd = process.cwd();
+  const needle = ["fly", "dev"].join(".");
+  const files = [
+    ...walkFiles(join(cwd, "src")),
+    ...walkFiles(join(cwd, "scripts")),
+    ...walkFiles(join(cwd, "docs/ops")),
+    join(cwd, "README.md"),
+    join(cwd, "AGENTS.md"),
+    join(cwd, ".env.example"),
+    join(cwd, "package.json"),
+    join(cwd, "fly.staging.toml"),
+    join(cwd, "fly.prod.toml"),
+  ];
+  const hits: string[] = [];
+  for (const file of files) {
+    if (readFileSync(file, "utf8").includes(needle)) hits.push(file);
+  }
+  assert.deepEqual(hits, []);
+});
+
 test("createResendSender empty from throws before fetch", async () => {
   const orig = globalThis.fetch;
   let called = false;
@@ -101,7 +168,7 @@ test("createResendSender empty from throws before fetch", async () => {
 
 test("createResendSender uses VAULT_EMAIL_FROM in JSON", async () => {
   const orig = globalThis.fetch;
-  const from = "Botpasses <noreply@mail.botpasses.ai>";
+  const from = "Botpasses <noreply@mail.botpasses.com>";
   let parsed: { from?: string } = {};
   globalThis.fetch = async (_url, init) => {
     parsed = JSON.parse(String(init?.body)) as { from?: string };

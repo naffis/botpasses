@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
+import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
@@ -14,7 +15,7 @@ async function setup() {
   const kernel = new HostedKernel({
     store,
     kek: parseMasterKey(generateMasterKey()),
-    publicUrl: "https://staging.botpasses.ai",
+    publicUrl: STAGING_ORIGIN,
     deployPlane: "staging",
   });
   const { orgId } = await kernel.createOrg("acme", "user_owner");
@@ -88,7 +89,7 @@ test("find_items miss returns path-only collect_url (AC-01, AC-12)", async () =>
     if (result.status !== "need_item") return;
     const url = new URL(result.collect_url);
     assert.equal(url.search, "");
-    assert.ok(result.collect_url.startsWith("https://staging.botpasses.ai/collect/"));
+    assert.ok(result.collect_url.startsWith(`${STAGING_ORIGIN}/collect/`));
     assert.equal(result.client_name, "grok");
     assert.ok(!JSON.stringify(result).includes(CANARY));
   } finally {

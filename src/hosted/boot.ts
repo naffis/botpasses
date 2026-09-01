@@ -1,5 +1,7 @@
 /** Hosted boot invariants. Exit 78 = EX_CONFIG. */
 
+import { hostedDeployPlane, originForPlane, publicOriginError } from "../brand.ts";
+
 export const HOSTED_CONFIG_EXIT = 78;
 
 export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -20,7 +22,12 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (bootstrap.length > 0 && bootstrap.length < 32) {
     return "VAULT_BOOTSTRAP_TOKEN must be at least 32 characters when set.";
   }
-  return undefined;
+  const plane = hostedDeployPlane(env);
+  const pub = env.VAULT_PUBLIC_URL?.trim() ?? "";
+  if (!pub) {
+    return `VAULT_MODE=hosted requires VAULT_PUBLIC_URL=${originForPlane(plane)}.`;
+  }
+  return publicOriginError(pub, { plane, allowLoopback: false });
 }
 
 export function assertHostedBoot(env: NodeJS.ProcessEnv = process.env): void {

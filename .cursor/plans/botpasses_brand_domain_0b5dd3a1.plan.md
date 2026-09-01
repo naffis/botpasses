@@ -1,6 +1,6 @@
 ---
 name: Botpasses brand domain
-overview: Rebrand the product to Botpasses on botpasses.ai and staging.botpasses.ai across UI, MCP, CLI/npm, Fly apps, and docs, with a sequenced Cloudflare/Clerk/Resend/GitHub cutover. Keep VAULT_* env names. Create Fly apps and copy secrets before any push that changes fly.*.toml app names.
+overview: Rebrand the product to Botpasses on botpasses.com and staging.botpasses.com across UI, MCP, CLI/npm, Fly apps, and docs, with a sequenced Cloudflare/Clerk/Resend/GitHub cutover. Keep VAULT_* env names. Create Fly apps and copy secrets before any push that changes fly.*.toml app names.
 todos:
   - id: t01-brand
     content: T-01 Add src/brand.ts + test/brand.test.ts (names, origins, default home dirname)
@@ -26,7 +26,7 @@ todos:
 isProject: false
 ---
 
-# Plan: Botpasses brand and botpasses.ai cutover
+# Plan: Botpasses brand and botpasses.com cutover
 
 Research twin: [docs/plans/2026-08-30-botpasses-brand.md](docs/plans/2026-08-30-botpasses-brand.md)
 Task file: [.loadout/tasks/botpasses-brand/TASK.md](.loadout/tasks/botpasses-brand/TASK.md)
@@ -34,8 +34,8 @@ CreatePlan: `~/.cursor/plans/botpasses_brand_domain_0b5dd3a1.plan.md`
 
 ## 1. Summary
 
-- **Problem:** The product still ships as Agent Grant Vault (`agent-vault`, `AgentVault`, `agent-grant-vault`) on example hosts (`staging.vault.example.com`). Email `from` is hardcoded to `noreply@mail.agent-vault.invalid`. Fly apps are `agent-vault-*`. The owned domain is **botpasses.ai**.
-- **Outcome:** Users, MCP clients, operators, and infra all see **Botpasses**. Prod origin is `https://botpasses.ai`. Staging is `https://staging.botpasses.ai`. npm package, MCP `serverInfo.name`, `/health`, operator UI, Fly app names, and docs match. Live DNS, certs, Clerk FAPI, and Resend `mail.botpasses.ai` are cut over, or the runbook lists the exact missing credential.
+- **Problem:** The product still ships as Agent Grant Vault (`agent-vault`, `AgentVault`, `agent-grant-vault`) on example hosts (`staging.vault.example.com`). Email `from` is hardcoded to `noreply@mail.agent-vault.invalid`. Fly apps are `agent-vault-*`. The owned domain is **botpasses.com**.
+- **Outcome:** Users, MCP clients, operators, and infra all see **Botpasses**. Prod origin is `https://botpasses.com`. Staging is `https://staging.botpasses.com`. npm package, MCP `serverInfo.name`, `/health`, operator UI, Fly app names, and docs match. Live DNS, certs, Clerk FAPI, and Resend `mail.botpasses.com` are cut over, or the runbook lists the exact missing credential.
 - **Approach:** One brand module (`src/brand.ts`). Dual-bin `botpasses` + `vault`. Keep `VAULT_*` env names. Reuse existing Neon databases (copy `DATABASE_URL` onto new Fly apps). **Create `botpasses-staging` / `botpasses-prod` and copy Fly secrets before any push of the renamed tomls to `origin/dev`.** No new runtime dependencies.
 
 ## 2. Scope
@@ -43,7 +43,7 @@ CreatePlan: `~/.cursor/plans/botpasses_brand_domain_0b5dd3a1.plan.md`
 ### In scope
 
 - Product display name **Botpasses**; slug `botpasses`
-- Hosts: prod `https://botpasses.ai`, staging `https://staging.botpasses.ai`, `www` 301 to apex (not a second OAuth resource)
+- Hosts: prod `https://botpasses.com`, staging `https://staging.botpasses.com`, `www` 301 to apex (not a second OAuth resource)
 - npm `name`, description, scripts; `bin.botpasses` canonical and `bin.vault` alias
 - MCP initialize `serverInfo.name` and `instructions`; Claude connector display **Botpasses**; `/health` `product`; WWW-Authenticate realm
 - Operator HTML (local + hosted), CLI usage and listen logs, default login URL, default `$VAULT_HOME` dirname `~/.botpasses`
@@ -70,7 +70,7 @@ CreatePlan: `~/.cursor/plans/botpasses_brand_domain_0b5dd3a1.plan.md`
 
 ### Assumptions (labeled)
 
-- **A-1:** You own `botpasses.ai` and can put the zone on Cloudflare (or it already is).
+- **A-1:** You own `botpasses.com` and can put the zone on Cloudflare (or it already is).
 - **A-2:** Fly, Clerk, Resend, Neon, and R2 accounts from hosted v0.2 are the targets. The runbook creates Fly apps if missing.
 - **A-3:** Staging and production stay isolated (two Fly apps, two Neon projects already, two Clerk apps). Sessions must not be shared across planes.
 - **A-4:** GitHub rename `naffis/agent-vault` → `naffis/botpasses` is part of this cutover (GitHub redirects clones and the web UI). Actions secrets stay on the repo. Rename **after** the first green staging deploy.
@@ -182,10 +182,10 @@ Fly + Cloudflare orange-cloud; Full (strict); Clerk production DNS; Resend subdo
 ### Implications (adopt / adapt / reject)
 
 - **Adopt** Fly orange-cloud + `_fly-ownership` + Full (strict); Origin CA fallback.
-- **Adopt** apex **A and AAAA** orange-cloud to Fly IPs (`fly ips list`). Staging may use CNAME to `.fly.dev` or A/AAAA. Do not rely on apex CNAME flattening.
-- **Adopt** one `_fly-ownership` TXT per hostname: `_fly-ownership.botpasses.ai` and `_fly-ownership.staging.botpasses.ai`. Copy values from `fly certs setup <host> -a <app>`.
-- **Adopt** Resend domain `mail.botpasses.ai`; From `Botpasses <noreply@mail.botpasses.ai>`; all Resend records grey-cloud.
-- **Adopt** two Clerk production instances; FAPI `clerk.botpasses.ai` and `clerk.staging.botpasses.ai` grey-cloud; `CLERK_FRONTEND_API` = that hostname without scheme.
+- **Adopt** apex **A and AAAA** orange-cloud to Fly IPs (`fly ips list`). Staging uses A/AAAA the same way. Do not rely on apex CNAME flattening. Public origins are `botpasses.com` / `staging.botpasses.com` only.
+- **Adopt** one `_fly-ownership` TXT per hostname: `_fly-ownership.botpasses.com` and `_fly-ownership.staging.botpasses.com`. Copy values from `fly certs setup <host> -a <app>`.
+- **Adopt** Resend domain `mail.botpasses.com`; From `Botpasses <noreply@mail.botpasses.com>`; all Resend records grey-cloud.
+- **Adopt** two Clerk production instances; FAPI `clerk.botpasses.com` and `clerk.staging.botpasses.com` grey-cloud; `CLERK_FRONTEND_API` = that hostname without scheme.
 - **Adopt** create Fly apps + copy secrets + confirm token **before** pushing renamed tomls.
 - **Adopt** org-level Fly token or new per-app deploy tokens (A-7).
 - **Adapt** prior A-8 `vault.<zone>` → apex + `staging`.
@@ -203,8 +203,8 @@ Fly + Cloudflare orange-cloud; Full (strict); Clerk production DNS; Resend subdo
 - **R-03** Local and hosted MCP `initialize` `serverInfo.name` SHALL be `botpasses`. MCP `instructions` SHALL say Botpasses (not Agent grant vault).
 - **R-04** The npm package name SHALL be `botpasses`. `bin` SHALL map `botpasses` and `vault` to [bin/vault.js](bin/vault.js).
 - **R-05** WHEN `VAULT_HOME` is unset, the local kernel SHALL use `$HOME/.botpasses`.
-- **R-06** CLI `login` help SHALL default the hosted origin to `https://staging.botpasses.ai`.
-- **R-07** Docs and `.env.example` SHALL use `https://staging.botpasses.ai` and `https://botpasses.ai`.
+- **R-06** CLI `login` help SHALL default the hosted origin to `https://staging.botpasses.com`.
+- **R-07** Docs and `.env.example` SHALL use `https://staging.botpasses.com` and `https://botpasses.com`.
 - **R-08** Fly staging config `app` SHALL be `botpasses-staging`. Fly prod config `app` SHALL be `botpasses-prod`.
 - **R-09** WHILE `VAULT_MODE=hosted` and `RESEND_API_KEY` is set, IF `VAULT_EMAIL_FROM` is missing or empty, THEN `hostedBootError` SHALL return a message and the process SHALL exit 78. WHEN Resend sends, the JSON `from` SHALL equal `VAULT_EMAIL_FROM`.
 - **R-10** WHEN a 401 needs `WWW-Authenticate`, the realm SHALL be `botpasses`.
@@ -230,8 +230,8 @@ Fly + Cloudflare orange-cloud; Full (strict); Clerk production DNS; Resend subdo
 - **AC-04** Given MCP initialize, then `serverInfo.name` is `botpasses` and `instructions` does not contain `Agent grant vault`.
 - **AC-05** Given `package.json`, then `name` is `botpasses` and `bin.botpasses` and `bin.vault` both equal `./bin/vault.js`.
 - **AC-06** Given `VAULT_HOME` unset, when default home is resolved, then the path ends with `/.botpasses`.
-- **AC-07** Given `login` with `VAULT_PUBLIC_URL` unset, then stdout contains `https://staging.botpasses.ai`.
-- **AC-08** Given `createResendSender` with empty from, when send is called, then it throws before fetch. Given from `Botpasses <noreply@mail.botpasses.ai>`, then the JSON body `from` equals that string.
+- **AC-07** Given `login` with `VAULT_PUBLIC_URL` unset, then stdout contains `https://staging.botpasses.com`.
+- **AC-08** Given `createResendSender` with empty from, when send is called, then it throws before fetch. Given from `Botpasses <noreply@mail.botpasses.com>`, then the JSON body `from` equals that string.
 - **AC-09** Given the fly tomls, then `app` values are `botpasses-staging` / `botpasses-prod`.
 - **AC-10** Given grep of `src/`, `scripts/`, `README.md`, `AGENTS.md`, `.env.example`, `package.json` for `Agent Grant Vault|AgentVault|agent-grant-vault|staging.vault.example.com|mail.agent-vault.invalid|Agent grant vault|Agent Vault`, then zero matches. Allowed leftovers: CHANGELOG 0.2.0 section, `docs/plans/2026-08-30-grant-vault-product.md`, `.loadout/tasks/grant-vault-product/`, `npx vault` as the compatibility command, `VAULT_*` env names, `/agentpass` paths.
 - **AC-11** Given `npm test && npm run typecheck`, then both exit 0.
@@ -241,7 +241,7 @@ Fly + Cloudflare orange-cloud; Full (strict); Clerk production DNS; Resend subdo
 
 ### Edge cases and error paths
 
-- `www.botpasses.ai`: Cloudflare redirect rule 301 to `https://botpasses.ai/{path}` (preserve path/query). No Fly cert for `www`.
+- `www.botpasses.com`: Cloudflare redirect rule 301 to `https://botpasses.com/{path}` (preserve path/query). No Fly cert for `www`.
 - `RESEND_API_KEY` unset: boot does not require `VAULT_EMAIL_FROM`; grants still return the 8-digit code; `notify_failed` if a sender is missing at send time (existing).
 - Old `~/.agent-vault`: ignored unless `VAULT_HOME` points there. README one sentence.
 - `npx vault` after package rename: works via dual bin in this package.
@@ -255,7 +255,7 @@ Fly + Cloudflare orange-cloud; Full (strict); Clerk production DNS; Resend subdo
 
 ### D-01: Canonical hosts
 
-Options: apex+staging / `app.`+marketing / `vault.botpasses.ai`. Decision: `https://botpasses.ai` and `https://staging.botpasses.ai`. `www` redirect-only.
+Options: apex+staging / `app.`+marketing / `vault.botpasses.com`. Decision: `https://botpasses.com` and `https://staging.botpasses.com`. `www` redirect-only.
 
 ### D-02: Brand module
 
@@ -271,11 +271,11 @@ Both names; docs canonical is `botpasses` after publish; this checkout uses `npx
 
 ### D-05: Two Clerk production instances
 
-Not satellite (would share users). FAPI `clerk.botpasses.ai` and `clerk.staging.botpasses.ai`, grey-cloud. `CLERK_FRONTEND_API` is the hostname only.
+Not satellite (would share users). FAPI `clerk.botpasses.com` and `clerk.staging.botpasses.com`, grey-cloud. `CLERK_FRONTEND_API` is the hostname only.
 
 ### D-06: Email from env + boot fail-closed
 
-`VAULT_EMAIL_FROM` required at hosted boot when `RESEND_API_KEY` is set (exit 78). Sender takes `from` as argument; empty from throws. Documented value `Botpasses <noreply@mail.botpasses.ai>`. Resend domain `mail.botpasses.ai`. Existing [test/hosted.test.ts](test/hosted.test.ts) boot test omits `RESEND_API_KEY` and must keep passing.
+`VAULT_EMAIL_FROM` required at hosted boot when `RESEND_API_KEY` is set (exit 78). Sender takes `from` as argument; empty from throws. Documented value `Botpasses <noreply@mail.botpasses.com>`. Resend domain `mail.botpasses.com`. Existing [test/hosted.test.ts](test/hosted.test.ts) boot test omits `RESEND_API_KEY` and must keep passing.
 
 ### D-07: No `authorizedParties` on `verifyToken`
 
@@ -291,7 +291,7 @@ Options: (1) rename toml then push (CI creates nothing, deploy fails) (2) keep o
 
 ### D-10: Apex A/AAAA, not CNAME
 
-Fly custom-domain guide: apex CNAME is fragile. Cloudflare can flatten; still lock A+AAAA orange-cloud to `fly ips list` IPv4/IPv6. Staging: CNAME to the app `.fly.dev` target from `fly certs setup` (orange) is allowed, or A/AAAA the same way.
+Fly custom-domain guide: apex CNAME is fragile. Cloudflare can flatten; still lock A+AAAA orange-cloud to `fly ips list` IPv4/IPv6. Staging uses A/AAAA the same way. Do not publish a platform default hostname as a public origin.
 
 ## 7. Technical design
 
@@ -299,31 +299,31 @@ Fly custom-domain guide: apex CNAME is fragile. Cloudflare can flatten; still lo
 
 Orange-cloud (proxied):
 
-- `botpasses.ai` A → Fly IPv4 of `botpasses-prod`
-- `botpasses.ai` AAAA → Fly IPv6 of `botpasses-prod`
-- `staging.botpasses.ai` A/AAAA or CNAME → `botpasses-staging` (CNAME target from `fly certs setup`)
+- `botpasses.com` A → Fly IPv4 of `botpasses-prod`
+- `botpasses.com` AAAA → Fly IPv6 of `botpasses-prod`
+- `staging.botpasses.com` A/AAAA or CNAME → `botpasses-staging` (CNAME target from `fly certs setup`)
 
 Grey-cloud (DNS only):
 
-- `_fly-ownership.botpasses.ai` TXT — value from `fly certs setup botpasses.ai -a botpasses-prod`
-- `_fly-ownership.staging.botpasses.ai` TXT — from `fly certs setup staging.botpasses.ai -a botpasses-staging`
-- `clerk.botpasses.ai` CNAME → Clerk dashboard value
-- `clerk.staging.botpasses.ai` CNAME → Clerk dashboard value
-- Resend records for `mail.botpasses.ai` (DKIM CNAMEs, SPF TXT, MX) exactly as Resend shows
-- `_dmarc.botpasses.ai` TXT `v=DMARC1; p=none` (no rua mailbox required for v1)
+- `_fly-ownership.botpasses.com` TXT — value from `fly certs setup botpasses.com -a botpasses-prod`
+- `_fly-ownership.staging.botpasses.com` TXT — from `fly certs setup staging.botpasses.com -a botpasses-staging`
+- `clerk.botpasses.com` CNAME → Clerk dashboard value
+- `clerk.staging.botpasses.com` CNAME → Clerk dashboard value
+- Resend records for `mail.botpasses.com` (DKIM CNAMEs, SPF TXT, MX) exactly as Resend shows
+- `_dmarc.botpasses.com` TXT `v=DMARC1; p=none` (no rua mailbox required for v1)
 
 Redirect:
 
-- Cloudflare Redirect Rule: hostname `www.botpasses.ai` → `https://botpasses.ai` + `${1}` path, 301
+- Cloudflare Redirect Rule: hostname `www.botpasses.com` → `https://botpasses.com` + `${1}` path, 301
 
 TLS:
 
 - Cloudflare SSL/TLS mode **Full (strict)**; Always Use HTTPS
-- `fly certs add` per hostname; if ACME stalls, Origin CA covering `botpasses.ai` and `staging.botpasses.ai`, then `fly certs import`
+- `fly certs add` per hostname; if ACME stalls, Origin CA covering `botpasses.com` and `staging.botpasses.com`, then `fly certs import`
 
 Cache / WAF:
 
-- Cache Rule: bypass cache for `botpasses.ai` and `staging.botpasses.ai` (console, `/api`, `/mcp`, `/.well-known` are all dynamic)
+- Cache Rule: bypass cache for `botpasses.com` and `staging.botpasses.com` (console, `/api`, `/mcp`, `/.well-known` are all dynamic)
 - WAF managed rules on; skip Bot Fight/challenge for `/health` and `/ready`
 
 ### Data model
@@ -414,10 +414,10 @@ Allowlist (whole single-loop): `src/brand.ts`, `src/operator-page.ts`, `src/host
   3. Confirm A-7: token can `fly status -a botpasses-staging`. If not, put an org token or new deploy token in GitHub `FLY_API_TOKEN`
   4. `fly certs add` + Cloudflare records from §7
   5. Clerk production instances + grey-cloud FAPI + live keys on Fly
-  6. Resend `mail.botpasses.ai` verify
+  6. Resend `mail.botpasses.com` verify
   7. Cache bypass + Full (strict)
   8. **Then** push `dev` (only when the user asks to commit/push) so Actions deploys to apps that exist
-  9. `curl -fsS https://staging.botpasses.ai/health` → `product: botpasses`
+  9. `curl -fsS https://staging.botpasses.com/health` → `product: botpasses`
   10. GitHub rename after that green deploy; `git remote set-url`
 - If a dashboard or token is missing: print a remaining-checklist of named systems. In-repo ACs still must be green.
 - Acceptance: runbook commands are copy-pasteable; if Fly+CF credentials are present, staging `/health` through Cloudflare matches AC-03
@@ -443,7 +443,7 @@ Allowlist (whole single-loop): `src/brand.ts`, `src/operator-page.ts`, `src/host
 - package.json bin map (in brand or a small test)
 - AgentPass file still passes (AC-12)
 - Gate: `npm test && npm run typecheck`
-- Manual: Cloudflare path, Clerk login, Resend test send, MCP connector add at `https://botpasses.ai/mcp`, `www` redirect, GitHub old URL redirect
+- Manual: Cloudflare path, Clerk login, Resend test send, MCP connector add at `https://botpasses.com/mcp`, `www` redirect, GitHub old URL redirect
 
 ## 10. Rollout and rollback
 

@@ -1,6 +1,6 @@
 # 0001. Botpasses product identity
 
-- Status: accepted
+- Status: accepted (public origins superseded by [0002](0002-botpasses-com-origin.md))
 - Date: 2026-08-30
 
 ## Context

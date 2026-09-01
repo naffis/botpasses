@@ -7,6 +7,7 @@ primary_region = "iad"
 [env]
   VAULT_MODE = "hosted"
   VAULT_DEPLOY_PLANE = "production"
+  VAULT_PUBLIC_URL = "https://botpasses.com"
   PORT = "8788"
 
 [http_service]
