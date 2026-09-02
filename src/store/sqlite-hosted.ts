@@ -319,6 +319,17 @@ export class SqliteHostedStore implements VaultStore {
       .run(patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, id);
   }
 
+  async updateItemMeta(
+    id: string,
+    patch: Pick<ItemRecord, "username" | "inject" | "allowedHostsJson" | "updatedAt">,
+  ): Promise<void> {
+    this.#db
+      .prepare(
+        "UPDATE items SET username = ?, inject = ?, allowed_hosts_json = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(patch.username, patch.inject, patch.allowedHostsJson, patch.updatedAt, id);
+  }
+
   async deleteItem(id: string): Promise<void> {
     this.#db.prepare("DELETE FROM items WHERE id = ?").run(id);
   }
@@ -584,6 +595,15 @@ export class SqliteHostedStore implements VaultStore {
         "UPDATE grants SET status = 'consumed', consumed_at = ? WHERE id = ? AND status = 'active'",
       )
       .run(consumedAt, id);
+    return result.changes === 1;
+  }
+
+  async reactivateGrant(id: string): Promise<boolean> {
+    const result = this.#db
+      .prepare(
+        "UPDATE grants SET status = 'active', consumed_at = NULL WHERE id = ? AND status = 'consumed' AND policy = 'prompt'",
+      )
+      .run(id);
     return result.changes === 1;
   }
 

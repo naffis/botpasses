@@ -18,6 +18,7 @@ import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import {
   handleHostedMcpRpc,
+  isMcpHandshakeMethod,
   listHostedMcpTools,
   type JsonRpcRequest,
 } from "./mcp.ts";
@@ -212,6 +213,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
       }
       principal = undefined;
     }
+    const bearer = typeof req.headers.authorization === "string" &&
+      req.headers.authorization.toLowerCase().startsWith("bearer ");
+    if (bearer && !principal && isMcpClientSurface(path) && !isOauthDiscoveryPath(path)) {
+      sendError(res, new HttpError(401, "Authentication required"), path);
+      return;
+    }
 
     if (oidcProvider && (method === "GET" || method === "HEAD") && path === "/consent") {
       await handleConsentGet(
@@ -236,13 +243,46 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && path === "/mcp") {
-      try {
-        requireModelOrOperator(principal);
-      } catch (err) {
-        sendError(res, err);
-        return;
+      if (principal) {
+        try {
+          requireModelOrOperator(principal);
+        } catch (err) {
+          sendError(res, err, path);
+          return;
+        }
       }
       sseKeepalive(res);
+      return;
+    }
+
+    if (method === "GET" && path === "/integrations/spotify/callback") {
+      if (!principal || principal.channel !== "operator") {
+        res.writeHead(302, { location: "/sign-in" });
+        res.end();
+        return;
+      }
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      const err = url.searchParams.get("error");
+      if (err || !code || !state) {
+        res.writeHead(302, { location: "/console#vault" });
+        res.end();
+        return;
+      }
+      try {
+        await opts.kernel.finishSpotifyUserOauth({
+          orgId: principal.orgId,
+          userId: principal.userId,
+          state,
+          code,
+          fetchImpl: opts.fetchImpl,
+        });
+        res.writeHead(302, { location: "/console#vault?spotify=connected" });
+        res.end();
+      } catch {
+        res.writeHead(302, { location: "/console#vault?spotify=error" });
+        res.end();
+      }
       return;
     }
 
@@ -290,6 +330,24 @@ export function createHostedServer(opts: HostedHttpOpts) {
 
     if (method === "POST" && path === "/mcp") {
       const body = (await readJson(req)) as JsonRpcRequest;
+      if (!principal && isMcpHandshakeMethod(body.method)) {
+        const rpc = await handleHostedMcpRpc(
+          {
+            kernel: opts.kernel,
+            principal: { channel: "model", orgId: "anon", clientId: "anon", environment: "staging" },
+            fetchImpl: opts.fetchImpl,
+            resolveAddresses: opts.resolveAddresses,
+          },
+          body,
+        );
+        if (!rpc) {
+          res.writeHead(202, securityHeaders({ html: false }));
+          res.end();
+          return;
+        }
+        json(res, 200, rpc);
+        return;
+      }
       let model: ModelPrincipal;
       try {
         model = await mcpModelPrincipal(opts.kernel, principal, body);
@@ -474,6 +532,37 @@ export function createHostedServer(opts: HostedHttpOpts) {
       json(res, 200, { item: result.item, grant_status: result.grant_status });
       return;
     }
+    const itemMeta = /^\/api\/items\/([^/]+)\/meta$/.exec(path);
+    if (method === "POST" && itemMeta) {
+      const op = requireOperator(principal);
+      const body = await readJson(req);
+      const item = await opts.kernel.updateItemMeta({
+        orgId: op.orgId,
+        actor: op.userId,
+        itemId: decodeURIComponent(itemMeta[1] ?? ""),
+        username: optional(body.username),
+        inject: optional(body.inject),
+        allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
+          ? asHosts(body.allowed_hosts ?? body.allowedHosts)
+          : undefined,
+      });
+      json(res, 200, { item });
+      return;
+    }
+    if (method === "POST" && path === "/api/integrations/spotify/start") {
+      const op = requireOperator(principal);
+      const body = await readJson(req);
+      const started = await opts.kernel.startSpotifyUserOauth({
+        orgId: op.orgId,
+        userId: op.userId,
+        itemName: String(body.item_name ?? body.itemName ?? ""),
+        environment: asEnv(body.environment),
+        clientId: optional(body.client_id ?? body.clientId),
+        redirectUri: optional(body.redirect_uri ?? body.redirectUri),
+      });
+      json(res, 200, started);
+      return;
+    }
     const rotate = /^\/api\/items\/([^/]+)\/rotate$/.exec(path);
     if (method === "POST" && rotate) {
       const op = requireOperator(principal);
@@ -577,7 +666,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
     if (method === "GET" && path === "/api/inbox") {
       const op = requireOperator(principal);
-      const grants = await opts.kernel.inbox(op.orgId);
+      const grants = await opts.kernel.inboxGrantCards(op.orgId);
       const needs = await opts.kernel.listInboxNeeds(op.orgId);
       const agentpass = agentPassEnabled()
         ? (await opts.kernel.store.listAgentPasses(op.orgId)).filter((p) => p.status === "pending")
@@ -703,7 +792,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
     if (method === "GET" && path === "/mcp/tools") {
-      requireModelOrOperator(principal);
+      if (principal) requireModelOrOperator(principal);
       json(res, 200, { tools: listHostedMcpTools() });
       return;
     }

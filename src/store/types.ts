@@ -63,6 +63,10 @@ export type VaultStore = {
     id: string,
     patch: Pick<ItemRecord, "iv" | "ciphertext" | "tag" | "last4" | "updatedAt">,
   ): Promise<void>;
+  updateItemMeta(
+    id: string,
+    patch: Pick<ItemRecord, "username" | "inject" | "allowedHostsJson" | "updatedAt">,
+  ): Promise<void>;
   deleteItem(id: string): Promise<void>;
   getItem(id: string): Promise<ItemRecord | undefined>;
   getItemByName(environmentId: string, name: string): Promise<ItemRecord | undefined>;
@@ -96,6 +100,8 @@ export type VaultStore = {
   listPendingGrants(orgId: string): Promise<HostedGrantRecord[]>;
   updateGrant(row: HostedGrantRecord): Promise<void>;
   consumeGrant(id: string, consumedAt: string): Promise<boolean>;
+  /** Prompt grants only. Restores an unused inject after a failed origin call. */
+  reactivateGrant(id: string): Promise<boolean>;
 
   insertChallenge(row: ApprovalChallengeRecord): Promise<void>;
   getChallenge(id: string): Promise<ApprovalChallengeRecord | undefined>;

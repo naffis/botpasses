@@ -41,6 +41,18 @@ import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import { logVaultEvent } from "./observe.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
+import { storedItemUsername } from "./store-form-fields.ts";
+import {
+  chooseSpotifyRedirect,
+  mintSpotifyAccessToken,
+  openOauthState,
+  pkceVerifier,
+  refreshItemName,
+  sealOauthState,
+  spotifyAuthorizeUrl,
+  SPOTIFY_ACCOUNTS_HOST,
+  SPOTIFY_API_HOST,
+} from "./spotify.ts";
 
 const SESSION_TTL_MS = 8 * 3600 * 1000;
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -276,6 +288,10 @@ export class HostedKernel {
     if (input.kind === "login" && !input.username) {
       throw new HttpError(400, "login items require username");
     }
+    if (input.inject === "client_credentials" && !input.username) {
+      throw new HttpError(400, "client_credentials items require a Client ID in username");
+    }
+    const username = storedItemUsername(input.kind, input.inject, input.username);
     const env = await this.envFor(input.orgId, input.environment);
     const existing = await this.store.getItemByName(env.id, name);
     if (existing) throw new HttpError(409, "Item name already exists in this environment");
@@ -300,7 +316,7 @@ export class HostedKernel {
       kind: input.kind,
       name,
       last4: last4(input.value),
-      username: input.kind === "login" ? (input.username ?? null) : null,
+      username,
       allowedHostsJson: JSON.stringify(input.allowedHosts),
       inject: input.inject,
       iv: envelope.iv,
@@ -315,7 +331,7 @@ export class HostedKernel {
       name,
       kind: input.kind,
       last4: last4(input.value),
-      username: input.kind === "login" ? (input.username ?? null) : null,
+      username,
       inject: input.inject,
       allowedHostsJson: JSON.stringify(input.allowedHosts),
       folderId,
@@ -767,6 +783,42 @@ export class HostedKernel {
     return this.store.listPendingGrants(orgId);
   }
 
+  async inboxGrantCards(orgId: string): Promise<
+    Array<{
+      id: string;
+      status: string;
+      policy: string;
+      item_name: string | null;
+      item_last4: string | null;
+      client_name: string;
+      task_description: string | null;
+      created_at: string;
+      approved_at: string | null;
+    }>
+  > {
+    const all = await this.store.listGrants(orgId);
+    const rows = all.filter(
+      (g) => g.status === "pending" || (g.status === "active" && g.policy === "prompt"),
+    );
+    const cards = [];
+    for (const g of rows) {
+      const item = g.itemId ? await this.store.getItem(g.itemId) : undefined;
+      const client = await this.store.getClient(g.clientId);
+      cards.push({
+        id: g.id,
+        status: g.status,
+        policy: g.policy,
+        item_name: item?.name ?? null,
+        item_last4: item?.last4 ?? null,
+        client_name: client?.name ?? "agent",
+        task_description: g.taskDescription,
+        created_at: g.createdAt,
+        approved_at: g.approvedAt,
+      });
+    }
+    return cards;
+  }
+
   async listClientGrants(orgId: string, clientId: string): Promise<HostedGrantRecord[]> {
     const all = await this.store.listGrants(orgId);
     return all.filter((g) => g.clientId === clientId);
@@ -812,6 +864,9 @@ export class HostedKernel {
     allowedHosts: string[];
     name: string;
     kind: ItemKind;
+    grantId: string;
+    grantPolicy: string;
+    itemId: string;
   }> {
     const client = await this.#clientInOrg(input.orgId, input.clientId);
     if (client.environment !== input.environment) {
@@ -829,10 +884,177 @@ export class HostedKernel {
         alreadyLimited: false,
       });
     }
-    await this.consumeActiveGrant(input.orgId, client.id, item.id);
+    const grant = await this.consumeActiveGrant(input.orgId, client.id, item.id);
     const decrypted = await this.decryptItem(input.orgId, item.id);
     await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
-    return decrypted;
+    return {
+      ...decrypted,
+      grantId: grant.id,
+      grantPolicy: grant.policy,
+      itemId: item.id,
+    };
+  }
+
+  async reactivatePromptGrant(grantId: string | undefined): Promise<boolean> {
+    if (!grantId) return false;
+    return this.store.reactivateGrant(grantId);
+  }
+
+  async findStoredItem(orgId: string, environment: VaultEnvName, itemName: string) {
+    const env = await this.envFor(orgId, environment);
+    return this.store.getItemByName(env.id, normalizeSecretName(itemName));
+  }
+
+  async updateItemMeta(input: {
+    orgId: string;
+    actor: string;
+    itemId: string;
+    username?: string;
+    inject?: string;
+    allowedHosts?: string[];
+  }): Promise<ItemPublic> {
+    const item = await this.store.getItem(input.itemId);
+    if (!item) throw new HttpError(404, "Unknown item");
+    const env = await this.store.getEnvironment(item.environmentId);
+    if (!env) throw new HttpError(404, "Unknown environment");
+    await this.#assertItemOrg(input.orgId, env.vaultId);
+    const inject = input.inject ?? item.inject;
+    if (input.allowedHosts) this.#assertHosts(input.allowedHosts);
+    if (inject === "client_credentials" && !storedItemUsername(item.kind, inject, input.username ?? item.username)) {
+      throw new HttpError(400, "client_credentials items require a Client ID in username");
+    }
+    const next = {
+      ...item,
+      inject,
+      username: storedItemUsername(item.kind, inject, input.username !== undefined ? input.username : item.username),
+      allowedHostsJson: input.allowedHosts ? JSON.stringify(input.allowedHosts) : item.allowedHostsJson,
+      updatedAt: nowIso(this.now()),
+    };
+    await this.store.updateItemMeta(item.id, {
+      username: next.username,
+      inject: next.inject,
+      allowedHostsJson: next.allowedHostsJson,
+      updatedAt: next.updatedAt,
+    });
+    await this.#audit(input.orgId, "store", input.actor, item.name, null);
+    const saved = await this.store.getItem(item.id);
+    if (!saved) throw new HttpError(500, "Update failed");
+    return this.#publicItem(env.name, saved);
+  }
+
+  async startSpotifyUserOauth(input: {
+    orgId: string;
+    userId: string;
+    itemName: string;
+    environment: VaultEnvName;
+    clientId?: string;
+    redirectUri?: string;
+  }): Promise<{ authorize_url: string; redirect_uri: string }> {
+    const env = await this.envFor(input.orgId, input.environment);
+    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    if (!item) throw new HttpError(404, "Unknown item");
+    const clientId = (input.clientId ?? item.username ?? "").trim();
+    if (!clientId) throw new HttpError(400, "Spotify Client ID is required (item username or client_id)");
+    const redirectUri = chooseSpotifyRedirect(this.publicUrl, input.redirectUri);
+    const codeVerifier = pkceVerifier();
+    const state = sealOauthState(
+      {
+        orgId: input.orgId,
+        userId: input.userId,
+        itemId: item.id,
+        itemName: item.name,
+        environment: input.environment,
+        clientId,
+        redirectUri,
+        codeVerifier,
+        exp: this.now().getTime() + 10 * 60 * 1000,
+      },
+      this.#kek,
+    );
+    return {
+      authorize_url: spotifyAuthorizeUrl({ clientId, redirectUri, state, codeVerifier }),
+      redirect_uri: redirectUri,
+    };
+  }
+
+  async finishSpotifyUserOauth(input: {
+    orgId: string;
+    userId: string;
+    state: string;
+    code: string;
+    fetchImpl?: import("./connector.ts").ConnectorFetch;
+  }): Promise<{ item_name: string; last4: string }> {
+    const opened = openOauthState(input.state, this.#kek, this.now().getTime());
+    if (opened.orgId !== input.orgId) throw new HttpError(403, "Spotify OAuth state is not for this org");
+    const item = await this.store.getItem(opened.itemId);
+    if (!item) throw new HttpError(404, "Unknown item");
+    const decrypted = await this.decryptItem(input.orgId, item.id);
+    const exchange = await mintSpotifyAccessToken({
+      item: decrypted,
+      clientId: opened.clientId,
+      grantType: "authorization_code",
+      code: input.code,
+      redirectUri: opened.redirectUri,
+      codeVerifier: opened.codeVerifier,
+      fetchImpl: input.fetchImpl,
+    });
+    if (exchange.origin.status < 200 || exchange.origin.status >= 300) {
+      throw new HttpError(
+        exchange.origin.status >= 400 ? exchange.origin.status : 502,
+        "Spotify code exchange failed",
+      );
+    }
+    const refresh = exchange.minted.refreshToken;
+    if (!refresh) {
+      throw new HttpError(502, "Spotify did not return a refresh token");
+    }
+    const name = refreshItemName(opened.itemName);
+    const envName = opened.environment === "production" ? "production" : "staging";
+    const env = await this.envFor(input.orgId, envName);
+    const existing = await this.store.getItemByName(env.id, name);
+    let last = "";
+    let refreshId = existing?.id ?? "";
+    if (existing) {
+      const rotated = await this.rotateItem({
+        orgId: input.orgId,
+        actor: input.userId,
+        itemId: existing.id,
+        value: refresh,
+      });
+      last = rotated.last4;
+    } else {
+      const created = await this.createItem({
+        orgId: input.orgId,
+        actor: input.userId,
+        environment: envName,
+        kind: "secret",
+        name,
+        value: refresh,
+        username: opened.clientId,
+        allowedHosts: [SPOTIFY_API_HOST, SPOTIFY_ACCOUNTS_HOST],
+        inject: "refresh",
+      });
+      last = created.last4;
+      refreshId = created.id;
+    }
+    const clients = await this.store.listClients(input.orgId);
+    const at = nowIso(this.now());
+    for (const client of clients) {
+      if (client.kind !== "model" || client.revokedAt) continue;
+      const have = await this.store.findItemPolicy(input.orgId, client.id, refreshId);
+      if (have) continue;
+      await this.store.insertPolicy({
+        id: `pol_${randomUUID()}`,
+        orgId: input.orgId,
+        clientId: client.id,
+        itemId: refreshId,
+        folderId: null,
+        environmentId: env.id,
+        kind: "item_standing",
+        createdAt: at,
+      });
+    }
+    return { item_name: name, last4: last };
   }
 
   async approveMagic(orgId: string, actor: string, role: MemberRole, token: string): Promise<HostedGrantRecord> {
@@ -898,7 +1120,7 @@ export class HostedKernel {
     }
     return {
       secret: plain,
-      username: null,
+      username: item.username,
       last4: item.last4,
       inject: item.inject,
       allowedHosts: parseHosts(item.allowedHostsJson),

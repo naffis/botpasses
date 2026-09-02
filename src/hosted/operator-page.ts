@@ -69,12 +69,12 @@ export function hostedOperatorHtml(
           <div id="inbox-error" class="error-box" hidden data-testid="inbox-error"></div>
           <div id="inbox-empty" class="empty" hidden data-testid="inbox-empty">
             <strong>Nothing waiting</strong>
-            When an agent needs a credential, it appears here. You approve. The runtime gets the value.
+            When an agent needs a credential, it appears here. Approve once. A failed Spotify or origin 4xx does not use up that approve.
           </div>
           <div id="inbox" class="inbox-list"></div>
           <details class="card">
             <summary>Approve by code</summary>
-            <p>If the agent showed an 8-digit code, enter it here.</p>
+            <p>Use a code only for the first approve. After that, failed API calls reuse the same grant — do not enter a new code.</p>
             <form id="code">
               <label>8-digit code <input name="code" maxlength="8" inputmode="numeric" autocomplete="one-time-code" /></label>
               <button type="submit">Approve</button>
@@ -98,11 +98,11 @@ export function hostedOperatorHtml(
           </div>
         </section>
         <section class="panel" data-panel="access" aria-labelledby="page-title">
-          <div class="banner">Issue a token once. After Grok is connected, ask it in plain language (for example get my Spotify profile). Grok calls the API in the same turn. You approve here if asked. You do not need to tell it to use Botpasses. Never paste a secret into Grok. The full token is shown once. Access lists last-4 only.</div>
+          <div class="banner">Issue an <code>avm_</code> token once. Paste only that token into Grok (Grok adds Bearer). That header is enough — skip the OAuth connect card. Grok/Cursor connect cards fail if the redirect is not https, loopback http, or a desktop app scheme. After connect, ask in plain language. You approve here if asked. Never paste a Client Secret or access token into Grok. A Client Secret is not a user access token.</div>
           <div class="card">
             <h2>Issue token</h2>
             <p class="copy-row">MCP URL <code id="mcp_url"></code> <button type="button" id="copy-mcp" class="btn-ghost">Copy URL</button></p>
-            <p>Connect that URL. Paste only the issued <code>avm_</code> token. Grok adds Bearer. Then say what you want (get my Spotify profile).</p>
+            <p>MCP URL plus <code>Authorization: Bearer avm_…</code> is sufficient. Do not complete an OAuth connect card unless you want browser sign-in. Then say what you want (search Spotify for a track). <code>GET /v1/me</code> needs a user connect on the vault item, not client credentials.</p>
             <form id="grok">
               <label>Client name <input name="name" value="grok" /></label>
               <label>Environment
@@ -145,10 +145,11 @@ export function hostedOperatorHtml(
     <h2>Store credential</h2>
     <p id="store-error" class="flash" role="alert" data-testid="store-error"></p>
     <form id="store">
-      <label>Name <input name="name" required placeholder="SPOTIFY_TOKEN" /></label>
+      <label>Name <input name="name" required placeholder="SPOTIFY_SECRET" /></label>
       <label>Kind
         <select name="kind">
           <option value="secret">API token</option>
+          <option value="client_secret">OAuth client secret (Spotify app)</option>
           <option value="login">Username and password</option>
         </select>
       </label>
@@ -156,21 +157,37 @@ export function hostedOperatorHtml(
         <select name="environment">${envOptions}</select>
       </label>
       <label>Value <input name="value" type="password" autocomplete="off" required /></label>
-      <label id="store-username" hidden>HTTP Basic username <input name="username" autocomplete="username" /></label>
-      <label>Allowed hosts (comma) <input name="allowed_hosts" required placeholder="api.spotify.com" /></label>
-      <p id="store-inject-summary" class="hint">Sent as Authorization: Bearer. Typical for API tokens.</p>
+      <label id="store-username" hidden>Client ID or HTTP Basic username <input name="username" autocomplete="username" placeholder="Spotify Client ID" /></label>
+      <label>Allowed hosts (comma) <input name="allowed_hosts" required placeholder="api.spotify.com, accounts.spotify.com" /></label>
+      <p id="store-inject-summary" class="hint">Sent as Authorization: Bearer. Typical for API tokens. A Client Secret is not an access token.</p>
       <details id="store-inject-advanced">
         <summary>Change how it is sent</summary>
         <label>Send as
           <select name="inject">
             <option value="bearer" selected>Authorization: Bearer (typical API token)</option>
+            <option value="client_credentials">OAuth client secret (mint app token)</option>
             <option value="basic">HTTP Basic (username + password)</option>
             <option value="header:Authorization">Raw Authorization header</option>
           </select>
         </label>
       </details>
+      <p class="hint">Spotify token mint: Client ID in username, Client Secret as the value, hosts <code>api.spotify.com, accounts.spotify.com</code>. Botpasses sends Basic + form body. Do not store the secret as a Bearer user token.</p>
       <div class="dialog-actions">
         <button type="submit">Store</button>
+        <button type="button" class="btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="spotify-dialog" data-testid="spotify-dialog">
+    <h2>Connect Spotify user</h2>
+    <p class="hint">Authorization Code + PKCE. Redirect is this origin’s callback or <code>http://127.0.0.1:8888/callback</code>. Add that URI on the Spotify app. The refresh token is stored in the vault. The model never sees it. Needed for <code>/v1/me</code> and playlist writes. Public search uses the app token.</p>
+    <p id="spotify-error" class="flash" role="alert"></p>
+    <form id="spotify-user">
+      <label hidden>Item name <input name="item_name" /></label>
+      <label hidden>Environment <input name="environment" /></label>
+      <label>Spotify Client ID <input name="client_id" required autocomplete="off" /></label>
+      <div class="dialog-actions">
+        <button type="submit">Open Spotify</button>
         <button type="button" class="btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
       </div>
     </form>

@@ -21,7 +21,7 @@ import Docs from "../../../layouts/Docs.astro";
     <tbody>
       <tr>
         <td>Grok</td>
-        <td>Add this origin’s <code>/mcp</code> URL. OAuth sign-in on this origin, or paste a console-issued <code>avm_</code> token only (the client adds Bearer).</td>
+        <td>Add this origin’s <code>/mcp</code> URL plus <code>Authorization: Bearer avm_…</code> (the client adds Bearer). That header is enough. OAuth connect cards are optional and fail if <code>redirect_uri</code> is not https, loopback http, or a desktop app scheme.</td>
       </tr>
       <tr>
         <td>Claude / ChatGPT / Cursor</td>
@@ -34,7 +34,9 @@ import Docs from "../../../layouts/Docs.astro";
     </tbody>
   </table>
   <p>
-    Unauthenticated <code>POST /mcp</code> is 401. The
+    Unauthenticated <code>initialize</code> / <code>tools/list</code> succeed so Grok
+    does not show a connect card when an <code>avm_</code> header is configured.
+    Unauthenticated <code>tools/call</code> is 401. The
     <code>WWW-Authenticate</code> header includes an absolute
     <code>resource_metadata</code> URL for
     <code>/.well-known/oauth-protected-resource/mcp</code>.
@@ -72,7 +74,9 @@ import Docs from "../../../layouts/Docs.astro";
       <tr><td><code>path</code></td><td>yes</td><td><code>/v1/me</code> or a full <code>https://</code> URL</td></tr>
       <tr><td><code>host</code></td><td>if no item_name and path is not a full URL</td><td>Hostname such as <code>api.spotify.com</code></td></tr>
       <tr><td><code>item_name</code></td><td>if no host and path is not a full URL</td><td>Exact stored name</td></tr>
-      <tr><td><code>body</code></td><td>no</td><td>JSON object for POST, PUT, PATCH</td></tr>
+      <tr><td><code>body</code></td><td>no</td><td>Object for POST, PUT, PATCH. Form-urlencoded for Spotify <code>/api/token</code></td></tr>
+      <tr><td><code>content_type</code></td><td>no</td><td><code>application/json</code> or <code>application/x-www-form-urlencoded</code></td></tr>
+      <tr><td><code>client_id</code></td><td>no</td><td>Public OAuth Client ID when the item is a Client Secret</td></tr>
       <tr><td><code>task_description</code></td><td>no</td><td>Shown in the operator inbox (max 500 characters)</td></tr>
     </tbody>
   </table>

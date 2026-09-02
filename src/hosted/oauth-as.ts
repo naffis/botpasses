@@ -30,20 +30,49 @@ function mcpAud(issuer: string): string {
   return `${issuer.replace(/\/$/, "")}/mcp`;
 }
 
-function assertRedirectUri(uri: string): void {
+const BLOCKED_REDIRECT_SCHEMES = new Set(["javascript:", "data:", "file:", "vbscript:"]);
+
+/** Grok / Cursor desktop MCP OAuth uses a custom scheme, not https or loopback http. */
+const DESKTOP_REDIRECT_SCHEMES = new Set([
+  "cursor:",
+  "cursor-mcp:",
+  "vscode:",
+  "vscode-insiders:",
+  "grok:",
+  "xai:",
+  "xai-grok:",
+]);
+
+export function isDesktopRedirect(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    if (BLOCKED_REDIRECT_SCHEMES.has(parsed.protocol)) return false;
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function assertRedirectUri(uri: string): void {
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
     throw new Error("invalid redirect_uri");
   }
-  if (parsed.protocol === "javascript:" || parsed.protocol === "data:" || parsed.protocol === "file:") {
+  if (BLOCKED_REDIRECT_SCHEMES.has(parsed.protocol)) {
     throw new Error("redirect_uri scheme is not allowed");
   }
-  const loopback =
-    (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && parsed.protocol === "http:";
-  if (parsed.protocol === "https:" || loopback) return;
-  throw new Error("redirect_uri must be https or loopback http");
+  const host = parsed.hostname.toLowerCase();
+  const loopbackHttp =
+    parsed.protocol === "http:" &&
+    (host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1");
+  if (parsed.protocol === "https:" || loopbackHttp) return;
+  if (DESKTOP_REDIRECT_SCHEMES.has(parsed.protocol)) return;
+  // Private-use URI scheme (RFC 7595): cursor://, grok://, com.example.app://
+  if (/^[a-z][a-z0-9+.-]*:$/.test(parsed.protocol) && parsed.protocol !== "http:") return;
+  throw new Error("redirect_uri must be https, loopback http, or a desktop app scheme");
 }
 
 export function createOauthProvider(opts: OauthAsOpts): Provider {
@@ -137,6 +166,9 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
               );
             }
           }
+          if (uris.some((uri) => typeof uri === "string" && isDesktopRedirect(uri))) {
+            metadata.application_type = "native";
+          }
         }
       },
     },
@@ -160,6 +192,7 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
     rotateRefreshToken: () => true,
     scopes: ["openid", "mcp"],
     clientDefaults: {
+      application_type: "native",
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
       response_types: ["code"],

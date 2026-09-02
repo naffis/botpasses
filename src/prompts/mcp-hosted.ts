@@ -11,6 +11,8 @@ export const MCP_INSTRUCTIONS_HOSTED = [
   "If the result has collect_url, tell the user to open that Botpasses page and enter the key there. Do not ask them to paste a secret into this chat. Then retry http.request.",
   "If the result has approval_code or grant status pending, tell them to approve in the Botpasses inbox. Then retry http.request with next.arguments.",
   "There is no get_secret. Never put a secret in a tool argument.",
+  "A Client Secret is not a user access token. For Spotify token mint, POST https://accounts.spotify.com/api/token with item_name and optional client_id. Botpasses sends HTTP Basic and application/x-www-form-urlencoded. Then GET /v1/search works with the minted app token. GET /v1/me needs a user OAuth connect in the console, not client credentials.",
+  "Prompt grants: if the origin returns 4xx, retry http.request with next.arguments. Do not ask for a new 8-digit code after a failed Spotify call.",
 ].join(" ");
 
 export const HOSTED_TOOL_DESCRIPTIONS = {
@@ -23,7 +25,7 @@ export const HOSTED_TOOL_DESCRIPTIONS = {
   list_grants:
     "Check grant status for this client. Prefer retrying http.request after the operator approves. Names and status only.",
   "http.request":
-    "Primary tool. Call this in the same turn the user asks for Spotify, Stripe, GitHub, or any allowlisted API. Pass host (api.spotify.com) or item_name, method, and path. path may be /v1/me or a full https URL (https://api.spotify.com/v1/me). Botpasses finds the credential and requests a grant if needed. Do not list_items first. Do not ask the user for a token. Returns a redacted body, or collect_url / pending grant with next.for_model and next.arguments to retry. Never returns the secret.",
+    "Primary tool. Call this in the same turn the user asks for Spotify, Stripe, GitHub, or any allowlisted API. Pass host (api.spotify.com) or item_name, method, and path. path may be /v1/search or a full https URL. For a Spotify Client Secret, pass client_id (public) and call accounts.spotify.com/api/token or api.spotify.com/v1/search — Botpasses mints an app token (Basic + form body), never Bearer of the secret. GET /v1/me needs a user connect. Do not list_items first. Do not ask the user for a token. Returns a redacted body, or collect_url / pending grant with next.for_model and next.arguments to retry. Never returns the secret.",
 } as const;
 
 export const HOSTED_TOOL_PARAM_DESCRIPTIONS = {
@@ -39,5 +41,10 @@ export const HOSTED_TOOL_PARAM_DESCRIPTIONS = {
   http_path:
     "Path on the allowlisted origin (/v1/me) or a full https URL (https://api.spotify.com/v1/me). Host is taken from the URL when you pass one. Example for Spotify profile: https://api.spotify.com/v1/me.",
   http_method: "HTTPS method for the API call.",
-  http_body: "JSON body for POST, PUT, or PATCH. Omit for GET.",
+  http_body:
+    "Object body for POST, PUT, or PATCH. JSON by default. For Spotify /api/token use content_type application/x-www-form-urlencoded (or omit — Botpasses form-encodes that path). Omit for GET.",
+  http_content_type:
+    "application/json (default) or application/x-www-form-urlencoded. Required for OAuth token endpoints.",
+  http_client_id:
+    "Public OAuth Client ID when the vault item is a Client Secret. Never the Client Secret. Used for HTTP Basic on accounts.spotify.com and to mint an app token for api.spotify.com.",
 } as const;

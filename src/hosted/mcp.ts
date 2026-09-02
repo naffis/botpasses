@@ -124,6 +124,12 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
         },
         path: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_path },
         body: { type: "object", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_body },
+        content_type: {
+          type: "string",
+          enum: ["application/json", "application/x-www-form-urlencoded"],
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_content_type,
+        },
+        client_id: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_client_id },
         task_description: {
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
@@ -306,6 +312,16 @@ export type JsonRpcResponse = {
   result?: unknown;
   error?: { code: number; message: string };
 };
+
+export function isMcpHandshakeMethod(method?: string): boolean {
+  if (!method) return false;
+  return (
+    method === "initialize" ||
+    method === "ping" ||
+    method === "tools/list" ||
+    method.startsWith("notifications/")
+  );
+}
 
 export async function handleHostedMcpRpc(
   deps: HostedMcpDeps,

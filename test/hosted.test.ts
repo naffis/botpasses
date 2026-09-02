@@ -901,7 +901,7 @@ test("missing Resend still returns a code and audits notify_failed", async () =>
   cleanup(home);
 });
 
-test("prompt consume happens even when origin fetch fails", async () => {
+test("prompt grant reactivates when origin fetch fails", async () => {
   const ctx = await setup();
   try {
     const asked = await ctx.kernel.requestGrant({
@@ -943,7 +943,7 @@ test("prompt consume happens even when origin fetch fails", async () => {
     const body = await res.json();
     assert.ok(!JSON.stringify(body).includes(CANARY));
     const grant = await ctx.kernel.store.getGrant(asked.grant.id);
-    assert.equal(grant?.status, "consumed");
+    assert.equal(grant?.status, "active");
     await http.close();
   } finally {
     await ctx.http.close();
@@ -1060,19 +1060,40 @@ test("operator session JWT path can call MCP stdio-style", async () => {
   }
 });
 
-test("unauthenticated GET /mcp is 401", async () => {
+test("unauthenticated handshake succeeds; tools/call is 401 with PRM", async () => {
   const ctx = await setup();
   try {
-    const res = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
-    assert.equal(res.status, 401);
-    assert.match(
-      res.headers.get("www-authenticate") ?? "",
-      /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
-    );
+    const ac = new AbortController();
+    const res = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" }, signal: ac.signal });
+    assert.equal(res.status, 200);
+    ac.abort();
     const tools = await fetch(`${ctx.base}/mcp/tools`);
-    assert.equal(tools.status, 401);
+    assert.equal(tools.status, 200);
+    const init = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+    });
+    assert.equal(init.status, 200);
+    const listed = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+    });
+    assert.equal(listed.status, 200);
+    const call = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "http.request", arguments: { method: "GET", path: "/v1/me", host: "api.spotify.com" } },
+      }),
+    });
+    assert.equal(call.status, 401);
     assert.match(
-      tools.headers.get("www-authenticate") ?? "",
+      call.headers.get("www-authenticate") ?? "",
       /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
     );
   } finally {
@@ -1222,7 +1243,12 @@ test("MCP CORS reflects foreign Origin; operator /api still 403 (AC-10)", async 
       const firstUnauth = await fetch(`${ctx.base}/mcp`, {
         method: "POST",
         headers: { "content-type": "application/json", origin: "https://grok.x.ai" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 13, method: "tools/list" }),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 13,
+          method: "tools/call",
+          params: { name: "list_items", arguments: {} },
+        }),
       });
       assert.equal(firstUnauth.status, 401);
       assert.match(

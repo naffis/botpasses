@@ -74,9 +74,24 @@ function nextBase(payload: PublicRecord): McpNext | undefined {
     };
   }
   if (typeof status === "number" && "body" in payload) {
+    if (status === 401 || status === 410) {
+      const hint = typeof payload.hint === "string" ? payload.hint : "";
+      return {
+        for_model:
+          `${hint || "The origin rejected this call."} Retry http.request with next.arguments. The same Botpasses approval is still valid. Do not ask for a new 8-digit code. Do not ask for a token. A Client Secret is not a user access token. GET /v1/me needs a Spotify user connect in the console.`,
+        tool: "http.request",
+      };
+    }
+    if (status >= 400) {
+      return {
+        for_model:
+          "The origin returned an error. Retry http.request with next.arguments. Do not ask for a new approval code or a token.",
+        tool: "http.request",
+      };
+    }
     return {
       for_model:
-        "Answer the user from this redacted API body. Do not claim you have the secret. Do not ask them to paste a key.",
+        "Answer the user from this redacted API body. Do not claim you have the secret. Do not ask them to paste a key. access_token values are redacted.",
     };
   }
   return undefined;

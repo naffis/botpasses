@@ -322,7 +322,10 @@ export async function fulfillNeed(
     kind,
     name,
     last4: last4(input.value),
-    username: kind === "login" ? (input.username ?? null) : null,
+    username:
+      kind === "login" || input.inject === "basic" || input.inject === "client_credentials"
+        ? (input.username ?? null)
+        : null,
     allowedHostsJson: JSON.stringify(input.allowedHosts),
     inject: input.inject,
     iv: envelope.iv,
