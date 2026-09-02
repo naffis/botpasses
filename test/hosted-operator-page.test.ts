@@ -6,7 +6,7 @@ import { hostedFont } from "../src/hosted/console-fonts.ts";
 import { hostedCollectHtml } from "../src/hosted/collect-page.ts";
 import { hostedOperatorHtml } from "../src/hosted/operator-page.ts";
 
-test("operator page can list both environments and rotate or delete", () => {
+test("operator page can list both environments and edit, rotate, or delete", () => {
   const html = hostedOperatorHtml();
   assert.match(html, /Botpasses/);
   assert.doesNotMatch(html, /Agent Grant Vault/);
@@ -22,6 +22,9 @@ test("operator page can list both environments and rotate or delete", () => {
   assert.match(html, /<select name="inject">/);
   assert.match(html, /api\.spotify\.com/);
   assert.match(html, /data-testid="item-delete-confirm"/);
+  assert.match(CONSOLE_JS, /data-testid", "item-edit"/);
+  assert.match(html, />Client ID and secret</);
+  assert.doesNotMatch(html, /Username and password/);
   assert.match(html, /data-testid="access-panel"/);
   assert.match(html, /data-testid="access-audit"/);
   assert.match(html, /data-testid="access-revoke-confirm"/);

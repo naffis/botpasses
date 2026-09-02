@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Store Kind is API token or Client ID and secret. Username and password is gone from Kind. HTTP Basic stays under Change how it is sent. Client ID and Client Secret labels appear for app secrets. Empty hosts prefill `api.spotify.com, accounts.spotify.com`. Submit stores `client_secret` so the vault pill says app secret, not token. Each row has Edit (same form, prefilled; blank value keeps the secret). Rotate and Delete stay.
 - Grok Bot: `Authorization: Bearer avm_…` is sufficient. Handshake methods (`initialize`, `ping`, `tools/list`) no longer 401, so a connect card / `needsAuth` is not forced when the Bearer is already configured. DCR accepts desktop redirect schemes (`cursor://`, `grok://`) as well as https and loopback http.
 - Prompt grants reactivate after a failed origin HTTP (401/410/5xx). One inbox approve can retry Spotify token mint. The origin status and body are returned (empty 410 is the origin, not a Botpasses consume error).
 - Spotify client-credentials helper: Client Secret is not injected as Bearer on `accounts.spotify.com`. `inject=client_credentials` or `client_id` + stored secret mints with HTTP Basic and `application/x-www-form-urlencoded`, caches the app token, then calls `api.spotify.com`. Access tokens are `[redacted]`. `GET /v1/search` works; `GET /v1/me` tells the model it needs user OAuth.

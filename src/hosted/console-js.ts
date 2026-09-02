@@ -56,7 +56,7 @@ function hashPanel(hash) {
 function showPanel(name) {
   const titles = {
     inbox: ["Inbox", "Approve once. The agent can retry after a failed API call without a new 8-digit code. The model never sees the value."],
-    vault: ["Vault", "Named credentials. Last-4 only. Rotate or delete from the row."],
+    vault: ["Vault", "Named credentials. Last-4 only. Edit, rotate, or delete from the row."],
     access: ["Access", "Issue a token once. Then see who holds it, last-4, last used, and the audit log."]
   };
   const info = titles[name] || titles.vault;
@@ -130,7 +130,7 @@ async function loadItems() {
     name.textContent = i.name;
     const kind = document.createElement("td");
     kind.setAttribute("data-label", "Kind");
-    kind.appendChild(pill(i.kind === "login" ? "login" : "token"));
+    kind.appendChild(pill(kindPillLabel(i.kind, i.inject)));
     const env = document.createElement("td");
     env.setAttribute("data-label", "Environment");
     env.appendChild(pill(i.environment || ""));
@@ -145,6 +145,12 @@ async function loadItems() {
     const actions = document.createElement("td");
     actions.className = "row-actions";
     actions.setAttribute("data-label", "Actions");
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn-ghost";
+    edit.textContent = "Edit";
+    edit.setAttribute("data-testid", "item-edit");
+    edit.addEventListener("click", function() { openEdit(i); });
     const rot = document.createElement("button");
     rot.type = "button";
     rot.className = "btn-ghost";
@@ -164,7 +170,7 @@ async function loadItems() {
     del.className = "btn-danger";
     del.textContent = "Delete";
     del.addEventListener("click", function() { openConfirm("item", i.id); });
-    actions.append(rot, del);
+    actions.append(edit, rot, del);
     tr.append(name, kind, env, hosts, last, actions);
     body.appendChild(tr);
   }
@@ -264,8 +270,63 @@ async function loadInbox() {
     ));
   }
 }
+function kindPillLabel(kind, inject) {
+  if (kind === "client_secret" || inject === "client_credentials") return "app secret";
+  if (kind === "login") return "login";
+  return "token";
+}
+function formKindForItem(kind, inject) {
+  if (kind === "client_secret" || inject === "client_credentials") return "client_secret";
+  return "secret";
+}
+function setStoreMode(editing) {
+  const title = document.getElementById("store-title");
+  const submit = document.getElementById("store-submit");
+  if (title) title.textContent = editing ? "Edit credential" : "Store credential";
+  if (submit) submit.textContent = editing ? "Save" : "Store";
+}
+function resetStoreForm(form) {
+  if (!form) return;
+  form.item_id.value = "";
+  form.name.value = "";
+  form.kind.value = "secret";
+  if (form.environment.options.length) form.environment.selectedIndex = 0;
+  form.value.value = "";
+  form.value.required = true;
+  form.value.placeholder = "";
+  form.username.value = "";
+  form.allowed_hosts.value = "";
+  form.inject.value = "bearer";
+  form.removeAttribute("data-original-inject");
+  const adv = document.getElementById("store-inject-advanced");
+  if (adv) adv.open = false;
+  setStoreMode(false);
+  syncStoreAuthFields(form);
+}
 function openStore() {
   setFormNotice("store-error", "", true);
+  resetStoreForm(document.getElementById("store"));
+  const d = document.getElementById("store-dialog");
+  if (d && d.showModal) d.showModal();
+}
+function openEdit(item) {
+  setFormNotice("store-error", "", true);
+  const form = document.getElementById("store");
+  if (form) {
+    form.item_id.value = item.id || "";
+    form.name.value = item.name || "";
+    form.kind.value = formKindForItem(item.kind, item.inject);
+    if (item.environment) form.environment.value = item.environment;
+    form.value.value = "";
+    form.value.required = false;
+    form.value.placeholder = "Leave blank to keep the current secret";
+    form.username.value = item.username || "";
+    form.allowed_hosts.value = (item.allowedHosts || item.allowed_hosts || []).join(", ");
+    form.inject.value = item.inject || (form.kind.value === "client_secret" ? "client_credentials" : "bearer");
+    form.setAttribute("data-original-inject", item.inject || "");
+    setStoreMode(true);
+    syncStoreAuthFields(form);
+  }
   const d = document.getElementById("store-dialog");
   if (d && d.showModal) d.showModal();
 }
@@ -300,11 +361,19 @@ function storeAuthSummary(inject) {
 function syncStoreAuthFields(form) {
   const row = document.getElementById("store-username");
   const summary = document.getElementById("store-inject-summary");
+  const userLabel = document.getElementById("store-username-label");
+  const valueLabel = document.getElementById("store-value-label");
   if (!form) return;
-  const show = form.kind.value === "login" || form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials";
+  const show = form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials";
   if (row) {
     row.hidden = !show;
     if (!show) form.username.value = "";
+  }
+  if (userLabel) {
+    userLabel.textContent = (form.kind.value === "client_secret" || form.inject.value === "client_credentials") ? "Client ID" : "HTTP Basic username";
+  }
+  if (valueLabel) {
+    valueLabel.textContent = (form.kind.value === "client_secret" || form.inject.value === "client_credentials") ? "Client Secret" : "Value";
   }
   if (summary) summary.textContent = storeAuthSummary(form.inject.value);
 }
@@ -343,8 +412,7 @@ document.addEventListener("DOMContentLoaded", function() {
   const store = document.getElementById("store");
   if (store) {
     store.kind.addEventListener("change", function() {
-      if (store.kind.value === "login") store.inject.value = "basic";
-      else if (store.kind.value === "client_secret") {
+      if (store.kind.value === "client_secret") {
         store.inject.value = "client_credentials";
         if (!store.allowed_hosts.value) store.allowed_hosts.value = "api.spotify.com, accounts.spotify.com";
       } else store.inject.value = "bearer";
@@ -357,21 +425,24 @@ document.addEventListener("DOMContentLoaded", function() {
       const f = store;
       setFormNotice("store-error", "", true);
       const hosts = f.allowed_hosts.value.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-      const kind = f.kind.value === "login" ? "login" : "secret";
-      const inject = f.kind.value === "client_secret" ? "client_credentials" : f.inject.value;
-      const r = await api("/api/items", { method: "POST", body: JSON.stringify({
+      const kind = f.kind.value === "client_secret" ? "client_secret" : "secret";
+      const inject = f.kind.value === "client_secret" ? "client_credentials" : (f.inject.value || f.getAttribute("data-original-inject") || "bearer");
+      const editing = Boolean(f.item_id.value);
+      const body = {
         name: f.name.value, kind: kind, environment: f.environment.value,
-        value: f.value.value,
-        username: (kind === "login" || inject === "basic" || inject === "client_credentials") ? (f.username.value || undefined) : undefined,
+        username: (kind === "client_secret" || inject === "basic" || inject === "client_credentials") ? (f.username.value || undefined) : undefined,
         allowed_hosts: hosts, inject: inject
-      }) });
+      };
+      if (!editing || f.value.value) body.value = f.value.value;
+      const url = editing ? "/api/items/" + f.item_id.value : "/api/items";
+      const r = await api(url, { method: "POST", body: JSON.stringify(body) });
       const j = await r.json().catch(function() { return {}; });
       if (r.ok) {
         f.value.value = "";
-        flash("Stored", true);
+        flash(editing ? "Updated" : "Stored", true);
         closeDialog("store-dialog");
       } else {
-        setFormNotice("store-error", j.error || "Store failed", false);
+        setFormNotice("store-error", j.error || (editing ? "Update failed" : "Store failed"), false);
       }
       loadItems();
     });

@@ -24,7 +24,7 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/.well-known/oauth-authorization-server` | none | RFC 8414. Required `response_types_supported: ["code"]`. PKCE `S256` only. Same JSON at `/mcp` suffix, `/mcp/.well-known/…`, and `/.well-known/openid-configuration` |
 | GET | `/robots.txt` | none | Staging allows `/`. Prod disallows `/console`, auth, collect, api, mcp, oauth |
 | GET | `/mcp/tools` | none (or model/operator) | `{ tools }` same as MCP `tools/list` |
-| POST | `/api/items/:id/meta` | operator | `{ username?, inject?, allowed_hosts? }` public item (Client ID on a secret) |
+| POST | `/api/items/:id/meta` | operator | `{ name?, kind?, environment?, username?, inject?, allowed_hosts?, value? }` public item. Blank `value` keeps the current secret. |
 | POST | `/api/integrations/spotify/start` | operator | `{ item_name, environment?, client_id? }` → `{ authorize_url, redirect_uri }` |
 | GET | `/integrations/spotify/callback` | operator cookie | Exchanges the code, stores a refresh token, redirects to `/console#vault` |
 
@@ -52,7 +52,8 @@ All require `operatorReady` unless noted.
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
 | GET | `/api/items` | omit `environment` for every env this deploy plane serves; or `?environment=staging\|production` | `{ items }` public fields (name, last4, hosts, inject). No values. Staging deploy: `environment=production` is 404 |
-| POST | `/api/items` | `name`, `value`, `environment`, `kind` (`secret`\|`login`), `allowed_hosts`, `inject`, optional `username`, `folder_name` | `{ item }` public |
+| POST | `/api/items` | `name`, `value`, `environment`, `kind` (`secret`\|`client_secret`\|`login`), `allowed_hosts`, `inject`, optional `username`, `folder_name`. Omit `inject` to use the Kind default (Bearer or client_credentials). | `{ item }` public |
+| POST | `/api/items/:id` | Same fields as store. `value` optional; blank keeps the current secret. | `{ item }` public |
 | POST | `/api/items/:id/rotate` | `{ value }` | `{ item }` |
 | DELETE | `/api/items/:id` | | `{ ok: true }` |
 | POST | `/api/folders` | `{ environment, name }` | `{ folder }` |

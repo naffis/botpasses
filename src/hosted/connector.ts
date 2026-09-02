@@ -32,7 +32,7 @@ export type ConnectorItem = {
   inject: string;
   allowedHosts: string[];
   name: string;
-  kind: "secret" | "login";
+  kind: "secret" | "login" | "client_secret";
   grantId?: string;
   grantPolicy?: string;
   itemId?: string;
