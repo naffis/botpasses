@@ -137,7 +137,7 @@ No `/api/items`, OAuth, or Access panel on the local plane.
 | Status | When |
 | --- | --- |
 | 401 | Missing/invalid session or Bearer |
-| 403 | CSRF, MFA, wrong channel, Origin not allowed (no ACAO) |
+| 403 | CSRF, MFA, wrong channel, foreign Origin on `/api` (no ACAO). `/mcp` and `/oauth` reflect a foreign Origin. |
 | 404 | Unknown or cross-org id (need, client, grant) |
 | 409 | Duplicate item name, consumed approval code |
 | 410 | Expired approval |

@@ -429,7 +429,7 @@ test("AC-25 DCR rejects javascript; stores https redirect; AC-19 metadata", asyn
 
     const ok = await fetch(`${ctx.base}/oauth/register`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", origin: "https://grok.x.ai" },
       body: JSON.stringify({
         client_name: "good",
         redirect_uris: ["https://evil.example/cb"],
@@ -439,6 +439,7 @@ test("AC-25 DCR rejects javascript; stores https redirect; AC-19 metadata", asyn
       }),
     });
     assert.ok(ok.status === 200 || ok.status === 201);
+    assert.equal(ok.headers.get("access-control-allow-origin"), "https://grok.x.ai");
     assert.equal(ok.headers.get("x-frame-options"), "DENY");
     assert.equal(ok.headers.get("cache-control"), "no-store");
     assert.equal(ok.headers.get("strict-transport-security"), "max-age=63072000");

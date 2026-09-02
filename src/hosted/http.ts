@@ -39,19 +39,13 @@ import {
   mcpWwwAuthenticate,
   oauthDiscoveryDocument,
 } from "./oauth-metadata.ts";
+import { bindCors, corsHeaders, corsPath, corsPublicUrl, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
 import type Provider from "oidc-provider";
 
 const BODY_CAP = 128 * 1024;
 const KEEPALIVE_MS = 25_000;
 
-type CorsState = {
-  req?: IncomingMessage;
-  allowed: string[];
-  testMode: boolean;
-  path: string;
-  publicUrl: string;
-};
-const corsState: CorsState = { allowed: [], testMode: false, path: "", publicUrl: "" };
+export { hostAllowed } from "./http-cors.ts";
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;
@@ -80,9 +74,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const siteRoot = opts.siteRoot;
   const deployPlane = opts.deployPlane ?? opts.kernel.deployPlane;
   const testMode = opts.authResolver === testAuthResolver || process.env.VAULT_AUTH_MODE === "test";
-  corsState.allowed = allowed;
-  corsState.testMode = testMode;
-  corsState.publicUrl = publicUrl;
   const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
   const identity = opts.identity;
   const oidcProvider = opts.oidcProvider;
@@ -107,8 +98,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     const path = url.pathname;
     const method = req.method ?? "GET";
 
-    corsState.req = req;
-    corsState.path = path;
+    bindCors(res, { req, path, allowed, testMode, publicUrl });
     const originHdr = typeof req.headers.origin === "string" ? req.headers.origin : "";
     if (originHdr && !originAllowed(originHdr, allowed) && !isMcpClientSurface(path)) {
       res.writeHead(403, {
@@ -120,7 +110,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "OPTIONS") {
-      res.writeHead(204, corsHeaders());
+      res.writeHead(204, corsHeaders(res));
       res.end();
       return;
     }
@@ -340,7 +330,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
       "content-type": "application/json; charset=utf-8",
       "set-cookie": cookies,
       ...securityHeaders({ html: false }),
-      ...corsHeaders(),
+      ...corsHeaders(res),
     });
     res.end(JSON.stringify(body));
   }
@@ -810,35 +800,6 @@ function mcpToolName(body: JsonRpcRequest): string | undefined {
   return typeof name === "string" ? name : undefined;
 }
 
-function hostAllowlist(publicUrl: string): string[] {
-  try {
-    return [new URL(publicUrl).host, "127.0.0.1", "localhost"];
-  } catch {
-    return ["127.0.0.1", "localhost"];
-  }
-}
-
-export function hostAllowed(hostHeader: string, allowed: string[]): boolean {
-  const host = (hostHeader.split(":")[0] ?? "").toLowerCase();
-  if (!host) return false;
-  if (host === "127.0.0.1" || host === "localhost") return true;
-  return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
-}
-
-function originOk(req: IncomingMessage, allowed: string[], path: string): boolean {
-  const host = req.headers.host ?? "";
-  if (!hostAllowed(host, allowed)) return false;
-  if (isMcpClientSurface(path)) return true;
-  const origin = req.headers.origin;
-  if (!origin) return true;
-  try {
-    const o = new URL(origin).hostname;
-    return hostAllowed(o, allowed);
-  } catch {
-    return false;
-  }
-}
-
 function sseKeepalive(res: ServerResponse): void {
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -852,49 +813,23 @@ function sseKeepalive(res: ServerResponse): void {
   res.on("close", () => clearInterval(timer));
 }
 
-function originAllowed(origin: string, allowedHosts: string[]): boolean {
-  try {
-    return hostAllowed(new URL(origin).hostname, allowedHosts);
-  } catch {
-    return false;
-  }
-}
-
-function corsHeaders(): Record<string, string> {
-  const testHeaders = corsState.testMode
-    ? ", X-Test-Channel, X-Test-User, X-Test-Org, X-Test-Client"
-    : "";
-  const headers: Record<string, string> = {
-    "access-control-allow-headers": `Authorization, Content-Type, Mcp-Session-Id, X-CSRF-Token${testHeaders}`,
-    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
-    "access-control-expose-headers": "WWW-Authenticate, Mcp-Session-Id",
-  };
-  const origin = typeof corsState.req?.headers.origin === "string" ? corsState.req.headers.origin : "";
-  if (
-    origin &&
-    (originAllowed(origin, corsState.allowed) || isMcpClientSurface(corsState.path))
-  ) {
-    headers["access-control-allow-origin"] = origin;
-  }
-  return headers;
-}
-
 function json(res: ServerResponse, status: number, body: unknown, skipSecurity = false): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     ...(skipSecurity ? {} : securityHeaders({ html: false })),
-    ...corsHeaders(),
+    ...corsHeaders(res),
   });
   res.end(JSON.stringify(body));
 }
 
 function sendError(res: ServerResponse, err: unknown, path = ""): void {
   void captureException(err);
+  const routePath = path || corsPath(res);
   if (isNeedItemError(err)) {
     const headers: Record<string, string> = {
       "content-type": "application/json; charset=utf-8",
       ...securityHeaders({ html: false }),
-      ...corsHeaders(),
+      ...corsHeaders(res),
     };
     res.writeHead(err.status, headers);
     res.end(JSON.stringify(err.payload));
@@ -904,12 +839,12 @@ function sendError(res: ServerResponse, err: unknown, path = ""): void {
     const headers: Record<string, string> = {
       "content-type": "application/json; charset=utf-8",
       ...securityHeaders({ html: false }),
-      ...corsHeaders(),
+      ...corsHeaders(res),
     };
     if (err.status === 401) {
       headers["www-authenticate"] =
-        path === "/mcp" || path.startsWith("/mcp")
-          ? mcpWwwAuthenticate(corsState.publicUrl, WWW_AUTHENTICATE_REALM)
+        routePath === "/mcp" || routePath.startsWith("/mcp")
+          ? mcpWwwAuthenticate(corsPublicUrl(res), WWW_AUTHENTICATE_REALM)
           : `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
     }
     res.writeHead(err.status, headers);

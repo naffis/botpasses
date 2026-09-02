@@ -1065,8 +1065,16 @@ test("unauthenticated GET /mcp is 401", async () => {
   try {
     const res = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
     assert.equal(res.status, 401);
+    assert.match(
+      res.headers.get("www-authenticate") ?? "",
+      /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
+    );
     const tools = await fetch(`${ctx.base}/mcp/tools`);
     assert.equal(tools.status, 401);
+    assert.match(
+      tools.headers.get("www-authenticate") ?? "",
+      /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
+    );
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -1127,7 +1135,7 @@ test("hosted MCP initialize name is botpasses", async () => {
   }
 });
 
-test("CORS disallowed Origin is 403 without ACAO (AC-10)", async () => {
+test("MCP CORS reflects foreign Origin; operator /api still 403 (AC-10)", async () => {
   const ctx = await setup();
   try {
     const evil = await fetch(`${ctx.base}/mcp`, {
@@ -1160,6 +1168,42 @@ test("CORS disallowed Origin is 403 without ACAO (AC-10)", async () => {
     assert.equal(noOrigin.status, 200);
     assert.equal(noOrigin.headers.get("access-control-allow-origin"), null);
     assert.match(await noOrigin.text(), /STRIPE_KEY/);
+    const grokOrigin = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...ctx.modelH, origin: "https://grok.x.ai" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 10, method: "tools/list" }),
+    });
+    assert.equal(grokOrigin.status, 200);
+    assert.equal(grokOrigin.headers.get("access-control-allow-origin"), "https://grok.x.ai");
+    const [grok, claude] = await Promise.all([
+      fetch(`${ctx.base}/mcp`, {
+        method: "POST",
+        headers: { ...ctx.modelH, origin: "https://grok.x.ai" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 11, method: "tools/list" }),
+      }),
+      fetch(`${ctx.base}/mcp`, {
+        method: "POST",
+        headers: { ...ctx.modelH, origin: "https://claude.ai" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 12, method: "tools/list" }),
+      }),
+    ]);
+    assert.equal(grok.status, 200);
+    assert.equal(claude.status, 200);
+    assert.equal(grok.headers.get("access-control-allow-origin"), "https://grok.x.ai");
+    assert.equal(claude.headers.get("access-control-allow-origin"), "https://claude.ai");
+    const sse = await fetch(`${ctx.base}/mcp`, {
+      headers: { ...ctx.modelH, origin: "https://grok.x.ai", accept: "text/event-stream" },
+    });
+    assert.equal(sse.status, 200);
+    assert.equal(sse.headers.get("access-control-allow-origin"), "https://grok.x.ai");
+    await sse.body?.cancel();
+    const note = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...ctx.modelH, origin: "https://grok.x.ai", "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+    assert.equal(note.status, 202);
+    assert.equal(note.headers.get("access-control-allow-origin"), "https://grok.x.ai");
     const prod = createHostedServer({
       kernel: ctx.kernel,
       host: "127.0.0.1",
@@ -1175,6 +1219,17 @@ test("CORS disallowed Origin is 403 without ACAO (AC-10)", async () => {
       });
       assert.equal(allowed.status, 204);
       assert.equal(allowed.headers.get("access-control-allow-origin"), "https://botpasses.com");
+      const firstUnauth = await fetch(`${ctx.base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://grok.x.ai" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 13, method: "tools/list" }),
+      });
+      assert.equal(firstUnauth.status, 401);
+      assert.match(
+        firstUnauth.headers.get("www-authenticate") ?? "",
+        /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
+      );
+      assert.doesNotMatch(firstUnauth.headers.get("www-authenticate") ?? "", /botpasses\.com/);
     } finally {
       await prod.close();
     }

@@ -20,8 +20,8 @@ import Docs from "../../../layouts/Docs.astro";
     </thead>
     <tbody>
       <tr>
-        <td>Grok Bot</td>
-        <td>Custom connector URL <code>/mcp</code> plus <code>Authorization: Bearer avm_…</code> from the console.</td>
+        <td>Grok</td>
+        <td>Add this origin’s <code>/mcp</code> URL. OAuth sign-in on this origin, or paste a console-issued <code>avm_</code> token only (the client adds Bearer).</td>
       </tr>
       <tr>
         <td>Claude / ChatGPT / Cursor</td>
@@ -35,8 +35,9 @@ import Docs from "../../../layouts/Docs.astro";
   </table>
   <p>
     Unauthenticated <code>POST /mcp</code> is 401. The
-    <code>WWW-Authenticate</code> header includes <code>resource_metadata=</code> pointing at
-    <code>/.well-known/oauth-protected-resource</code>.
+    <code>WWW-Authenticate</code> header includes an absolute
+    <code>resource_metadata</code> URL for
+    <code>/.well-known/oauth-protected-resource/mcp</code>.
   </p>
 
   <h2>JSON-RPC</h2>
