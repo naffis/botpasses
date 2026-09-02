@@ -12,6 +12,7 @@ import type { EmailOtpRecord, OperatorSessionRecord, UserRecord } from "../hoste
 import type { VaultStore } from "../store/types.ts";
 import { HttpError } from "./errors.ts";
 import type { EmailSender } from "./email.ts";
+import { buildOtpEmail } from "./otp-email.ts";
 import * as OTPAuth from "otpauth";
 import { otpauthQrSvg } from "./totp-qr.ts";
 
@@ -135,6 +136,12 @@ function mintOtp(): string {
   return String(randomInt(0, 100_000_000)).padStart(8, "0");
 }
 
+function otpChallengeLive(row: EmailOtpRecord | undefined, nowMs: number): boolean {
+  if (!row) return false;
+  if (Date.parse(row.expiresAt) <= nowMs) return false;
+  return row.attempts < OTP_MAX_ATTEMPTS;
+}
+
 function mintBackup(): string {
   const bytes = randomBytes(10);
   let out = "";
@@ -185,10 +192,15 @@ export class OperatorIdentity {
     return first || remote || "0.0.0.0";
   }
 
+  /** Same `{ ok: true }` for unknown emails. Does not send again while a code is still valid. */
   async sendOtp(emailRaw: string, ip: string): Promise<{ ok: true }> {
     const email = normalizeEmail(emailRaw);
     const now = this.now();
     const nowMs = now.getTime();
+    const existing = await this.store.latestEmailOtp(email);
+    if (otpChallengeLive(existing, nowMs)) {
+      return { ok: true };
+    }
     if (!this.ipLimiter.allow(`ip:${ip}`, OTP_IP_MAX, OTP_EMAIL_WINDOW_MS, nowMs)) {
       throw new HttpError(429, "Too many requests");
     }
@@ -196,6 +208,7 @@ export class OperatorIdentity {
     const sent = await this.store.countEmailOtpSince(email, since);
     if (sent >= OTP_EMAIL_MAX) throw new HttpError(429, "Too many requests");
     const code = mintOtp();
+    const mail = buildOtpEmail(code, OTP_TTL_MS / 60_000);
     const row: EmailOtpRecord = {
       id: `otp_${randomUUID()}`,
       email,
@@ -207,11 +220,7 @@ export class OperatorIdentity {
     await this.store.insertEmailOtp(row);
     if (this.sendEmail) {
       try {
-        await this.sendEmail(
-          email,
-          "Your Botpasses sign-in code",
-          `<p>Your sign-in code expires in 10 minutes.</p><p>${code}</p>`,
-        );
+        await this.sendEmail(email, mail.subject, mail.html, mail.text);
       } catch {
         throw new HttpError(503, "Email delivery failed");
       }
