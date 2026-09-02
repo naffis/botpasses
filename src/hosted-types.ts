@@ -1,6 +1,6 @@
 export type MemberRole = "owner" | "operator";
 export type VaultEnvName = "staging" | "production";
-export type ItemKind = "secret" | "login";
+export type ItemKind = "secret" | "login" | "client_secret";
 export type InjectMode = "bearer" | "basic" | `header:${string}`;
 export type ClientKind = "model" | "trusted";
 export type GrantPolicy = "prompt" | "session" | "item_standing" | "folder_standing";

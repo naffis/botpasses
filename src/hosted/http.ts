@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "../brand.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { ItemKind, VaultEnvName } from "../hosted-types.ts";
+import { defaultInjectForKind } from "./store-form-fields.ts";
 import {
   requireModelOrOperator,
   requireOperator,
@@ -456,16 +457,17 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (method === "POST" && path === "/api/items") {
       const op = requireOperator(principal);
       const body = await readJson(req);
+      const kind = asKind(body.kind);
       const item = await opts.kernel.createItem({
         orgId: op.orgId,
         actor: op.userId,
         environment: asEnv(body.environment),
-        kind: asKind(body.kind),
+        kind,
         name: String(body.name ?? ""),
         value: String(body.value ?? ""),
         username: optional(body.username),
         allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-        inject: String(body.inject ?? "bearer"),
+        inject: String(body.inject ?? defaultInjectForKind(kind)),
         folderName: optional(body.folder_name ?? body.folderName),
       });
       json(res, 200, { item });
@@ -525,7 +527,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         value: String(body.value ?? ""),
         name: optional(body.name),
         allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-        inject: String(body.inject ?? "bearer"),
+        inject: String(body.inject ?? defaultInjectForKind(body.kind === undefined ? "secret" : asKind(body.kind))),
         kind: body.kind === undefined ? undefined : asKind(body.kind),
         username: optional(body.username),
       });
@@ -536,15 +538,40 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (method === "POST" && itemMeta) {
       const op = requireOperator(principal);
       const body = await readJson(req);
-      const item = await opts.kernel.updateItemMeta({
+      const item = await opts.kernel.updateItem({
         orgId: op.orgId,
         actor: op.userId,
         itemId: decodeURIComponent(itemMeta[1] ?? ""),
+        name: optional(body.name),
+        kind: body.kind === undefined ? undefined : asKind(body.kind),
+        environment: body.environment === undefined ? undefined : asEnv(body.environment),
         username: optional(body.username),
         inject: optional(body.inject),
         allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
           ? asHosts(body.allowed_hosts ?? body.allowedHosts)
           : undefined,
+        value: optional(body.value),
+      });
+      json(res, 200, { item });
+      return;
+    }
+    const itemUpdate = /^\/api\/items\/([^/]+)$/.exec(path);
+    if (method === "POST" && itemUpdate) {
+      const op = requireOperator(principal);
+      const body = await readJson(req);
+      const item = await opts.kernel.updateItem({
+        orgId: op.orgId,
+        actor: op.userId,
+        itemId: decodeURIComponent(itemUpdate[1] ?? ""),
+        name: optional(body.name),
+        kind: body.kind === undefined ? undefined : asKind(body.kind),
+        environment: body.environment === undefined ? undefined : asEnv(body.environment),
+        username: optional(body.username),
+        inject: optional(body.inject),
+        allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
+          ? asHosts(body.allowed_hosts ?? body.allowedHosts)
+          : undefined,
+        value: optional(body.value),
       });
       json(res, 200, { item });
       return;
@@ -859,7 +886,9 @@ function asEnv(value: unknown): VaultEnvName {
 }
 
 function asKind(value: unknown): ItemKind {
-  return value === "login" ? "login" : "secret";
+  if (value === "login") return "login";
+  if (value === "client_secret") return "client_secret";
+  return "secret";
 }
 
 function asHosts(value: unknown): string[] {

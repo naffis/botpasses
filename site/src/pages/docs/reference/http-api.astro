@@ -84,7 +84,8 @@ import Docs from "../../../layouts/Docs.astro";
     </thead>
     <tbody>
       <tr><td>GET</td><td><code>/api/items</code></td><td>Names, last-4, hosts, inject. No values. Omit <code>environment</code> to list every env this deploy serves. Staging deploy: <code>environment=production</code> is 404.</td></tr>
-      <tr><td>POST</td><td><code>/api/items</code></td><td><code>name</code>, <code>value</code>, <code>environment</code>, <code>kind</code> (<code>secret</code> or <code>login</code>), <code>allowed_hosts</code>, <code>inject</code> (<code>bearer</code>, <code>basic</code>, or <code>header:Name</code>)</td></tr>
+      <tr><td>POST</td><td><code>/api/items</code></td><td><code>name</code>, <code>value</code>, <code>environment</code>, <code>kind</code> (<code>secret</code>, <code>client_secret</code>, or <code>login</code>), <code>allowed_hosts</code>, <code>inject</code> (<code>bearer</code>, <code>client_credentials</code>, <code>basic</code>, or <code>header:Name</code>). <code>client_secret</code> needs a Client ID in <code>username</code>.</td></tr>
+      <tr><td>POST</td><td><code>/api/items/:id</code></td><td>Edit name, kind, environment, hosts, Client ID, send-as. <code>value</code> optional; blank keeps the current secret.</td></tr>
       <tr><td>POST</td><td><code>/api/items/:id/rotate</code></td><td>Replace the value. Response is public metadata.</td></tr>
       <tr><td>DELETE</td><td><code>/api/items/:id</code></td><td>Confirm in the console dialog first.</td></tr>
       <tr><td>GET</td><td><code>/api/need-items/:id</code></td><td>Operator only. Unsigned GET is 404 (not public JSON).</td></tr>
