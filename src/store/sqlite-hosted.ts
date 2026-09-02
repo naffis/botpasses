@@ -23,7 +23,7 @@ import type {
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
 import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { VaultStore } from "./types.ts";
+import type { AuditListFilter, VaultStore } from "./types.ts";
 
 function mapOrg(r: Record<string, unknown>): OrgRecord {
   return {
@@ -360,8 +360,8 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare(
         `INSERT INTO clients (id, org_id, kind, name, hashed_secret, clerk_oauth_user_id, environment,
-          oauth_client_id, revoked_at, last_token_at, last_seen_at, consented_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          oauth_client_id, revoked_at, last_token_at, last_seen_at, last4, consented_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -375,12 +375,15 @@ export class SqliteHostedStore implements VaultStore {
         row.revokedAt,
         row.lastTokenAt,
         row.lastSeenAt,
+        row.last4,
         row.consentedByUserId,
       );
   }
 
-  async updateClientHashedSecret(id: string, hashedSecret: string): Promise<void> {
-    this.#db.prepare("UPDATE clients SET hashed_secret = ? WHERE id = ?").run(hashedSecret, id);
+  async updateClientHashedSecret(id: string, hashedSecret: string, tokenLast4: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE clients SET hashed_secret = ?, last4 = ? WHERE id = ?")
+      .run(hashedSecret, tokenLast4, id);
   }
 
   async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
@@ -710,10 +713,25 @@ export class SqliteHostedStore implements VaultStore {
     }));
   }
 
-  async listAudit(orgId: string, limit = 200): Promise<HostedAuditRecord[]> {
+  async listAudit(orgId: string, limit = 200, filter?: AuditListFilter): Promise<HostedAuditRecord[]> {
+    const clauses = ["org_id = ?"];
+    const params: Array<string | number> = [orgId];
+    if (filter?.clientId) {
+      clauses.push("client_id = ?");
+      params.push(filter.clientId);
+    }
+    if (filter?.itemName) {
+      clauses.push("item_name = ?");
+      params.push(filter.itemName);
+    }
+    if (filter?.action) {
+      clauses.push("action = ?");
+      params.push(filter.action);
+    }
+    params.push(limit);
     const rows = this.#db
-      .prepare("SELECT * FROM audit WHERE org_id = ? ORDER BY at DESC LIMIT ?")
-      .all(orgId, limit) as Record<string, unknown>[];
+      .prepare(`SELECT * FROM audit WHERE ${clauses.join(" AND ")} ORDER BY at DESC LIMIT ?`)
+      .all(...params) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: String(r.id),
       orgId: String(r.org_id),

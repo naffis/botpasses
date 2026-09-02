@@ -47,12 +47,17 @@ function openConfirm(kind, id) {
   const d = document.getElementById("confirm");
   if (d && d.showModal) d.showModal();
 }
+function hashPanel(hash) {
+  const h = (hash || "").replace(/^#/, "").split("/")[0];
+  if (h === "connect") return "access";
+  if (h === "inbox" || h === "access" || h === "vault") return h;
+  return "vault";
+}
 function showPanel(name) {
   const titles = {
     inbox: ["Inbox", "Approve an agent when it needs a credential. The model never sees the value."],
     vault: ["Vault", "Named credentials. Last-4 only. Rotate or delete from the row."],
-    connect: ["Connect", "Issue a token once. Then ask the agent in plain language."],
-    access: ["Access", "Who holds a token, grant, or session. Revoke from here."]
+    access: ["Access", "Issue a token once. Then see who holds it, last-4, last used, and the audit log."]
   };
   const info = titles[name] || titles.vault;
   document.querySelectorAll("[data-panel]").forEach(function(p) {
@@ -66,7 +71,7 @@ function showPanel(name) {
   text(document.getElementById("page-lede"), info[1]);
   const storeBtn = document.getElementById("open-store");
   if (storeBtn) storeBtn.hidden = document.body.dataset.session === "out" || name !== "vault";
-  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+  if (hashPanel(location.hash) !== name) history.replaceState(null, "", "#" + name);
 }
 function currentPanel() {
   const active = document.querySelector("[data-panel].is-active");
@@ -224,92 +229,6 @@ async function loadInbox() {
     ));
   }
 }
-function accessRow(parts, action) {
-  const row = document.createElement("div");
-  row.className = "access-row";
-  const p = document.createElement("p");
-  p.textContent = parts.filter(Boolean).join(" · ");
-  row.appendChild(p);
-  if (action) row.appendChild(action);
-  return row;
-}
-function revokeBtn(kind, id) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "btn-danger";
-  b.textContent = "Revoke";
-  b.addEventListener("click", function() { openConfirm(kind, id); });
-  return b;
-}
-function listEmpty(el, message) {
-  if (!el) return;
-  el.innerHTML = "";
-  const p = document.createElement("p");
-  p.className = "section-empty hint";
-  p.textContent = message;
-  el.appendChild(p);
-}
-async function loadAccess() {
-  const panel = document.getElementById("access-panel");
-  const err = document.getElementById("access-error");
-  if (!panel) return;
-  setHidden("access-error", true);
-  const snap = await api("/api/access");
-  const data = await snap.json().catch(function() { return {}; });
-  if (snap.status === 401) { sessionOut(true); return; }
-  if (!snap.ok) {
-    text(err, data.error || ("Could not load access (" + snap.status + ")"));
-    setHidden("access-error", false);
-    return;
-  }
-  const ev = await api("/api/access/events");
-  const ledger = await ev.json().catch(function() { return {}; });
-  if (!ev.ok) {
-    text(err, ledger.error || ("Could not load activity (" + ev.status + ")"));
-    setHidden("access-error", false);
-  }
-  const clients = data.clients || [];
-  const grants = data.grants || [];
-  const sessions = data.sessions || [];
-  const empty = clients.length === 0 && grants.length === 0 && sessions.filter(function(s) { return !s.current; }).length === 0;
-  const emptyEl = document.getElementById("access-empty");
-  if (emptyEl) emptyEl.hidden = !empty;
-  const cEl = document.getElementById("access-clients");
-  const gEl = document.getElementById("access-grants");
-  const sEl = document.getElementById("access-sessions");
-  const aEl = document.getElementById("access-activity");
-  if (cEl) {
-    cEl.innerHTML = "";
-    if (!clients.length) listEmpty(cEl, "No clients yet. Issue a token from Connect.");
-    else for (const c of clients) {
-      cEl.appendChild(accessRow([c.name, c.kind, c.status, c.environment], c.status === "active" ? revokeBtn("client", c.id) : null));
-    }
-  }
-  if (gEl) {
-    gEl.innerHTML = "";
-    if (!grants.length) listEmpty(gEl, "No grants yet.");
-    else for (const g of grants) {
-      const live = g.status === "active" || g.status === "pending";
-      gEl.appendChild(accessRow([g.item_name, g.client_name, g.status], live ? revokeBtn("grant", g.id) : null));
-    }
-  }
-  if (sEl) {
-    sEl.innerHTML = "";
-    if (!sessions.length) listEmpty(sEl, "No other sessions.");
-    else for (const s of sessions) {
-      sEl.appendChild(accessRow([s.id, s.current ? "current" : ""], s.current ? null : revokeBtn("session", s.id)));
-    }
-  }
-  if (aEl) {
-    aEl.innerHTML = "";
-    const events = ev.ok ? (ledger.events || []) : [];
-    if (!ev.ok) listEmpty(aEl, "Could not load activity.");
-    else if (!events.length) listEmpty(aEl, "No activity yet.");
-    else for (const e of events) {
-      aEl.appendChild(accessRow([e.kind, e.issued_at, e.revoked_at ? "revoked" : ""]));
-    }
-  }
-}
 function openStore() {
   setFormNotice("store-error", "", true);
   const d = document.getElementById("store-dialog");
@@ -349,11 +268,21 @@ function closeDialog(id) {
 document.addEventListener("DOMContentLoaded", function() {
   const mcp = document.getElementById("mcp_url");
   if (mcp) mcp.textContent = location.origin + "/mcp";
-  landingHash = (location.hash || "").replace("#", "");
+  let grokToken = "";
+  const copyGrok = document.getElementById("copy-grok");
+  function showIssuedToken(token) {
+    grokToken = token || "";
+    const box = document.getElementById("grok_once");
+    if (box) box.textContent = grokToken
+      ? "Shown once. Paste only this token into Grok (it adds Bearer):\\n" + grokToken
+      : "";
+    if (copyGrok) copyGrok.hidden = !grokToken;
+  }
+  landingHash = hashPanel(location.hash);
   document.querySelectorAll("[data-nav]").forEach(function(btn) {
     btn.addEventListener("click", function() { showPanel(btn.getAttribute("data-nav")); });
   });
-  showPanel(landingHash === "inbox" || landingHash === "connect" || landingHash === "access" ? landingHash : "vault");
+  showPanel(landingHash);
   const boot = document.getElementById("bootstrap");
   if (boot) {
     boot.addEventListener("submit", function(e) {
@@ -394,6 +323,12 @@ document.addEventListener("DOMContentLoaded", function() {
       loadItems();
     });
   }
+  const auditClear = document.getElementById("access-audit-clear");
+  if (auditClear) auditClear.addEventListener("click", function(e) {
+    e.preventDefault();
+    history.replaceState(null, "", "#access");
+    loadAccess();
+  });
   const openStoreBtn = document.getElementById("open-store");
   if (openStoreBtn) openStoreBtn.addEventListener("click", openStore);
   const emptyStore = document.getElementById("empty-store");
@@ -403,8 +338,6 @@ document.addEventListener("DOMContentLoaded", function() {
     const el = document.getElementById("mcp_url");
     copyText(el ? el.textContent : "", "MCP URL copied");
   });
-  let grokToken = "";
-  const copyGrok = document.getElementById("copy-grok");
   if (copyGrok) copyGrok.addEventListener("click", function() { copyText(grokToken, "Token copied"); });
   const rotate = document.getElementById("rotate");
   if (rotate) rotate.addEventListener("submit", async function(e) {
@@ -435,19 +368,14 @@ document.addEventListener("DOMContentLoaded", function() {
     setFormNotice("grok-error", "", true);
     const r = await api("/api/clients/model", { method: "POST", body: JSON.stringify({ name: grok.name.value || "grok", environment: grok.environment.value }) });
     const j = await r.json().catch(function() { return {}; });
-    const box = document.getElementById("grok_once");
     if (!r.ok || !j.token) {
       const msg = j.error || "Could not issue Grok token";
       setFormNotice("grok-error", msg, false);
       flash(msg, false);
-      if (box) box.textContent = "";
-      if (copyGrok) copyGrok.hidden = true;
-      grokToken = "";
+      showIssuedToken("");
       return;
     }
-    grokToken = j.token;
-    if (box) box.textContent = "Shown once. Grok Bot connector Authorization:\\nBearer " + j.token;
-    if (copyGrok) copyGrok.hidden = false;
+    showIssuedToken(j.token);
     flash("Grok token issued. Copy it now.", true);
     loadAccess();
   });
@@ -457,6 +385,7 @@ document.addEventListener("DOMContentLoaded", function() {
     let r;
     if (pendingDelete.kind === "item") r = await api("/api/items/" + pendingDelete.id, { method: "DELETE" });
     else if (pendingDelete.kind === "client") r = await api("/api/clients/" + pendingDelete.id + "/revoke", { method: "POST", body: "{}" });
+    else if (pendingDelete.kind === "client-rotate") r = await api("/api/clients/" + pendingDelete.id + "/rotate", { method: "POST", body: "{}" });
     else if (pendingDelete.kind === "grant") r = await api("/api/grants/" + pendingDelete.id + "/revoke", { method: "POST", body: "{}" });
     else if (pendingDelete.kind === "session") r = await api("/api/sessions/" + pendingDelete.id + "/revoke", { method: "POST", body: "{}" });
     else {
@@ -467,6 +396,14 @@ document.addEventListener("DOMContentLoaded", function() {
     if (!r.ok) {
       setFormNotice("confirm-error", j.error || "Request failed", false);
       return;
+    }
+    if (pendingDelete.kind === "client-rotate") {
+      if (!j.token) {
+        setFormNotice("confirm-error", "Rotate did not return a token", false);
+        return;
+      }
+      showIssuedToken(j.token);
+      flash("New token issued. Copy it now.", true);
     }
     if (confirm && confirm.close) confirm.close();
     loadItems(); loadInbox(); loadAccess();

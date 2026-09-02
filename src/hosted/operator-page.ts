@@ -32,7 +32,6 @@ export function hostedOperatorHtml(
       <nav class="rail-nav" aria-label="Console">
         <button type="button" class="nav-link" data-nav="inbox" data-testid="nav-inbox">Inbox <span id="inbox-badge" class="badge" data-count="0">0</span></button>
         <button type="button" class="nav-link" data-nav="vault" data-testid="nav-vault">Vault</button>
-        <button type="button" class="nav-link" data-nav="connect" data-testid="nav-connect">Connect</button>
         <button type="button" class="nav-link" data-nav="access" data-testid="nav-access">Access</button>
       </nav>
       <div class="rail-foot">
@@ -98,12 +97,12 @@ export function hostedOperatorHtml(
             </table>
           </div>
         </section>
-        <section class="panel" data-panel="connect" aria-labelledby="page-title">
-          <div class="banner">Issue a Grok Bot token once. After Grok is connected, ask it in plain language (for example get my Spotify profile). Grok calls the API in the same turn. You approve here if asked. You do not need to tell it to use Botpasses. Never paste a secret into Grok.</div>
+        <section class="panel" data-panel="access" aria-labelledby="page-title">
+          <div class="banner">Issue a token once. After Grok is connected, ask it in plain language (for example get my Spotify profile). Grok calls the API in the same turn. You approve here if asked. You do not need to tell it to use Botpasses. Never paste a secret into Grok. The full token is shown once. Access lists last-4 only.</div>
           <div class="card">
-            <h2>Grok Bot</h2>
+            <h2>Issue token</h2>
             <p class="copy-row">MCP URL <code id="mcp_url"></code> <button type="button" id="copy-mcp" class="btn-ghost">Copy URL</button></p>
-            <p>Connect that URL with Authorization Bearer on the issued token. Then say what you want (get my Spotify profile).</p>
+            <p>Connect that URL. Paste only the issued <code>avm_</code> token. Grok adds Bearer. Then say what you want (get my Spotify profile).</p>
             <form id="grok">
               <label>Client name <input name="name" value="grok" /></label>
               <label>Environment
@@ -115,8 +114,6 @@ export function hostedOperatorHtml(
             <pre id="grok_once"></pre>
             <p class="toolbar"><button type="button" id="copy-grok" class="btn-ghost" hidden>Copy token</button></p>
           </div>
-        </section>
-        <section class="panel" data-panel="access" aria-labelledby="page-title">
           <section id="access-panel" data-testid="access-panel">
             <div id="access-error" class="error-box" hidden data-testid="access-error"></div>
             <p id="access-empty" data-testid="access-empty" hidden>No clients, grants, or other sessions.</p>
@@ -133,8 +130,11 @@ export function hostedOperatorHtml(
               <div id="access-sessions" class="access-list"></div>
             </div>
             <div class="card">
-              <h3>Activity</h3>
-              <div id="access-activity" class="access-list"></div>
+              <h3>Audit log</h3>
+              <p class="hint">Actions and credential names only. Values are never stored here.</p>
+              <p id="access-audit-filter" class="hint" hidden></p>
+              <p class="toolbar"><a href="#access" id="access-audit-clear" hidden>Show all activity</a></p>
+              <div id="access-audit" class="access-list" data-testid="access-audit"></div>
             </div>
           </section>
         </section>

@@ -3,6 +3,7 @@ import Docs from "../../../layouts/Docs.astro";
 ---
 <Docs title="Revoke access — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }, { href: "/docs/how-to/revoke-access", label: "Revoke access" }]}>
   <h1>Revoke access</h1>
-  <p>Open the console Access panel. Every operator, MCP client, machine token, grant, and session is listed there with a full issuance record.</p>
+  <p>Open the console Access panel. Issue a token there (shown once). The list shows last-4 only, plus created time, first and last access, and which credential names it fetched. You cannot see the full token again. Rotate to issue a new one.</p>
+  <p>Open Audit log on a row to see that holder’s activity. The log stores actions and names only. Secret values are never written there.</p>
   <p>Revoke a client to stop its Bearer immediately. Revoke a grant to stop one item. Revoke other sessions to sign them out. Confirm in the dialog before the request is sent.</p>
 </Docs>

@@ -23,7 +23,12 @@ test("operator page can list both environments and rotate or delete", () => {
   assert.match(html, /api\.spotify\.com/);
   assert.match(html, /data-testid="item-delete-confirm"/);
   assert.match(html, /data-testid="access-panel"/);
+  assert.match(html, /data-testid="access-audit"/);
   assert.match(html, /data-testid="access-revoke-confirm"/);
+  assert.match(CONSOLE_JS, /\/api\/audit/);
+  assert.match(CONSOLE_JS, /access-log-link/);
+  assert.match(CONSOLE_JS, /First access/);
+  assert.match(CONSOLE_JS, /Fetched /);
   assert.match(html, /<dialog/);
 });
 
@@ -32,8 +37,11 @@ test("operator console is an app shell with jobs, empty states, and brand fonts"
   assert.match(html, /data-testid="app-shell"/);
   assert.match(html, /data-testid="nav-inbox"/);
   assert.match(html, /data-testid="nav-vault"/);
-  assert.match(html, /data-testid="nav-connect"/);
+  assert.doesNotMatch(html, /data-testid="nav-connect"/);
   assert.match(html, /data-testid="nav-access"/);
+  assert.match(html, /Issue token/);
+  assert.match(CONSOLE_JS, /Token ••••/);
+  assert.match(CONSOLE_JS, /client-rotate/);
   assert.match(html, /data-testid="open-store"/);
   assert.match(html, /data-testid="store-dialog"/);
   assert.match(html, /data-testid="items-empty"/);

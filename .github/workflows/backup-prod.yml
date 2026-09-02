@@ -26,33 +26,22 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           set -euo pipefail
+          node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/hosted-backup.ts require-offsite-env
           STAMP=$(date -u +%Y%m%dT%H%M%SZ)
           pg_dump "$DATABASE_URL_DIRECT" --no-owner --format=custom --file=vault.dump
-          node --input-type=module <<'NODE'
-          import { createCipheriv, randomBytes } from "node:crypto";
-          import { readFileSync, writeFileSync } from "node:fs";
-          const key = Buffer.from(process.env.BACKUP_KEY ?? "", "hex");
-          if (key.length !== 32) throw new Error("BACKUP_KEY must be 32-byte hex");
-          const iv = randomBytes(12);
-          const cipher = createCipheriv("aes-256-gcm", key, iv);
-          const pt = readFileSync("vault.dump");
-          const ct = Buffer.concat([cipher.update(pt), cipher.final()]);
-          writeFileSync("vault.dump.enc", Buffer.concat([iv, cipher.getAuthTag(), ct]));
+          node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/hosted-backup.ts encrypt vault.dump vault.dump.enc
+          npm install --no-save aws4fetch
+          STAMP="$STAMP" node --input-type=module <<'NODE'
+          import { AwsClient } from "aws4fetch";
+          import { readFileSync } from "node:fs";
+          const account = process.env.R2_ACCOUNT_ID ?? "";
+          const bucket = process.env.R2_BUCKET ?? "";
+          const stamp = process.env.STAMP ?? "backup";
+          const client = new AwsClient({
+            accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
+            secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
+          });
+          const url = `https://${account}.r2.cloudflarestorage.com/${bucket}/botpasses-${stamp}.dump.enc`;
+          const res = await client.fetch(url, { method: "PUT", body: readFileSync("vault.dump.enc") });
+          if (!res.ok) throw new Error(`R2 put ${res.status}`);
           NODE
-          if [ -n "${R2_ACCOUNT_ID:-}" ]; then
-            npm install --no-save aws4fetch
-            STAMP="$STAMP" node --input-type=module <<'NODE'
-            import { AwsClient } from "aws4fetch";
-            import { readFileSync } from "node:fs";
-            const account = process.env.R2_ACCOUNT_ID ?? "";
-            const bucket = process.env.R2_BUCKET ?? "";
-            const stamp = process.env.STAMP ?? "backup";
-            const client = new AwsClient({
-              accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
-              secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
-            });
-            const url = `https://${account}.r2.cloudflarestorage.com/${bucket}/botpasses-${stamp}.dump.enc`;
-            const res = await client.fetch(url, { method: "PUT", body: readFileSync("vault.dump.enc") });
-            if (!res.ok) throw new Error(`R2 put ${res.status}`);
-            NODE
-          fi

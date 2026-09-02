@@ -18,6 +18,12 @@ import type {
   VaultRecord,
 } from "../hosted-types.ts";
 
+export type AuditListFilter = {
+  clientId?: string;
+  itemName?: string;
+  action?: string;
+};
+
 export type VaultStore = {
   ping(): Promise<void>;
   close(): Promise<void>;
@@ -69,7 +75,7 @@ export type VaultStore = {
   findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined>;
   listClients(orgId: string): Promise<ClientRecord[]>;
   findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined>;
-  updateClientHashedSecret(id: string, hashedSecret: string): Promise<void>;
+  updateClientHashedSecret(id: string, hashedSecret: string, tokenLast4: string): Promise<void>;
   incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
   countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
 
@@ -102,7 +108,7 @@ export type VaultStore = {
   deleteChallenge(id: string): Promise<void>;
 
   insertAudit(row: HostedAuditRecord): Promise<void>;
-  listAudit(orgId: string, limit?: number): Promise<HostedAuditRecord[]>;
+  listAudit(orgId: string, limit?: number, filter?: AuditListFilter): Promise<HostedAuditRecord[]>;
 
   insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord>;
   getNeed(id: string): Promise<NeedItemRecord | undefined>;

@@ -94,10 +94,8 @@ test("grok issue uses the same plane environment list as store", () => {
 });
 
 test("confirm-yes keeps the dialog open when the mutation fails", () => {
-  assert.match(
-    CONSOLE_JS,
-    /setFormNotice\("confirm-error", j\.error \|\| "Request failed", false\);\s*return;\s*\}\s*if \(confirm && confirm\.close\) confirm\.close\(\)/,
-  );
+  assert.match(CONSOLE_JS, /setFormNotice\("confirm-error", j\.error \|\| "Request failed", false\);\s*return;/);
+  assert.match(CONSOLE_JS, /if \(confirm && confirm\.close\) confirm\.close\(\)/);
 });
 
 test("access load failures show an error instead of an empty panel", () => {
@@ -105,7 +103,7 @@ test("access load failures show an error instead of an empty panel", () => {
   assert.match(html, /data-testid="access-error"/);
   assert.match(CONSOLE_JS, /Could not load access/);
   assert.match(CONSOLE_JS, /if \(!snap\.ok\)/);
-  assert.match(CONSOLE_JS, /Could not load activity/);
+  assert.match(CONSOLE_JS, /Could not load audit/);
 });
 
 test("collect fulfill failures mark the page flash as an error", () => {

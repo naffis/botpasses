@@ -14,6 +14,7 @@ Botpasses is a **grant-vault**. The model never sees secret values. The hosted p
 | Hosted Fly process | Unwrapped platform KEK in memory (from KMS or, before cutover, raw `VAULT_KEK`) | Yes, at inject. Required for `http.request`. |
 | AWS KMS role (Fly OIDC) | `kms:Decrypt` on the plane CMK | Unwraps the platform KEK only. Does not see item plaintext. |
 | Neon dump alone | Ciphertext + wrapped DEKs | No, without the platform KEK. |
+| R2 `pg_dump` blob | AES-256-GCM dump (`BACKUP_KEY`) | No item plaintext. `BACKUP_KEY` must not be the vault KEK. A job that skips R2 is not a backup. |
 | Botpasses staff without KMS + DB | Deploy logs, Sentry (redacted) | No. |
 | Attacker with Fly secrets + Neon | Raw KEK if cutover is incomplete; otherwise wrapped blob + role | Before `VAULT_KEK_REQUIRE_KMS=1`: yes. After cutover: needs the KMS role as well. |
 

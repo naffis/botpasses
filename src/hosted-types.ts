@@ -81,18 +81,20 @@ export type ClientRecord = {
   revokedAt: string | null;
   lastTokenAt: string | null;
   lastSeenAt: string | null;
+  last4: string | null;
   consentedByUserId: string | null;
 };
 
 export function emptyClientFields(): Pick<
   ClientRecord,
-  "oauthClientId" | "revokedAt" | "lastTokenAt" | "lastSeenAt" | "consentedByUserId"
+  "oauthClientId" | "revokedAt" | "lastTokenAt" | "lastSeenAt" | "last4" | "consentedByUserId"
 > {
   return {
     oauthClientId: null,
     revokedAt: null,
     lastTokenAt: null,
     lastSeenAt: null,
+    last4: null,
     consentedByUserId: null,
   };
 }

@@ -38,7 +38,7 @@ Also:
 
 Do not add `clerk.*` CNAMEs.
 
-Neon, Sentry, and R2 dashboard display names are cosmetic. Do not create new Neon projects; copy existing `DATABASE_URL` / `DATABASE_URL_DIRECT`. Do not print secret values when copying (`fly secrets list` shows names only).
+Neon, Sentry, and R2 dashboard display names are cosmetic. Staging and production are **separate Neon projects**. Do not branch prod from staging. Offsite dump restore: [restore.md](restore.md). Do not print secret values when copying (`fly secrets list` shows names only).
 
 ## Fly
 
@@ -52,7 +52,7 @@ fly secrets set VAULT_PUBLIC_URL=https://staging.botpasses.com \
   VAULT_OIDC_PRIVATE_JWK='<RS256 private JWK JSON>' \
   -a botpasses-staging
 # then unset leftover Clerk secrets on both apps
-# reuse existing DATABASE_URL / DATABASE_URL_DIRECT (no new Neon project)
+# DATABASE_URL / DATABASE_URL_DIRECT from the plane's own Neon project (not a staging branch)
 fly certs setup botpasses.com -a botpasses-prod
 fly certs setup staging.botpasses.com -a botpasses-staging
 ```

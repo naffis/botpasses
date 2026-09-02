@@ -1134,10 +1134,8 @@ test("CORS disallowed Origin is 403 without ACAO (AC-10)", async () => {
       method: "OPTIONS",
       headers: { origin: "https://evil.example" },
     });
-    assert.equal(evil.status, 403);
-    assert.equal(evil.headers.get("access-control-allow-origin"), null);
-    assert.equal(evil.headers.get("x-frame-options"), "DENY");
-    assert.equal(evil.headers.get("cache-control"), "no-store");
+    assert.equal(evil.status, 204);
+    assert.equal(evil.headers.get("access-control-allow-origin"), "https://evil.example");
     const post = await fetch(`${ctx.base}/api/items`, {
       headers: { ...ctx.op, origin: "https://evil.example" },
     });

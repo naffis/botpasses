@@ -21,7 +21,7 @@ import type {
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
 import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_PG, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { VaultStore } from "./types.ts";
+import type { AuditListFilter, VaultStore } from "./types.ts";
 
 function asRecord(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
@@ -298,8 +298,8 @@ export class PostgresStore implements VaultStore {
   async insertClient(row: ClientRecord): Promise<void> {
     await this.#pool.query(
       `INSERT INTO clients (id, org_id, kind, name, hashed_secret, clerk_oauth_user_id, environment,
-        oauth_client_id, revoked_at, last_token_at, last_seen_at, consented_by_user_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        oauth_client_id, revoked_at, last_token_at, last_seen_at, last4, consented_by_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
         row.id,
         row.orgId,
@@ -312,13 +312,18 @@ export class PostgresStore implements VaultStore {
         row.revokedAt,
         row.lastTokenAt,
         row.lastSeenAt,
+        row.last4,
         row.consentedByUserId,
       ],
     );
   }
 
-  async updateClientHashedSecret(id: string, hashedSecret: string): Promise<void> {
-    await this.#pool.query("UPDATE clients SET hashed_secret = $1 WHERE id = $2", [hashedSecret, id]);
+  async updateClientHashedSecret(id: string, hashedSecret: string, tokenLast4: string): Promise<void> {
+    await this.#pool.query("UPDATE clients SET hashed_secret = $1, last4 = $2 WHERE id = $3", [
+      hashedSecret,
+      tokenLast4,
+      id,
+    ]);
   }
 
   async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
@@ -544,10 +549,25 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async listAudit(orgId: string, limit = 200): Promise<HostedAuditRecord[]> {
+  async listAudit(orgId: string, limit = 200, filter?: AuditListFilter): Promise<HostedAuditRecord[]> {
+    const clauses = ["org_id=$1"];
+    const params: Array<string | number> = [orgId];
+    if (filter?.clientId) {
+      params.push(filter.clientId);
+      clauses.push(`client_id=$${params.length}`);
+    }
+    if (filter?.itemName) {
+      params.push(filter.itemName);
+      clauses.push(`item_name=$${params.length}`);
+    }
+    if (filter?.action) {
+      params.push(filter.action);
+      clauses.push(`action=$${params.length}`);
+    }
+    params.push(limit);
     const r = await this.#pool.query(
-      "SELECT * FROM audit WHERE org_id=$1 ORDER BY at DESC LIMIT $2",
-      [orgId, limit],
+      `SELECT * FROM audit WHERE ${clauses.join(" AND ")} ORDER BY at DESC LIMIT $${params.length}`,
+      params,
     );
     return r.rows.map((row) => {
       const rec = asRecord(row);

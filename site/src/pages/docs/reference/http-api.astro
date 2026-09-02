@@ -56,8 +56,8 @@ import Docs from "../../../layouts/Docs.astro";
     <tbody>
       <tr><td>GET</td><td><code>/health</code></td><td><code>{"{ ok, product: \"botpasses\" }"}</code>. No key fingerprint.</td></tr>
       <tr><td>GET</td><td><code>/ready</code></td><td>200 or 503 from the database ping.</td></tr>
-      <tr><td>GET</td><td><code>/.well-known/oauth-protected-resource</code></td><td><code>resource</code> is <code>{"${origin}/mcp"}</code>. <code>authorization_servers</code> is this origin.</td></tr>
-      <tr><td>GET</td><td><code>/.well-known/oauth-authorization-server</code></td><td>Authorize, token, JWKS, register, device, revoke. PKCE <code>S256</code> only.</td></tr>
+      <tr><td>GET</td><td><code>/.well-known/oauth-protected-resource</code></td><td><code>resource</code> is <code>{"${origin}/mcp"}</code>. Same document at the <code>/mcp</code> path-aware URLs. <code>bearer_methods_supported</code> is header.</td></tr>
+      <tr><td>GET</td><td><code>/.well-known/oauth-authorization-server</code></td><td>RFC 8414. <code>response_types_supported</code> is <code>["code"]</code>. PKCE <code>S256</code> only. Also at <code>/.well-known/openid-configuration</code>.</td></tr>
     </tbody>
   </table>
 
@@ -107,7 +107,7 @@ import Docs from "../../../layouts/Docs.astro";
       <tr><td>POST</td><td><code>/api/grants/:id/revoke</code></td><td>Status becomes <code>revoked</code>. The row stays listed.</td></tr>
       <tr><td>POST</td><td><code>/api/grants/approve-by-code</code></td><td>8-digit code from <code>request_grant</code>. Reuse is 409.</td></tr>
       <tr><td>GET</td><td><code>/api/inbox</code></td><td>Pending grants and collect needs.</td></tr>
-      <tr><td>GET</td><td><code>/api/audit</code></td><td>Actions and names. No values.</td></tr>
+      <tr><td>GET</td><td><code>/api/audit</code></td><td>Actions and names. Optional <code>client_id</code> and <code>item_name</code>. No values.</td></tr>
     </tbody>
   </table>
 
@@ -117,7 +117,7 @@ import Docs from "../../../layouts/Docs.astro";
       <tr><th>Method</th><th>Path</th><th>Notes</th></tr>
     </thead>
     <tbody>
-      <tr><td>GET</td><td><code>/api/access</code></td><td>Live snapshot: operators, clients, grants, sessions. No ledger array.</td></tr>
+      <tr><td>GET</td><td><code>/api/access</code></td><td>Live snapshot: operators, clients, grants, sessions with created, first/last access, fetched names, and bearer last-4. No ledger array.</td></tr>
       <tr><td>GET</td><td><code>/api/access/events</code></td><td>Issuance ledger, newest first, limit 200.</td></tr>
       <tr><td>POST</td><td><code>/api/sessions/:id/revoke</code></td><td>Cannot revoke the current session (400). Use logout.</td></tr>
       <tr><td>POST</td><td><code>/api/sessions/revoke-others</code></td><td>Ends every other operator session.</td></tr>

@@ -226,6 +226,7 @@ ALTER TABLE clients ADD COLUMN revoked_at TEXT;
 ALTER TABLE clients ADD COLUMN last_token_at TEXT;
 ALTER TABLE clients ADD COLUMN last_seen_at TEXT;
 ALTER TABLE clients ADD COLUMN consented_by_user_id TEXT;
+ALTER TABLE clients ADD COLUMN last4 TEXT;
 `;
 
 export const HOSTED_SCHEMA_IDENTITY_ALTER_PG = `
@@ -234,4 +235,5 @@ ALTER TABLE clients ADD COLUMN IF NOT EXISTS revoked_at TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_token_at TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_seen_at TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS consented_by_user_id TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS last4 TEXT;
 `;
