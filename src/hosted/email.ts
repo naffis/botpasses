@@ -1,7 +1,7 @@
-export type EmailSender = (to: string, subject: string, html: string) => Promise<void>;
+export type EmailSender = (to: string, subject: string, html: string, text?: string) => Promise<void>;
 
 export function createResendSender(apiKey: string, from: string): EmailSender {
-  return async (to, subject, html) => {
+  return async (to, subject, html, text) => {
     if (!from.trim()) {
       throw new Error("VAULT_EMAIL_FROM is required");
     }
@@ -16,6 +16,7 @@ export function createResendSender(apiKey: string, from: string): EmailSender {
         to: [to],
         subject,
         html,
+        ...(text ? { text } : {}),
       }),
     });
     if (!res.ok) {

@@ -75,7 +75,7 @@ if (sendForm) {
     const email = sendForm.email.value.trim();
     const r = await post("/api/auth/otp/send", { email: email });
     if (r.ok) {
-      flash(note, "Check your inbox for a sign-in code.", true);
+      flash(note, "Check your inbox for a sign-in code. A code already sent is still valid for 10 minutes.", true);
       if (verifyForm) {
         verifyForm.hidden = false;
         if (verifyForm.email) verifyForm.email.value = email;

@@ -126,11 +126,18 @@ test("AC-22 OTP send is uniform; sixth verify fails; sixth send is 429", async (
     const known = await fetch(`${ctx.base}/api/auth/otp/send`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: "new@example.com" }),
+      body: JSON.stringify({ email: "other@example.com" }),
     });
     assert.equal(unknown.status, 200);
     assert.equal(known.status, 200);
     assert.deepEqual(await unknown.json(), await known.json());
+    const again = await fetch(`${ctx.base}/api/auth/otp/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "new@example.com" }),
+    });
+    assert.equal(again.status, 200);
+    assert.equal(ctx.emails.filter((e) => e.to === "new@example.com").length, 1);
     const otp = codeFromEmail(ctx.emails[0]?.html ?? "");
     let last = 0;
     for (let i = 0; i < 6; i += 1) {
@@ -149,11 +156,15 @@ test("AC-22 OTP send is uniform; sixth verify fails; sixth send is 429", async (
     });
     assert.equal(ok.status, 401);
     for (let i = 0; i < 5; i += 1) {
-      await fetch(`${ctx.base}/api/auth/otp/send`, {
+      const r = await fetch(`${ctx.base}/api/auth/otp/send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email: "limit@example.com" }),
       });
+      assert.equal(r.status, 200);
+      const ch = await ctx.store.latestEmailOtp("limit@example.com");
+      assert.ok(ch);
+      await ctx.store.updateEmailOtp({ ...ch, expiresAt: new Date(Date.now() - 1000).toISOString() });
     }
     const sixth = await fetch(`${ctx.base}/api/auth/otp/send`, {
       method: "POST",
