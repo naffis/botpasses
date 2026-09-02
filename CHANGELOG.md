@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- MCP OAuth discovery is RFC 8414 complete (`response_types_supported: ["code"]`, grants, token auth methods). Path-aware well-known and `openid-configuration` serve the same documents. `WWW-Authenticate` uses an absolute PRM URL. Browser MCP hosts (Grok) may call `/mcp` and `/oauth` from another origin; operator `/api` still rejects a foreign Origin.
+- MCP OAuth discovery is RFC 8414 complete (`response_types_supported: ["code"]`, grants, token auth methods). Path-aware well-known and `openid-configuration` serve the same documents. `WWW-Authenticate` uses an absolute PRM URL. Browser MCP hosts (Grok) may call `/mcp` and `/oauth` from another origin; operator `/api` still rejects a foreign Origin. CORS Origin and the PRM host are bound to that request, not a process-global slot.
 - Hosted backup fails closed if R2 is unset. Dump encryption lives in `backup-envelope` (tested). Restore: [docs/ops/restore.md](docs/ops/restore.md). Staging Neon history is 7 days; the root branch is protected.
 - Access is issue plus inventory. The Connect nav is gone (`#connect` still opens Access). Rows show last-4 of the machine bearer (`••••abcd`), created, first/last access, and fetched names. The full token is shown once at issue or rotate. Audit log on a row opens that client’s activity (actions and names only). `http.request` and trusted resolve write an `inject` audit event.
 - Sign-in, sign-up, enroll, consent, device, and collect use the same brand fonts and card chrome as `/console`. Verify is hidden until a code is sent. Inbox needs say Store the credential. Vault empty offers Store credential. Connect copies the MCP URL and one-time token. Rotate no longer shows the item id.

@@ -39,7 +39,10 @@ test("MCP and HTTP reference docs name hosted tools and forbid get_secret", () =
   assert.match(publicHttp, /X-CSRF-Token/);
   assert.match(publicHttp, /avm_/);
   assert.match(publicHttp, /avt_/);
+  assert.match(publicHttp, /response_types_supported/);
+  assert.match(publicHttp, /\/mcp.*reflect/i);
   const publicMcp = read("site/src/pages/docs/reference/mcp-tools.astro");
   assert.match(publicMcp, /collect_url/);
   assert.match(publicMcp, /need_item/);
+  assert.match(publicMcp, /oauth-protected-resource\/mcp/);
 });

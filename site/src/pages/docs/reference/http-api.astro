@@ -41,7 +41,8 @@ import Docs from "../../../layouts/Docs.astro";
   <p>
     A session without TOTP is 403 <code>mfa_required</code> with
     <code>enroll_url: "/enroll-totp"</code>. Cross-org ids are 404. JSON bodies over 128
-    KiB are 413. A disallowed browser <code>Origin</code> is 403 with no CORS allow header.
+    KiB are 413. A foreign browser <code>Origin</code> on <code>/api</code> is 403 with no CORS
+    allow header. <code>/mcp</code>, well-known, and <code>/oauth</code> reflect that Origin.
   </p>
   <p>
     Invalid Bearer on marketing HTML is ignored (the page still loads). The same Bearer on
