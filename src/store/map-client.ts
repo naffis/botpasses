@@ -19,6 +19,7 @@ export function mapClientRow(r: Record<string, unknown>): ClientRecord {
     revokedAt: r.revoked_at == null ? null : String(r.revoked_at),
     lastTokenAt: r.last_token_at == null ? null : String(r.last_token_at),
     lastSeenAt: r.last_seen_at == null ? null : String(r.last_seen_at),
+    last4: r.last4 == null ? null : String(r.last4),
     consentedByUserId: r.consented_by_user_id == null ? null : String(r.consented_by_user_id),
   };
 }

@@ -27,7 +27,7 @@ Both planes implement:
 
 Unknown methods: `{ error: { code: -32601 } }`. Tool exceptions: `{ error: { code: -32000 } }` or a tool result with `isError: true`.
 
-Unauthenticated hosted `POST /mcp` is **401** with `WWW-Authenticate` containing `resource_metadata=`. `GET /mcp` is SSE keepalive for an authenticated model or operator.
+Unauthenticated hosted `POST /mcp` is **401** with `WWW-Authenticate` `resource_metadata` set to the absolute path-aware PRM URL. MCP hosts on other origins may call `/mcp` and well-known (CORS reflects their Origin; no cookies). Operator `/api` still 403s a foreign Origin. `GET /mcp` is SSE keepalive for an authenticated model or operator.
 
 `GET /mcp/tools` (hosted, model or operator) returns the same tool list as `tools/list`.
 

@@ -282,7 +282,7 @@ tbody tr:hover { background: color-mix(in oklab, var(--accent-dim) 35%, transpar
 .inbox-item, .access-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.9rem 1rem;
@@ -292,6 +292,19 @@ tbody tr:hover { background: color-mix(in oklab, var(--accent-dim) 35%, transpar
 }
 .inbox-item p, .access-row p { margin: 0; color: var(--muted); }
 .inbox-item strong { color: var(--fg); }
+.access-row-main { flex: 1; min-width: 12rem; }
+.access-row-title { color: var(--fg); }
+.access-meta { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }
+.access-row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.access-log-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.5rem 0.85rem;
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
 
 label { display: block; margin: 0.85rem 0 0.3rem; color: var(--muted); font-size: 0.9rem; }
 input, select, textarea {

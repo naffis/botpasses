@@ -1,7 +1,9 @@
+import { CONSOLE_ACCESS_JS } from "./console-access-js.ts";
 import { CONSOLE_CSS } from "./console-css.ts";
-import { CONSOLE_JS } from "./console-js.ts";
+import { CONSOLE_JS as CONSOLE_CORE_JS } from "./console-js.ts";
 
-export { CONSOLE_CSS, CONSOLE_JS };
+export { CONSOLE_CSS };
+export const CONSOLE_JS = CONSOLE_CORE_JS + CONSOLE_ACCESS_JS;
 
 export const AUTH_CSS = `.auth-body {
   min-height: 100vh;

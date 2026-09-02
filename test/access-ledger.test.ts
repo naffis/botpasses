@@ -95,19 +95,33 @@ test("AC-28 issue model token appears on access snapshot without avm_ value", as
     const snap = await fetch(`${ctx.base}/api/access`, { headers: ctx.op });
     assert.equal(snap.status, 200);
     const json = (await snap.json()) as {
-      clients: { id: string; status: string; last_token_at: string | null }[];
+      clients: { id: string; status: string; last_token_at: string | null; last4: string | null }[];
     };
     const row = json.clients.find((c) => c.id === body.client.id);
     assert.ok(row);
     assert.equal(row.status, "active");
     assert.ok(row.last_token_at);
+    assert.equal(row.last4, body.token.slice(-4));
     const raw = JSON.stringify(json);
     assert.doesNotMatch(raw, /avm_/);
+    assert.doesNotMatch(raw, new RegExp(body.token.slice(4)));
     assert.doesNotMatch(raw, /audit/);
     const events = await fetch(`${ctx.base}/api/access/events`, { headers: ctx.op });
     const ledger = (await events.json()) as { events: unknown[] };
     assert.ok(Array.isArray(ledger.events));
     assert.ok(!("events" in json));
+    const rotated = await fetch(`${ctx.base}/api/clients/${body.client.id}/rotate`, {
+      method: "POST",
+      headers: ctx.op,
+      body: "{}",
+    });
+    assert.equal(rotated.status, 200);
+    const next = (await rotated.json()) as { token: string };
+    const snap2 = await fetch(`${ctx.base}/api/access`, { headers: ctx.op });
+    const json2 = (await snap2.json()) as { clients: { id: string; last4: string | null }[] };
+    const after = json2.clients.find((c) => c.id === body.client.id);
+    assert.equal(after?.last4, next.token.slice(-4));
+    assert.ok(!JSON.stringify(json2).includes(next.token));
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -385,14 +399,23 @@ test("AC-25 DCR rejects javascript; stores https redirect; AC-19 metadata", asyn
     const meta = await fetch(`${ctx.base}/.well-known/oauth-authorization-server`);
     const doc = (await meta.json()) as {
       code_challenge_methods_supported: string[];
+      response_types_supported: string[];
       revocation_endpoint: string;
     };
     assert.deepEqual(doc.code_challenge_methods_supported, ["S256"]);
+    assert.deepEqual(doc.response_types_supported, ["code"]);
     assert.match(doc.revocation_endpoint, /\/oauth\/revoke$/);
     const pr = await fetch(`${ctx.base}/.well-known/oauth-protected-resource`);
     const prj = (await pr.json()) as { authorization_servers: string[]; resource: string };
     assert.doesNotMatch(JSON.stringify(prj), /clerk\./);
     assert.equal(prj.resource, "http://127.0.0.1:8788/mcp");
+    const pathAware = await fetch(`${ctx.base}/.well-known/oauth-authorization-server/mcp`);
+    assert.equal(pathAware.status, 200);
+    assert.deepEqual(((await pathAware.json()) as { response_types_supported: string[] }).response_types_supported, [
+      "code",
+    ]);
+    const oidc = await fetch(`${ctx.base}/.well-known/openid-configuration`);
+    assert.equal(oidc.status, 200);
 
     const bad = await fetch(`${ctx.base}/oauth/register`, {
       method: "POST",
@@ -437,7 +460,10 @@ test("AC-26 wrong aud is rejected; AC-27 unauthenticated MCP has resource_metada
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
     });
     assert.equal(unauth.status, 401);
-    assert.match(unauth.headers.get("www-authenticate") ?? "", /resource_metadata=/);
+    assert.match(
+      unauth.headers.get("www-authenticate") ?? "",
+      /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
+    );
 
     const wrongAud = await new SignJWT({ client_id: "dcr_demo" })
       .setProtectedHeader({ alg: "RS256" })
@@ -499,6 +525,126 @@ test("R-39 persistRevokedToken marks access_events and audit token_revoked", asy
     const audit = await ctx.store.listAudit(ctx.orgId, 20);
     assert.ok(audit.some((a) => a.action === "token_revoked"));
     assert.ok(!JSON.stringify(audit).includes("jti-rfc7009"));
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("inject writes audit and access snapshot fetched names without the secret", async () => {
+  const ctx = await ledgerCtx();
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "STRIPE_KEY",
+      value: CANARY,
+      allowedHosts: ["api.stripe.com"],
+      inject: "bearer",
+    });
+    const issued = await fetch(`${ctx.base}/api/clients/model`, {
+      method: "POST",
+      headers: ctx.op,
+      body: JSON.stringify({ name: "grok", environment: "staging" }),
+    });
+    const body = (await issued.json()) as { token: string; client: { id: string } };
+    const asked = await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: body.client.id,
+      itemName: "STRIPE_KEY",
+      environment: "staging",
+    });
+    await ctx.kernel.approveGrant({
+      orgId: ctx.orgId,
+      grantId: asked.grant.id,
+      policy: "item_standing",
+      role: "owner",
+      actor: "user_owner",
+    });
+    await ctx.kernel.prepareConnector({
+      orgId: ctx.orgId,
+      clientId: body.client.id,
+      itemName: "STRIPE_KEY",
+      environment: "staging",
+    });
+    const snap = await fetch(`${ctx.base}/api/access`, { headers: ctx.op });
+    assert.equal(snap.status, 200);
+    const json = (await snap.json()) as {
+      clients: {
+        id: string;
+        created_at: string | null;
+        first_access_at: string | null;
+        last_access_at: string | null;
+        fetched: string[];
+      }[];
+      grants: { id: string; client_id: string; fetched: string[] }[];
+    };
+    assert.ok(!("audit" in json));
+    assert.ok(!("events" in json));
+    const client = json.clients.find((c) => c.id === body.client.id);
+    assert.ok(client);
+    assert.ok(client.created_at);
+    assert.ok(client.first_access_at);
+    assert.deepEqual(client.fetched, ["STRIPE_KEY"]);
+    const grant = json.grants.find((g) => g.id === asked.grant.id);
+    assert.equal(grant?.client_id, body.client.id);
+    assert.deepEqual(grant?.fetched, ["STRIPE_KEY"]);
+    const raw = JSON.stringify(json);
+    assert.doesNotMatch(raw, /avm_/);
+    assert.ok(!raw.includes(CANARY));
+    const auditRes = await fetch(`${ctx.base}/api/audit`, { headers: ctx.op });
+    const auditJson = (await auditRes.json()) as {
+      audit: { action: string; itemName: string | null; clientId: string | null }[];
+    };
+    assert.ok(auditJson.audit.some((a) => a.action === "inject" && a.itemName === "STRIPE_KEY"));
+    assert.ok(!JSON.stringify(auditJson).includes(CANARY));
+    const filtered = await fetch(
+      `${ctx.base}/api/audit?client_id=${encodeURIComponent(body.client.id)}`,
+      { headers: ctx.op },
+    );
+    const filteredJson = (await filtered.json()) as { audit: { action: string; clientId: string | null }[] };
+    assert.ok(filteredJson.audit.every((a) => a.clientId === body.client.id));
+    assert.ok(filteredJson.audit.some((a) => a.action === "inject"));
+    const miss = await fetch(`${ctx.base}/api/audit?client_id=cli_missing`, { headers: ctx.op });
+    const missJson = (await miss.json()) as { audit: { action: string }[] };
+    assert.ok(!missJson.audit.some((a) => a.action === "inject"));
+    const byItem = await fetch(`${ctx.base}/api/audit?item_name=STRIPE_KEY`, { headers: ctx.op });
+    const byItemJson = (await byItem.json()) as { audit: { itemName: string | null }[] };
+    assert.ok(byItemJson.audit.length > 0);
+    assert.ok(byItemJson.audit.every((a) => a.itemName === "STRIPE_KEY"));
+    const trusted = await ctx.kernel.createTrustedClient({
+      orgId: ctx.orgId,
+      name: "runner",
+      environment: "staging",
+    });
+    const trustedGrant = await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: trusted.client.id,
+      itemName: "STRIPE_KEY",
+      environment: "staging",
+    });
+    await ctx.kernel.approveGrant({
+      orgId: ctx.orgId,
+      grantId: trustedGrant.grant.id,
+      policy: "item_standing",
+      role: "owner",
+      actor: "user_owner",
+    });
+    await ctx.kernel.resolveTrusted({
+      orgId: ctx.orgId,
+      clientId: trusted.client.id,
+      itemName: "STRIPE_KEY",
+      environment: "staging",
+    });
+    const afterTrusted = await ctx.store.listAudit(ctx.orgId, 50);
+    assert.ok(
+      afterTrusted.some((a) => a.action === "inject" && a.clientId === trusted.client.id && a.itemName === "STRIPE_KEY"),
+    );
+    assert.ok(!JSON.stringify(afterTrusted).includes(CANARY));
+    assert.ok(!JSON.stringify(afterTrusted).includes(trusted.plaintext));
   } finally {
     await ctx.http.close();
     await ctx.store.close();

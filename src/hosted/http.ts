@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "../brand.ts";
+import { assertSafePublicObject } from "../redact.ts";
 import type { ItemKind, VaultEnvName } from "../hosted-types.ts";
 import {
   requireModelOrOperator,
@@ -32,6 +33,12 @@ import { handleAccessApi } from "./http-access-routes.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
+import {
+  isMcpClientSurface,
+  isOauthDiscoveryPath,
+  mcpWwwAuthenticate,
+  oauthDiscoveryDocument,
+} from "./oauth-metadata.ts";
 import type Provider from "oidc-provider";
 
 const BODY_CAP = 128 * 1024;
@@ -41,8 +48,10 @@ type CorsState = {
   req?: IncomingMessage;
   allowed: string[];
   testMode: boolean;
+  path: string;
+  publicUrl: string;
 };
-const corsState: CorsState = { allowed: [], testMode: false };
+const corsState: CorsState = { allowed: [], testMode: false, path: "", publicUrl: "" };
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;
@@ -73,6 +82,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const testMode = opts.authResolver === testAuthResolver || process.env.VAULT_AUTH_MODE === "test";
   corsState.allowed = allowed;
   corsState.testMode = testMode;
+  corsState.publicUrl = publicUrl;
   const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
   const identity = opts.identity;
   const oidcProvider = opts.oidcProvider;
@@ -98,8 +108,9 @@ export function createHostedServer(opts: HostedHttpOpts) {
     const method = req.method ?? "GET";
 
     corsState.req = req;
+    corsState.path = path;
     const originHdr = typeof req.headers.origin === "string" ? req.headers.origin : "";
-    if (originHdr && !originAllowed(originHdr, allowed)) {
+    if (originHdr && !originAllowed(originHdr, allowed) && !isMcpClientSurface(path)) {
       res.writeHead(403, {
         "content-type": "application/json; charset=utf-8",
         ...securityHeaders({ html: false }),
@@ -127,27 +138,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
       }
       return;
     }
-    if (method === "GET" && path === "/.well-known/oauth-protected-resource") {
-      const origin = publicUrl.replace(/\/$/, "");
-      json(res, 200, {
-        resource: `${origin}/mcp`,
-        authorization_servers: [origin],
-      });
-      return;
-    }
-    if (method === "GET" && path === "/.well-known/oauth-authorization-server") {
-      const origin = publicUrl.replace(/\/$/, "");
-      json(res, 200, {
-        issuer: origin,
-        authorization_endpoint: `${origin}/oauth/authorize`,
-        token_endpoint: `${origin}/oauth/token`,
-        jwks_uri: `${origin}/oauth/jwks`,
-        registration_endpoint: `${origin}/oauth/register`,
-        device_authorization_endpoint: `${origin}/oauth/device/auth`,
-        revocation_endpoint: `${origin}/oauth/revoke`,
-        code_challenge_methods_supported: ["S256"],
-      });
-      return;
+    if ((method === "GET" || method === "HEAD") && isOauthDiscoveryPath(path)) {
+      const body = oauthDiscoveryDocument(path, publicUrl);
+      if (body) {
+        json(res, 200, body);
+        return;
+      }
     }
     if ((method === "GET" || method === "HEAD") && path.startsWith("/assets/")) {
       const font = hostedFont(path);
@@ -204,7 +200,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
-    if (!originOk(req, allowed)) {
+    if (!originOk(req, allowed, path)) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
     }
@@ -601,7 +597,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
     if (method === "GET" && path === "/api/audit") {
       const op = requireOperator(principal);
-      json(res, 200, { audit: await opts.kernel.store.listAudit(op.orgId) });
+      const clientId = optional(url.searchParams.get("client_id"));
+      const itemName = optional(url.searchParams.get("item_name"));
+      const filter = clientId || itemName ? { clientId, itemName } : undefined;
+      const audit = await opts.kernel.store.listAudit(op.orgId, 200, filter);
+      assertSafePublicObject("listAudit", audit);
+      json(res, 200, { audit });
       return;
     }
     const approve = /^\/api\/grants\/([^/]+)\/approve$/.exec(path);
@@ -824,9 +825,10 @@ export function hostAllowed(hostHeader: string, allowed: string[]): boolean {
   return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
 }
 
-function originOk(req: IncomingMessage, allowed: string[]): boolean {
+function originOk(req: IncomingMessage, allowed: string[], path: string): boolean {
   const host = req.headers.host ?? "";
   if (!hostAllowed(host, allowed)) return false;
+  if (isMcpClientSurface(path)) return true;
   const origin = req.headers.origin;
   if (!origin) return true;
   try {
@@ -868,7 +870,10 @@ function corsHeaders(): Record<string, string> {
     "access-control-expose-headers": "WWW-Authenticate, Mcp-Session-Id",
   };
   const origin = typeof corsState.req?.headers.origin === "string" ? corsState.req.headers.origin : "";
-  if (origin && originAllowed(origin, corsState.allowed)) {
+  if (
+    origin &&
+    (originAllowed(origin, corsState.allowed) || isMcpClientSurface(corsState.path))
+  ) {
     headers["access-control-allow-origin"] = origin;
   }
   return headers;
@@ -904,7 +909,7 @@ function sendError(res: ServerResponse, err: unknown, path = ""): void {
     if (err.status === 401) {
       headers["www-authenticate"] =
         path === "/mcp" || path.startsWith("/mcp")
-          ? `Bearer realm="${WWW_AUTHENTICATE_REALM}", resource_metadata="/.well-known/oauth-protected-resource"`
+          ? mcpWwwAuthenticate(corsState.publicUrl, WWW_AUTHENTICATE_REALM)
           : `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
     }
     res.writeHead(err.status, headers);

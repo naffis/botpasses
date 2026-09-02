@@ -13,10 +13,12 @@ One Access panel on `/console`. `GET /api/access` is the live snapshot (operator
 
 Revoke client sets `revoked_at`, destroys refresh/opaque adapter rows, revokes open grants, marks matching `access_events`. Current-session revoke is 400. Cross-org ids are 404. Bootstrap token is not a row.
 
+The Access row shows created (first issuance), first/last access, last-4 of the machine bearer, and unique item names from `inject` audit. The full token is shown once at issue or rotate. `http.request` and trusted resolve write `inject` (name + client, never the value). The console Audit log is `GET /api/audit` (optional `client_id` / `item_name`). Snapshot JSON still must not include an `audit` or `events` array. Issue lives on Access (`#connect` aliases that panel).
+
 ## Consequences
 
-- Store: `listMembers`, `listOperatorSessions`, `access_events` with unique `jti_hash`, 60s `last_seen` throttle.
-- Console HTML: `data-testid="access-panel"` and `access-revoke-confirm`.
+- Store: `listMembers`, `listOperatorSessions`, `access_events` with unique `jti_hash`, 60s `last_seen` throttle. `listAudit` may filter by client and item name.
+- Console HTML: `data-testid="access-panel"`, `access-audit`, and `access-revoke-confirm`.
 
 ## Alternatives considered
 

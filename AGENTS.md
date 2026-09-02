@@ -12,6 +12,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 - Hosted origins: `https://botpasses.com`, `https://staging.botpasses.com`. Never a platform default hostname.
 - Hosted identity is first-party (email OTP + TOTP). This origin is the MCP OAuth authorization server. No Clerk.
 - Hosted plane KEK: prefer `VAULT_KEK_WRAPPED` + KMS. `VAULT_KEK_REQUIRE_KMS=1` refuses raw-only. Do not claim zero-knowledge.
+- Hosted durability is Neon (PITR + isolated projects) plus a fail-closed encrypted `pg_dump` to R2 (`BACKUP_KEY` ≠ KEK). SQLite is the local CLI only. Restore: `docs/ops/restore.md`.
 
 ## Commands
 

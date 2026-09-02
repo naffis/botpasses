@@ -20,8 +20,8 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | --- | --- | --- | --- |
 | GET | `/health` | none | `{ ok: true, product: "botpasses" }` (no fingerprint) |
 | GET | `/ready` | none | 200 `{ ok: true }` or 503 |
-| GET | `/.well-known/oauth-protected-resource` | none | `{ resource: "${origin}/mcp", authorization_servers: [origin] }` |
-| GET | `/.well-known/oauth-authorization-server` | none | issuer, authorize, token, jwks, register, device, revoke. `code_challenge_methods_supported` is exactly `["S256"]` |
+| GET | `/.well-known/oauth-protected-resource` | none | `{ resource, authorization_servers, scopes_supported, bearer_methods_supported: ["header"] }`. Same JSON at `/mcp` suffix and `/mcp/.well-known/…` |
+| GET | `/.well-known/oauth-authorization-server` | none | RFC 8414. Required `response_types_supported: ["code"]`. PKCE `S256` only. Same JSON at `/mcp` suffix, `/mcp/.well-known/…`, and `/.well-known/openid-configuration` |
 | GET | `/robots.txt` | none | Staging allows `/`. Prod disallows `/console`, auth, collect, api, mcp, oauth |
 | GET | `/mcp/tools` | model or operator | `{ tools }` same as MCP `tools/list` |
 
@@ -56,7 +56,7 @@ All require `operatorReady` unless noted.
 | POST | `/api/orgs` | `{ name }` | created org (session user, TOTP not required for first create) |
 | DELETE | `/api/orgs` | `{ confirm_name }` | `{ ok: true }` |
 | GET | `/api/inbox` | | `{ grants, needs, agentpass }` pending |
-| GET | `/api/audit` | | `{ audit }` actions, no values |
+| GET | `/api/audit` | optional `?client_id=` and `?item_name=` | `{ audit }` actions and item names, no values |
 | GET | `/api/need-items/:id` | operator + same org | need metadata (not public JSON; unsigned is **404**) |
 | POST | `/api/need-items/:id/fulfill` | `{ value, name?, allowed_hosts?, inject?, kind?, username? }` | `{ item, grant_status }` |
 
@@ -82,7 +82,7 @@ Policies: `prompt` (one inject then consumed), `session` (TTL 8h), `item_standin
 
 | Method | Path | Returns |
 | --- | --- | --- |
-| GET | `/api/access` | Live snapshot only: `operators`, `clients`, `grants`, `sessions`. No `events` or `audit` array. No `avm_` / `avt_` / JWT |
+| GET | `/api/access` | Live snapshot only: `operators`, `clients`, `grants`, `sessions`. Clients and grants include `created_at`, `first_access_at`, `last_access_at`, and `fetched` (item names). Clients include `last4` of the machine bearer when issued. No `events` or `audit` array. No `avm_` / `avt_` / JWT |
 | GET | `/api/access/events` | Ledger newest-first, limit 200: kind, client_id, issued/expires/revoked. `jti` is hashed |
 | POST | `/api/sessions/:id/revoke` | 400 `cannot_revoke_current` if it is this session |
 | POST | `/api/sessions/revoke-others` | Deletes every other operator session |

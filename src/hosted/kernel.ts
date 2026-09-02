@@ -36,6 +36,7 @@ import {
   needItemError,
   type NeedHost,
 } from "./need-ops.ts";
+import { clientUsage, grantUsage, sessionUsage } from "./access-usage.ts";
 import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import { logVaultEvent } from "./observe.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
@@ -244,7 +245,7 @@ export class HostedKernel {
     const client = await this.#clientInOrg(orgId, clientId);
     const prefix = client.kind === "trusted" ? "avt_" : "avm_";
     const plaintext = `${prefix}${randomBytes(24).toString("hex")}`;
-    await this.store.updateClientHashedSecret(client.id, hashSecret(plaintext));
+    await this.store.updateClientHashedSecret(client.id, hashSecret(plaintext), last4(plaintext));
     await this.#audit(orgId, "client_rotate", actor, null, client.id);
     return { token: plaintext, client_id: client.id };
   }
@@ -475,6 +476,7 @@ export class HostedKernel {
       clerkOauthUserId: null,
       environment: input.environment,
       ...emptyClientFields(),
+      last4: last4(plaintext),
     };
     await this.store.insertClient(row);
     await this.#recordMachineIssue(row, plaintext);
@@ -499,6 +501,7 @@ export class HostedKernel {
       clerkOauthUserId: input.clerkOauthUserId ?? null,
       environment: input.environment,
       ...emptyClientFields(),
+      last4: plaintext ? last4(plaintext) : null,
       oauthClientId: input.clerkOauthUserId ?? null,
     };
     await this.store.insertClient(row);
@@ -787,6 +790,7 @@ export class HostedKernel {
     if (!item) throw new HttpError(404, "Unknown item");
     await this.consumeActiveGrant(input.orgId, client.id, item.id);
     const decrypted = await this.decryptItem(input.orgId, item.id);
+    await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
     return {
       username: decrypted.username,
       value: decrypted.secret,
@@ -826,7 +830,9 @@ export class HostedKernel {
       });
     }
     await this.consumeActiveGrant(input.orgId, client.id, item.id);
-    return this.decryptItem(input.orgId, item.id);
+    const decrypted = await this.decryptItem(input.orgId, item.id);
+    await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
+    return decrypted;
   }
 
   async approveMagic(orgId: string, actor: string, role: MemberRole, token: string): Promise<HostedGrantRecord> {
@@ -995,11 +1001,13 @@ export class HostedKernel {
   }
 
   async listAccess(orgId: string, currentSessionHash?: string) {
-    const [members, clients, grants, sessions] = await Promise.all([
+    const [members, clients, grants, sessions, audit, events] = await Promise.all([
       this.store.listMembers(orgId),
       this.store.listClients(orgId),
       this.store.listGrants(orgId),
       this.store.listOperatorSessions(orgId),
+      this.store.listAudit(orgId, 200, { action: "inject" }),
+      this.store.listAccessEvents(orgId, 200),
     ]);
     const users = await Promise.all(members.map((m) => this.store.getUser(m.userId)));
     const operators = members.map((m, i) => ({
@@ -1010,15 +1018,20 @@ export class HostedKernel {
     const clientRows = await Promise.all(
       clients.map(async (c) => {
         const actor = c.consentedByUserId ? await this.store.getUser(c.consentedByUserId) : undefined;
+        const usage = clientUsage(c, events, audit, c.id);
         return {
           id: c.id,
           name: c.name,
           kind: c.oauthClientId ? "oauth" : c.kind,
           environment: c.environment,
           status: c.revokedAt ? "revoked" : "active",
-          created_at: c.lastTokenAt ? c.lastTokenAt : null,
+          created_at: usage.created_at,
+          first_access_at: usage.first_access_at,
+          last_access_at: usage.last_access_at,
           last_token_at: c.lastTokenAt,
           last_seen_at: c.lastSeenAt,
+          fetched: usage.fetched,
+          last4: c.last4,
           consented_by_email: actor?.email ?? null,
         };
       }),
@@ -1037,29 +1050,46 @@ export class HostedKernel {
           if (g.itemId) itemNames.set(g.itemId, itemName);
         }
       }
+      const usage = grantUsage(g, audit, g.clientId, itemName);
       grantRows.push({
         id: g.id,
         item_name: itemName,
+        client_id: g.clientId,
         client_name: clientNames.get(g.clientId) ?? g.clientId,
         status: g.status,
-        created_at: g.createdAt,
+        created_at: usage.created_at,
+        first_access_at: usage.first_access_at,
+        last_access_at: usage.last_access_at,
         approved_at: g.approvedAt,
+        fetched: usage.fetched,
       });
     }
-    const sessionRows = sessions.map((s) => ({
-      id: s.idHash.slice(0, 12),
-      created_at: s.createdAt,
-      last_seen_at: s.lastSeenAt,
-      current: Boolean(currentSessionHash && s.idHash === currentSessionHash),
-      hash: s.idHash,
-    }));
-    return {
+    const sessionRows = sessions.map((s) => {
+      const usage = sessionUsage(s);
+      return {
+        id: s.idHash.slice(0, 12),
+        created_at: usage.created_at,
+        first_access_at: usage.first_access_at,
+        last_access_at: usage.last_access_at,
+        last_seen_at: s.lastSeenAt,
+        current: Boolean(currentSessionHash && s.idHash === currentSessionHash),
+        hash: s.idHash,
+      };
+    });
+    const snap = {
       operators,
       clients: clientRows,
       grants: grantRows,
       sessions: sessionRows.map(({ hash: _h, ...rest }) => rest),
       sessionHashes: sessionRows,
     };
+    assertSafePublicObject("listAccess", {
+      operators: snap.operators,
+      clients: snap.clients,
+      grants: snap.grants,
+      sessions: snap.sessions,
+    });
+    return snap;
   }
 
   async revokeClient(orgId: string, actor: string, clientId: string): Promise<void> {
