@@ -3,7 +3,42 @@ import Docs from "../../../layouts/Docs.astro";
 ---
 <Docs title="Connect Grok — Botpasses" crumbs={[{ href: "/docs", label: "Docs" }, { href: "/docs/connect/grok", label: "Grok" }]}>
   <h1>Connect Grok</h1>
-  <p>Add this origin’s <code>/mcp</code> URL as an MCP connector. Grok can sign in with OAuth, or you can paste a console-issued <code>avm_</code> token only (Grok adds Bearer). Issue the token from the Access panel. The token’s vault environment is the same list as Store (staging only on staging; staging or production on the production origin). After the connector is on, ask for the task in plain language. Grok should call the API in the same turn. You approve in the inbox if asked.</p>
-  <p>Do not paste an operator token or a third-party JWT into Grok.</p>
+  <p>
+    The supported Grok path is this origin’s <code>/mcp</code> URL plus
+    <code>Authorization: Bearer avm_…</code>. Issue the token from the Access panel
+    (<code>POST /api/clients/model</code>). Grok adds the Bearer scheme. That header is
+    enough. <code>initialize</code>, <code>tools/list</code>, and <code>http.request</code>
+    work without an OAuth connect card and without <code>needsAuth</code>.
+  </p>
+  <p>
+    Do not paste an operator token, a Client Secret, or a third-party JWT into Grok.
+    The model never sees vault values.
+  </p>
+
+  <h2>OAuth connect cards</h2>
+  <p>
+    If Grok (or Cursor) starts Dynamic Client Registration, Botpasses accepts
+    <code>https</code>, loopback <code>http://127.0.0.1</code>, and desktop app schemes
+    such as <code>cursor://</code> and <code>grok://</code>. A connect card still fails
+    if the client sends a blocked scheme (<code>javascript:</code>, <code>data:</code>,
+    <code>file:</code>). Prefer the <code>avm_</code> header. You do not need to complete
+    the card when Bearer is already configured.
+  </p>
+
+  <h2>Spotify</h2>
+  <ul>
+    <li>A Client Secret is not a user access token. Do not inject it as <code>Authorization: Bearer</code> on <code>api.spotify.com</code>.</li>
+    <li>Token mint is <code>POST https://accounts.spotify.com/api/token</code> with HTTP Basic (<code>client_id:client_secret</code>) and <code>application/x-www-form-urlencoded</code> body <code>grant_type=client_credentials</code>. JSON + Bearer of the secret is invalid.</li>
+    <li>Store the secret as inject <code>client_credentials</code> (or pass public <code>client_id</code> on <code>http.request</code>). Botpasses mints and caches an app token, then calls <code>api.spotify.com</code>. The access token is redacted in the tool result.</li>
+    <li><code>GET /v1/search</code> works with that app token. <code>GET /v1/me</code> and private playlist writes need Authorization Code + PKCE. Use <strong>Connect Spotify user</strong> on the vault item. Redirect is this origin’s <code>/integrations/spotify/callback</code> or <code>http://127.0.0.1:8888/callback</code>. Add that URI on the Spotify app. The refresh token stays in the vault.</li>
+  </ul>
+
+  <h2>Grants</h2>
+  <p>
+    Grant policy <code>prompt</code> is one successful inject. A failed origin HTTP
+    (401/410) does not consume the approve. Retry <code>http.request</code> with the
+    same item, host, method, and path. Do not ask for a new 8-digit code after a failed
+    Spotify call. Approve in the inbox; the page says the agent can retry.
+  </p>
   <p>Tool contract: <a href="/docs/reference/mcp-tools">MCP tools</a>. Issue the model Bearer from the console or via <a href="/docs/reference/http-api">POST /api/clients/model</a>.</p>
 </Docs>

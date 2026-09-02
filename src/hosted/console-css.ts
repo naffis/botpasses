@@ -292,6 +292,8 @@ tbody tr:hover { background: color-mix(in oklab, var(--accent-dim) 35%, transpar
 }
 .inbox-item p, .access-row p { margin: 0; color: var(--muted); }
 .inbox-item strong { color: var(--fg); }
+.inbox-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.inbox-item .hint { margin-top: 0.35rem; max-width: 36rem; }
 .access-row-main { flex: 1; min-width: 12rem; }
 .access-row-title { color: var(--fg); }
 .access-meta { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }

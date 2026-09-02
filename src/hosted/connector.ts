@@ -7,6 +7,7 @@ import {
   isBlockedIp,
   resolvePublicAddresses,
 } from "./ssrf.ts";
+import { redactOauthJson } from "../redact.ts";
 
 const RESPONSE_CAP = 256 * 1024;
 const ORIGIN_TIMEOUT_MS = 10_000;
@@ -32,12 +33,17 @@ export type ConnectorItem = {
   allowedHosts: string[];
   name: string;
   kind: "secret" | "login";
+  grantId?: string;
+  grantPolicy?: string;
+  itemId?: string;
 };
 
 export type ConnectorRequest = {
   method: string;
   path: string;
   body?: unknown;
+  host?: string;
+  contentType?: string;
 };
 
 export type ConnectorResult = {
@@ -45,8 +51,47 @@ export type ConnectorResult = {
   body: string;
 };
 
-function injectHeaders(item: ConnectorItem): Record<string, string> {
-  if (item.kind === "login" || item.inject === "basic") {
+export function selectConnectorHost(item: ConnectorItem, requested?: string): string {
+  if (requested) {
+    const host = requested.toLowerCase();
+    if (!item.allowedHosts.includes(host)) {
+      throw new HttpError(400, `host_mismatch: ${host} is not in allowed_hosts`, {
+        status: "host_mismatch",
+        host,
+        allowed_hosts: item.allowedHosts,
+      });
+    }
+    return host;
+  }
+  const host = item.allowedHosts[0];
+  if (!host) throw new HttpError(400, "Item has no allowed_hosts");
+  return host;
+}
+
+function encodeBody(body: unknown, contentType: string): string {
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    if (typeof body === "string") return body;
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+        if (value === undefined || value === null) continue;
+        params.set(key, typeof value === "string" ? value : JSON.stringify(value));
+      }
+      return params.toString();
+    }
+    throw new HttpError(400, "form-urlencoded body must be an object or string");
+  }
+  return typeof body === "string" ? body : JSON.stringify(body);
+}
+
+function injectHeaders(item: ConnectorItem, host: string): Record<string, string> {
+  const accounts = host === "accounts.spotify.com";
+  const useBasic =
+    item.kind === "login" ||
+    item.inject === "basic" ||
+    item.inject === "client_credentials" ||
+    (accounts && item.inject !== "header:Authorization");
+  if (useBasic) {
     const user = item.username ?? "";
     const token = Buffer.from(`${user}:${item.secret}`).toString("base64");
     return { authorization: `Basic ${token}` };
@@ -60,7 +105,7 @@ function injectHeaders(item: ConnectorItem): Record<string, string> {
 }
 
 export function redactConnectorBody(body: string, item: ConnectorItem): string {
-  let out = body;
+  let out = redactOauthJson(body);
   if (item.secret.length > 0) out = out.split(item.secret).join("[redacted]");
   if (item.last4.length >= 4 && item.secret.length >= 8) {
     out = out.split(item.last4).join("••••");
@@ -74,6 +119,8 @@ export async function executeConnector(
   opts: {
     fetchImpl?: ConnectorFetch;
     resolveAddresses?: (hostname: string) => Promise<string[]>;
+    /** Internal mint only. Caller must redact before any MCP/API result. */
+    redact?: boolean;
   } = {},
 ): Promise<ConnectorResult> {
   const method = req.method.toUpperCase();
@@ -81,8 +128,7 @@ export async function executeConnector(
     throw new HttpError(400, "Unsupported method");
   }
   assertSafePath(req.path);
-  const host = item.allowedHosts[0];
-  if (!host) throw new HttpError(400, "Item has no allowed_hosts");
+  const host = selectConnectorHost(item, req.host);
   assertAllowedHostname(host, item.allowedHosts);
   const resolve = opts.resolveAddresses ?? resolvePublicAddresses;
   const addrs = await resolve(host);
@@ -91,12 +137,16 @@ export async function executeConnector(
   }
 
   const url = `https://${host}${req.path}`;
+  const contentType =
+    req.contentType ??
+    (req.body !== undefined ? "application/json" : undefined);
+  const encoded = req.body === undefined ? undefined : encodeBody(req.body, contentType ?? "application/json");
   const headers: Record<string, string> = {
-    ...injectHeaders(item),
+    ...injectHeaders(item, host),
     accept: "application/json, text/plain, */*",
   };
-  if (req.body !== undefined) {
-    headers["content-type"] = "application/json";
+  if (encoded !== undefined && contentType) {
+    headers["content-type"] = contentType;
   }
   for (const hop of HOP_BY_HOP) {
     delete headers[hop];
@@ -110,20 +160,21 @@ export async function executeConnector(
       ? await fetchImpl(url, {
           method,
           headers,
-          body: req.body === undefined ? undefined : JSON.stringify(req.body),
+          body: encoded,
           redirect: "manual",
           signal: ac.signal,
         })
       : await fetchPinned(url, {
           method,
           headers,
-          body: req.body === undefined ? undefined : JSON.stringify(req.body),
+          body: encoded,
           signal: ac.signal,
           addresses: addrs,
         });
     const buf = Buffer.from(await res.arrayBuffer());
     const sliced = buf.subarray(0, RESPONSE_CAP).toString("utf8");
-    return { status: res.status, body: redactConnectorBody(sliced, item) };
+    const body = opts.redact === false ? sliced : redactConnectorBody(sliced, item);
+    return { status: res.status, body };
   } catch (err) {
     if (err instanceof HttpError) throw err;
     throw new HttpError(502, "Origin request failed");

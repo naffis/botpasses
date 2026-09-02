@@ -260,6 +260,16 @@ export class PostgresStore implements VaultStore {
     );
   }
 
+  async updateItemMeta(
+    id: string,
+    patch: Pick<ItemRecord, "username" | "inject" | "allowedHostsJson" | "updatedAt">,
+  ): Promise<void> {
+    await this.#pool.query(
+      "UPDATE items SET username=$1, inject=$2, allowed_hosts_json=$3, updated_at=$4 WHERE id=$5",
+      [patch.username, patch.inject, patch.allowedHostsJson, patch.updatedAt, id],
+    );
+  }
+
   async deleteItem(id: string): Promise<void> {
     await this.#pool.query("DELETE FROM items WHERE id = $1", [id]);
   }
@@ -495,6 +505,14 @@ export class PostgresStore implements VaultStore {
     const r = await this.#pool.query(
       "UPDATE grants SET status='consumed', consumed_at=$1 WHERE id=$2 AND status='active'",
       [consumedAt, id],
+    );
+    return r.rowCount === 1;
+  }
+
+  async reactivateGrant(id: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      "UPDATE grants SET status='active', consumed_at=NULL WHERE id=$1 AND status='consumed' AND policy='prompt'",
+      [id],
     );
     return r.rowCount === 1;
   }

@@ -27,7 +27,7 @@ Both planes implement:
 
 Unknown methods: `{ error: { code: -32601 } }`. Tool exceptions: `{ error: { code: -32000 } }` or a tool result with `isError: true`.
 
-Unauthenticated hosted `POST /mcp` is **401** with `WWW-Authenticate` `resource_metadata` set to the absolute path-aware PRM URL. MCP hosts on other origins may call `/mcp` and well-known (CORS reflects their Origin; no cookies). Operator `/api` still 403s a foreign Origin. `GET /mcp` is SSE keepalive for an authenticated model or operator.
+Unauthenticated hosted `initialize`, `ping`, `tools/list`, and `notifications/*` succeed so a Grok Bot with only an `avm_` header does not see a connect card. Unauthenticated `tools/call` is **401** with `WWW-Authenticate` `resource_metadata` set to the absolute path-aware PRM URL. A valid `Authorization: Bearer avm_…` is sufficient for every method. MCP hosts on other origins may call `/mcp` and well-known (CORS reflects their Origin; no cookies). Operator `/api` still 403s a foreign Origin. `GET /mcp` is SSE keepalive (auth optional for the stream; tools still require a model principal). DCR redirect URIs may be `https`, loopback `http`, or a desktop app scheme (`cursor://`, `grok://`).
 
 `GET /mcp/tools` (hosted, model or operator) returns the same tool list as `tools/list`.
 
@@ -45,7 +45,9 @@ Call this in the same turn the user asks for an API. Do not `list_items` first.
 | `path` | yes | `/v1/me` or a full `https://` URL. Host is taken from the URL. |
 | `host` | one of host / item_name / URL path | Hostname such as `api.spotify.com` |
 | `item_name` | one of host / item_name / URL path | Exact stored name |
-| `body` | no | JSON object for POST/PUT/PATCH |
+| `body` | no | Object for POST/PUT/PATCH. JSON by default; form-urlencoded when `content_type` says so or the path is Spotify `/api/token` |
+| `content_type` | no | `application/json` or `application/x-www-form-urlencoded` |
+| `client_id` | no | Public OAuth Client ID when the item is a Client Secret |
 | `task_description` | no | Shown in the inbox, truncated to 500 characters |
 
 Implementation: [src/hosted/mcp-http.ts](../../src/hosted/mcp-http.ts) `runHttpRequest`, [src/hosted/connector.ts](../../src/hosted/connector.ts).
@@ -53,6 +55,10 @@ Implementation: [src/hosted/mcp-http.ts](../../src/hosted/mcp-http.ts) `runHttpR
 Success body: HTTP `status`, redacted origin `body`, optional `next`. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects.
 
 If the item is missing, the result is `need_item` (not MCP `isError`) with `collect_url` (`${origin}/collect/:needId`, no HMAC). If a grant is required, the result is a pending grant plus `approval_code`. `host_mismatch` is MCP `isError`.
+
+A Client Secret is not a user access token. On `accounts.spotify.com` Botpasses sends HTTP Basic, not Bearer. Token mint uses a form body. App tokens can call `GET /v1/search`. `GET /v1/me` needs a user connect (Authorization Code + PKCE); the tool result says so instead of treating client credentials as a user token. Access tokens in origin JSON are `[redacted]`.
+
+Prompt grants stay reusable after a failed origin 4xx (401/410). Retry with `next.arguments`. Do not ask for a new 8-digit code.
 
 ### `find_items`
 

@@ -427,6 +427,22 @@ test("AC-25 DCR rejects javascript; stores https redirect; AC-19 metadata", asyn
     });
     assert.equal(bad.status, 400);
 
+    const desktop = await fetch(`${ctx.base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://grok.x.ai" },
+      body: JSON.stringify({
+        client_name: "grok-desktop",
+        redirect_uris: ["cursor://anysphere.cursor-mcp/oauth/callback", "grok://oauth/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      }),
+    });
+    const desktopText = await desktop.text();
+    assert.ok(desktop.status === 200 || desktop.status === 201, desktopText);
+    const desktopBody = JSON.parse(desktopText) as { redirect_uris?: string[] };
+    assert.ok(desktopBody.redirect_uris?.includes("cursor://anysphere.cursor-mcp/oauth/callback"));
+
     const ok = await fetch(`${ctx.base}/oauth/register`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: "https://grok.x.ai" },
@@ -458,7 +474,12 @@ test("AC-26 wrong aud is rejected; AC-27 unauthenticated MCP has resource_metada
     const unauth = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "list_items", arguments: {} },
+      }),
     });
     assert.equal(unauth.status, 401);
     assert.match(

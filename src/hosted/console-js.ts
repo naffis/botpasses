@@ -55,7 +55,7 @@ function hashPanel(hash) {
 }
 function showPanel(name) {
   const titles = {
-    inbox: ["Inbox", "Approve an agent when it needs a credential. The model never sees the value."],
+    inbox: ["Inbox", "Approve once. The agent can retry after a failed API call without a new 8-digit code. The model never sees the value."],
     vault: ["Vault", "Named credentials. Last-4 only. Rotate or delete from the row."],
     access: ["Access", "Issue a token once. Then see who holds it, last-4, last used, and the audit log."]
   };
@@ -150,6 +150,15 @@ async function loadItems() {
     rot.className = "btn-ghost";
     rot.textContent = "Rotate";
     rot.addEventListener("click", function() { openRotate(i.id, i.name); });
+    const hostsText = (i.allowedHosts || i.allowed_hosts || []).join(",");
+    if (hostsText.indexOf("spotify") !== -1) {
+      const sp = document.createElement("button");
+      sp.type = "button";
+      sp.className = "btn-ghost";
+      sp.textContent = "Connect Spotify user";
+      sp.addEventListener("click", function() { openSpotify(i.name, i.environment, i.username); });
+      actions.appendChild(sp);
+    }
     const del = document.createElement("button");
     del.type = "button";
     del.className = "btn-danger";
@@ -160,7 +169,7 @@ async function loadItems() {
     body.appendChild(tr);
   }
 }
-function inboxCard(title, detail, action) {
+function inboxCard(title, detail, action, extra) {
   const row = document.createElement("div");
   row.className = "inbox-item";
   const copy = document.createElement("div");
@@ -169,8 +178,15 @@ function inboxCard(title, detail, action) {
   const p = document.createElement("p");
   p.textContent = detail;
   copy.append(h, p);
+  if (extra) copy.appendChild(extra);
   row.appendChild(copy);
-  if (action) row.appendChild(action);
+  if (action) {
+    const actions = document.createElement("div");
+    actions.className = "inbox-actions";
+    if (Array.isArray(action)) action.forEach(function(el) { actions.appendChild(el); });
+    else actions.appendChild(action);
+    row.appendChild(actions);
+  }
   return row;
 }
 async function loadInbox() {
@@ -212,26 +228,56 @@ async function loadInbox() {
     ));
   }
   for (const g of grants) {
+    const name = g.item_name || g.itemName || "credential";
+    const client = g.client_name || g.clientName || "Agent";
+    const task = g.task_description || g.taskDescription || "";
+    const last4 = g.item_last4 || g.itemLast4 ? "····" + (g.item_last4 || g.itemLast4) : "";
+    const detail = [client, name, last4, task].filter(Boolean).join(" · ");
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn-ghost";
+    copyBtn.textContent = "Copy status";
+    copyBtn.addEventListener("click", function() {
+      copyText(client + " · " + name + " · " + (g.status || "") + (task ? " · " + task : ""), "Grant status copied");
+    });
+    if (g.status === "active") {
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.textContent = "Approved. The agent can retry now. A failed 401/410 does not need a new 8-digit code.";
+      el.appendChild(inboxCard("Approved — waiting for retry", detail, copyBtn, note));
+      continue;
+    }
     const b = document.createElement("button");
     b.type = "button";
     b.className = "btn-primary";
-    b.textContent = "Approve prompt";
+    b.textContent = "Approve and let the agent retry";
     b.addEventListener("click", async function() {
       const res = await api("/api/grants/" + g.id + "/approve", { method: "POST", body: JSON.stringify({ policy: "prompt" }) });
       const body = await res.json().catch(function() { return {}; });
-      flash(res.ok ? "Approved" : (body.error || "Approve failed"), res.ok);
+      flash(res.ok ? "Approved. The agent can retry now — failed API calls reuse this approve." : (body.error || "Approve failed"), res.ok);
       loadInbox();
     });
     el.appendChild(inboxCard(
-      "Grant " + g.status,
-      [g.id, g.taskDescription || g.task_description].filter(Boolean).join(" · "),
-      b
+      client + " wants " + name,
+      detail,
+      [b, copyBtn]
     ));
   }
 }
 function openStore() {
   setFormNotice("store-error", "", true);
   const d = document.getElementById("store-dialog");
+  if (d && d.showModal) d.showModal();
+}
+function openSpotify(name, environment, clientId) {
+  setFormNotice("spotify-error", "", true);
+  const form = document.getElementById("spotify-user");
+  if (form) {
+    form.item_name.value = name || "";
+    form.environment.value = environment || "staging";
+    if (clientId) form.client_id.value = clientId;
+  }
+  const d = document.getElementById("spotify-dialog");
   if (d && d.showModal) d.showModal();
 }
 function openRotate(id, name) {
@@ -247,14 +293,15 @@ function openRotate(id, name) {
 }
 function storeAuthSummary(inject) {
   if (inject === "basic") return "Sent as HTTP Basic (username + password).";
+  if (inject === "client_credentials") return "OAuth client secret. Token mint uses HTTP Basic (client_id:secret) and a form body. Not a user access token.";
   if (inject === "header:Authorization") return "Sent as a raw Authorization header, with no Bearer prefix.";
-  return "Sent as Authorization: Bearer. Typical for API tokens.";
+  return "Sent as Authorization: Bearer. Typical for API tokens. A Client Secret is not an access token.";
 }
 function syncStoreAuthFields(form) {
   const row = document.getElementById("store-username");
   const summary = document.getElementById("store-inject-summary");
   if (!form) return;
-  const show = form.kind.value === "login" || form.inject.value === "basic";
+  const show = form.kind.value === "login" || form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials";
   if (row) {
     row.hidden = !show;
     if (!show) form.username.value = "";
@@ -296,7 +343,11 @@ document.addEventListener("DOMContentLoaded", function() {
   const store = document.getElementById("store");
   if (store) {
     store.kind.addEventListener("change", function() {
-      store.inject.value = store.kind.value === "login" ? "basic" : "bearer";
+      if (store.kind.value === "login") store.inject.value = "basic";
+      else if (store.kind.value === "client_secret") {
+        store.inject.value = "client_credentials";
+        if (!store.allowed_hosts.value) store.allowed_hosts.value = "api.spotify.com, accounts.spotify.com";
+      } else store.inject.value = "bearer";
       syncStoreAuthFields(store);
     });
     store.inject.addEventListener("change", function() { syncStoreAuthFields(store); });
@@ -306,11 +357,13 @@ document.addEventListener("DOMContentLoaded", function() {
       const f = store;
       setFormNotice("store-error", "", true);
       const hosts = f.allowed_hosts.value.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      const kind = f.kind.value === "login" ? "login" : "secret";
+      const inject = f.kind.value === "client_secret" ? "client_credentials" : f.inject.value;
       const r = await api("/api/items", { method: "POST", body: JSON.stringify({
-        name: f.name.value, kind: f.kind.value, environment: f.environment.value,
+        name: f.name.value, kind: kind, environment: f.environment.value,
         value: f.value.value,
-        username: (f.kind.value === "login" || f.inject.value === "basic") ? (f.username.value || undefined) : undefined,
-        allowed_hosts: hosts, inject: f.inject.value
+        username: (kind === "login" || inject === "basic" || inject === "client_credentials") ? (f.username.value || undefined) : undefined,
+        allowed_hosts: hosts, inject: inject
       }) });
       const j = await r.json().catch(function() { return {}; });
       if (r.ok) {
@@ -408,6 +461,30 @@ document.addEventListener("DOMContentLoaded", function() {
     if (confirm && confirm.close) confirm.close();
     loadItems(); loadInbox(); loadAccess();
   });
+  const spotify = document.getElementById("spotify-user");
+  if (spotify) {
+    spotify.addEventListener("submit", async function(e) {
+      e.preventDefault();
+      setFormNotice("spotify-error", "", true);
+      const r = await api("/api/integrations/spotify/start", { method: "POST", body: JSON.stringify({
+        item_name: spotify.item_name.value,
+        environment: spotify.environment.value,
+        client_id: spotify.client_id.value
+      }) });
+      const j = await r.json().catch(function() { return {}; });
+      if (!r.ok || !j.authorize_url) {
+        setFormNotice("spotify-error", j.error || "Could not start Spotify connect", false);
+        return;
+      }
+      window.location.href = j.authorize_url;
+    });
+  }
+  if (/spotify=connected/.test(location.search + location.hash)) {
+    flash("Spotify user connected. Refresh token stored. The model never sees it.", true);
+  }
+  if (/spotify=error/.test(location.search + location.hash)) {
+    flash("Spotify user connect failed. Check the Client ID and the redirect URI on the Spotify app.", false);
+  }
   loadItems(); loadInbox(); loadAccess();
 });
 `;
