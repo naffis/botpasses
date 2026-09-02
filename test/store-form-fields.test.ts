@@ -15,6 +15,7 @@ test("login username is only for kind login or inject basic", () => {
   assert.equal(needsLoginUsername("secret", "bearer"), false);
   assert.equal(needsLoginUsername("secret", "header:Authorization"), false);
   assert.equal(needsLoginUsername("secret", "basic"), true);
+  assert.equal(needsLoginUsername("secret", "client_credentials"), true);
   assert.equal(needsLoginUsername("login", "bearer"), true);
   assert.equal(needsLoginUsername("login", "basic"), true);
 });
@@ -37,9 +38,10 @@ test("store form hides username and inject until they are needed", () => {
   assert.match(html, />API token</);
   assert.match(html, />Username and password</);
   assert.match(CONSOLE_JS, /store-inject-summary/);
-  assert.match(CONSOLE_JS, /kind\.value === "login" \? "basic" : "bearer"/);
+  assert.match(CONSOLE_JS, /kind\.value === "login"/);
+  assert.match(CONSOLE_JS, /client_credentials/);
   assert.match(COLLECT_JS, /fulfill-inject-summary/);
-  assert.match(COLLECT_JS, /kind\.value === "login" \? "basic" : "bearer"/);
+  assert.match(COLLECT_JS, /client_credentials/);
 });
 
 test("staging plane lists only staging; production plane lists both", () => {

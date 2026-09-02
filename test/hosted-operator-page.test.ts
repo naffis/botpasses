@@ -14,9 +14,9 @@ test("operator page can list both environments and rotate or delete", () => {
   assert.doesNotMatch(CONSOLE_JS, /\/api\/items\?environment=/);
   assert.match(html, /data-environments="staging,production"/);
   assert.match(html, /Issue Grok Bot token/);
-  assert.match(html, /ask it in plain language/);
-  assert.match(html, /Grok calls the API in the same turn/);
-  assert.match(html, /You do not need to tell it to use Botpasses/);
+  assert.match(html, /avm_/);
+  assert.match(html, /Authorization: Bearer/);
+  assert.match(html, /Client Secret is not a user access token/);
   assert.match(html, /data-testid="console-signin"/);
   assert.match(html, /Authorization/);
   assert.match(html, /<select name="inject">/);

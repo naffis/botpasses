@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Grok Bot: `Authorization: Bearer avm_…` is sufficient. Handshake methods (`initialize`, `ping`, `tools/list`) no longer 401, so a connect card / `needsAuth` is not forced when the Bearer is already configured. DCR accepts desktop redirect schemes (`cursor://`, `grok://`) as well as https and loopback http.
+- Prompt grants reactivate after a failed origin HTTP (401/410/5xx). One inbox approve can retry Spotify token mint. The origin status and body are returned (empty 410 is the origin, not a Botpasses consume error).
+- Spotify client-credentials helper: Client Secret is not injected as Bearer on `accounts.spotify.com`. `inject=client_credentials` or `client_id` + stored secret mints with HTTP Basic and `application/x-www-form-urlencoded`, caches the app token, then calls `api.spotify.com`. Access tokens are `[redacted]`. `GET /v1/search` works; `GET /v1/me` tells the model it needs user OAuth.
+- Spotify user connect (Authorization Code + PKCE) stores a refresh token in the vault. Console inbox approve/retry copy, collect/store Client Secret preset, and Grok docs updated. No new 8-digit code after a failed call.
+
 - MCP OAuth discovery is RFC 8414 complete (`response_types_supported: ["code"]`, grants, token auth methods). Path-aware well-known and `openid-configuration` serve the same documents. `WWW-Authenticate` uses an absolute PRM URL. Browser MCP hosts (Grok) may call `/mcp` and `/oauth` from another origin; operator `/api` still rejects a foreign Origin. CORS Origin and the PRM host are bound to that request, not a process-global slot.
 - Hosted backup fails closed if R2 is unset. Dump encryption lives in `backup-envelope` (tested). Restore: [docs/ops/restore.md](docs/ops/restore.md). Staging Neon history is 7 days; the root branch is protected.
 - Access is issue plus inventory. The Connect nav is gone (`#connect` still opens Access). Rows show last-4 of the machine bearer (`••••abcd`), created, first/last access, and fetched names. The full token is shown once at issue or rotate. Audit log on a row opens that client’s activity (actions and names only). `http.request` and trusted resolve write an `inject` audit event.

@@ -2,7 +2,7 @@
 
 Canonical hosted and local HTTP routes. Public copy: [site HTTP API](../../site/src/pages/docs/reference/http-api.astro). Router: [src/hosted/http.ts](../../src/hosted/http.ts). Access: [src/hosted/http-access-routes.ts](../../src/hosted/http-access-routes.ts). Auth pages/API: [src/hosted/http-auth-routes.ts](../../src/hosted/http-auth-routes.ts). Local loopback: [src/server.ts](../../src/server.ts).
 
-JSON bodies are capped at 128 KiB. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api` and `POST /mcp` is 401.
+JSON bodies are capped at 128 KiB. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api` and `POST /mcp` `tools/call` is 401. Handshake methods (`initialize`, `ping`, `tools/list`) succeed without a Bearer so Grok does not show a connect card. A valid `avm_…` is sufficient for all MCP methods.
 
 ## Principals
 
@@ -23,7 +23,10 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/.well-known/oauth-protected-resource` | none | `{ resource, authorization_servers, scopes_supported, bearer_methods_supported: ["header"] }`. Same JSON at `/mcp` suffix and `/mcp/.well-known/…` |
 | GET | `/.well-known/oauth-authorization-server` | none | RFC 8414. Required `response_types_supported: ["code"]`. PKCE `S256` only. Same JSON at `/mcp` suffix, `/mcp/.well-known/…`, and `/.well-known/openid-configuration` |
 | GET | `/robots.txt` | none | Staging allows `/`. Prod disallows `/console`, auth, collect, api, mcp, oauth |
-| GET | `/mcp/tools` | model or operator | `{ tools }` same as MCP `tools/list` |
+| GET | `/mcp/tools` | none (or model/operator) | `{ tools }` same as MCP `tools/list` |
+| POST | `/api/items/:id/meta` | operator | `{ username?, inject?, allowed_hosts? }` public item (Client ID on a secret) |
+| POST | `/api/integrations/spotify/start` | operator | `{ item_name, environment?, client_id? }` → `{ authorize_url, redirect_uri }` |
+| GET | `/integrations/spotify/callback` | operator cookie | Exchanges the code, stores a refresh token, redirects to `/console#vault` |
 
 ## Auth HTML and JSON
 
@@ -76,7 +79,7 @@ Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
 | POST | `/api/grants/approve-by-code` | operator | `{ code }` 8-digit. Reuse is 409 |
 | GET/POST | `/approve?token=` | operator | Magic-link approve |
 
-Policies: `prompt` (one inject then consumed), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`).
+Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reactivates so the agent can retry), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). DCR `redirect_uris` may be https, loopback http, or a desktop app scheme (`cursor://`, `grok://`).
 
 ## Access snapshot and ledger
 

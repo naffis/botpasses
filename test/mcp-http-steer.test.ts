@@ -49,6 +49,18 @@ test("need_item payload includes next.for_model", () => {
   assert.equal(nextForPayload({ status: 200, body: "{}" })?.for_model.includes("redacted"), true);
 });
 
+test("origin 401 next tells the model to retry the same grant", () => {
+  const next = nextForPayload({
+    status: 401,
+    body: "",
+    hint: "Upstream 401",
+    retry: { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET" },
+  });
+  assert.equal(next?.tool, "http.request");
+  assert.match(next?.for_model ?? "", /same Botpasses approval|new 8-digit code/i);
+  assert.equal(next?.arguments?.item_name, "SPOTIFY_SECRET");
+});
+
 test("pending grant next.arguments merges retry with item_name", () => {
   const next = nextForPayload({
     grant_id: "grt_1",
