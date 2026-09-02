@@ -65,7 +65,10 @@ export type VaultStore = {
   ): Promise<void>;
   updateItemMeta(
     id: string,
-    patch: Pick<ItemRecord, "username" | "inject" | "allowedHostsJson" | "updatedAt">,
+    patch: Pick<
+      ItemRecord,
+      "name" | "kind" | "environmentId" | "username" | "inject" | "allowedHostsJson" | "updatedAt"
+    >,
   ): Promise<void>;
   deleteItem(id: string): Promise<void>;
   getItem(id: string): Promise<ItemRecord | undefined>;

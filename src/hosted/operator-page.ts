@@ -1,6 +1,7 @@
 import { PRODUCT_NAME } from "../brand.ts";
 import type { VaultEnvName } from "../hosted-types.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
+import { APP_SECRET_HOSTS, storeKindOptionsHtml } from "./store-form-fields.ts";
 
 /** Operator console HTML. `deployPlane` controls which environments Store, Grok issue, and the item list expose. */
 export function hostedOperatorHtml(
@@ -49,7 +50,7 @@ export function hostedOperatorHtml(
       <header class="page-head">
         <div>
           <h1 id="page-title">Vault</h1>
-          <p id="page-lede" class="lede">Named credentials. Last-4 only. Rotate or delete from the row.</p>
+          <p id="page-lede" class="lede">Named credentials. Last-4 only. Edit, rotate, or delete from the row.</p>
         </div>
         <div class="toolbar">
           <button type="button" id="open-store" class="btn-primary" data-testid="open-store">Store credential</button>
@@ -142,23 +143,22 @@ export function hostedOperatorHtml(
     </div>
   </div>
   <dialog id="store-dialog" data-testid="store-dialog">
-    <h2>Store credential</h2>
+    <h2 id="store-title">Store credential</h2>
     <p id="store-error" class="flash" role="alert" data-testid="store-error"></p>
     <form id="store">
+      <input type="hidden" name="item_id" />
       <label>Name <input name="name" required placeholder="SPOTIFY_SECRET" /></label>
       <label>Kind
         <select name="kind">
-          <option value="secret">API token</option>
-          <option value="client_secret">OAuth client secret (Spotify app)</option>
-          <option value="login">Username and password</option>
+          ${storeKindOptionsHtml()}
         </select>
       </label>
       <label>Environment
         <select name="environment">${envOptions}</select>
       </label>
-      <label>Value <input name="value" type="password" autocomplete="off" required /></label>
-      <label id="store-username" hidden>Client ID or HTTP Basic username <input name="username" autocomplete="username" placeholder="Spotify Client ID" /></label>
-      <label>Allowed hosts (comma) <input name="allowed_hosts" required placeholder="api.spotify.com, accounts.spotify.com" /></label>
+      <label><span id="store-value-label">Value</span> <input name="value" type="password" autocomplete="off" required /></label>
+      <label id="store-username" hidden><span id="store-username-label">Client ID</span> <input name="username" autocomplete="username" placeholder="Spotify Client ID" /></label>
+      <label>Allowed hosts (comma) <input name="allowed_hosts" required placeholder="${APP_SECRET_HOSTS}" /></label>
       <p id="store-inject-summary" class="hint">Sent as Authorization: Bearer. Typical for API tokens. A Client Secret is not an access token.</p>
       <details id="store-inject-advanced">
         <summary>Change how it is sent</summary>
@@ -171,9 +171,9 @@ export function hostedOperatorHtml(
           </select>
         </label>
       </details>
-      <p class="hint">Spotify token mint: Client ID in username, Client Secret as the value, hosts <code>api.spotify.com, accounts.spotify.com</code>. Botpasses sends Basic + form body. Do not store the secret as a Bearer user token.</p>
+      <p class="hint">Spotify token mint: Kind Client ID and secret, hosts <code>${APP_SECRET_HOSTS}</code>. Botpasses sends Basic + form body. Do not store the secret as a Bearer user token.</p>
       <div class="dialog-actions">
-        <button type="submit">Store</button>
+        <button type="submit" id="store-submit">Store</button>
         <button type="button" class="btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
       </div>
     </form>

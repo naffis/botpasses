@@ -262,11 +262,23 @@ export class PostgresStore implements VaultStore {
 
   async updateItemMeta(
     id: string,
-    patch: Pick<ItemRecord, "username" | "inject" | "allowedHostsJson" | "updatedAt">,
+    patch: Pick<
+      ItemRecord,
+      "name" | "kind" | "environmentId" | "username" | "inject" | "allowedHostsJson" | "updatedAt"
+    >,
   ): Promise<void> {
     await this.#pool.query(
-      "UPDATE items SET username=$1, inject=$2, allowed_hosts_json=$3, updated_at=$4 WHERE id=$5",
-      [patch.username, patch.inject, patch.allowedHostsJson, patch.updatedAt, id],
+      "UPDATE items SET name=$1, kind=$2, environment_id=$3, username=$4, inject=$5, allowed_hosts_json=$6, updated_at=$7 WHERE id=$8",
+      [
+        patch.name,
+        patch.kind,
+        patch.environmentId,
+        patch.username,
+        patch.inject,
+        patch.allowedHostsJson,
+        patch.updatedAt,
+        id,
+      ],
     );
   }
 

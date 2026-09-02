@@ -17,6 +17,7 @@ import type { VaultStore } from "../store/types.ts";
 import { StoreConflictError } from "../store/conflict.ts";
 import { HttpError, NeedItemError, type NeedItemPayload } from "./errors.ts";
 import { matchFindItems, NEED_ITEM_MESSAGE } from "./need-match.ts";
+import { storedItemUsername } from "./store-form-fields.ts";
 import type { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
 
@@ -301,6 +302,9 @@ export async function fulfillNeed(
   if (kind === "login" && !input.username) {
     throw new HttpError(400, "login items require username");
   }
+  if (kind === "client_secret" && !input.username) {
+    throw new HttpError(400, "Client ID and secret items require a Client ID");
+  }
   const env = await host.store.getEnvironment(need.environmentId);
   if (!env) throw new HttpError(404, "Unknown environment");
   host.assertPlane(env.name);
@@ -322,10 +326,7 @@ export async function fulfillNeed(
     kind,
     name,
     last4: last4(input.value),
-    username:
-      kind === "login" || input.inject === "basic" || input.inject === "client_credentials"
-        ? (input.username ?? null)
-        : null,
+    username: storedItemUsername(kind, input.inject, input.username),
     allowedHostsJson: JSON.stringify(input.allowedHosts),
     inject: input.inject,
     iv: envelope.iv,

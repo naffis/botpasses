@@ -41,7 +41,7 @@ import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import { logVaultEvent } from "./observe.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
-import { storedItemUsername } from "./store-form-fields.ts";
+import { itemStoresLoginPayload, storedItemUsername } from "./store-form-fields.ts";
 import {
   chooseSpotifyRedirect,
   mintSpotifyAccessToken,
@@ -287,6 +287,9 @@ export class HostedKernel {
     }
     if (input.kind === "login" && !input.username) {
       throw new HttpError(400, "login items require username");
+    }
+    if (input.kind === "client_secret" && !input.username) {
+      throw new HttpError(400, "Client ID and secret items require a Client ID");
     }
     if (input.inject === "client_credentials" && !input.username) {
       throw new HttpError(400, "client_credentials items require a Client ID in username");
@@ -913,33 +916,102 @@ export class HostedKernel {
     inject?: string;
     allowedHosts?: string[];
   }): Promise<ItemPublic> {
+    return this.updateItem(input);
+  }
+
+  async updateItem(input: {
+    orgId: string;
+    actor: string;
+    itemId: string;
+    name?: string;
+    kind?: ItemKind;
+    environment?: VaultEnvName;
+    username?: string;
+    inject?: string;
+    allowedHosts?: string[];
+    value?: string;
+  }): Promise<ItemPublic> {
     const item = await this.store.getItem(input.itemId);
     if (!item) throw new HttpError(404, "Unknown item");
     const env = await this.store.getEnvironment(item.environmentId);
     if (!env) throw new HttpError(404, "Unknown environment");
     await this.#assertItemOrg(input.orgId, env.vaultId);
+    const nextKind = input.kind ?? item.kind;
     const inject = input.inject ?? item.inject;
+    const nextUsernameRaw = input.username !== undefined ? input.username : item.username;
     if (input.allowedHosts) this.#assertHosts(input.allowedHosts);
-    if (inject === "client_credentials" && !storedItemUsername(item.kind, inject, input.username ?? item.username)) {
+    if (nextKind === "login" && !storedItemUsername(nextKind, inject, nextUsernameRaw)) {
+      throw new HttpError(400, "login items require username");
+    }
+    if (nextKind === "client_secret" && !storedItemUsername(nextKind, inject, nextUsernameRaw)) {
+      throw new HttpError(400, "Client ID and secret items require a Client ID");
+    }
+    if (inject === "client_credentials" && !storedItemUsername(nextKind, inject, nextUsernameRaw)) {
       throw new HttpError(400, "client_credentials items require a Client ID in username");
+    }
+    let name = item.name;
+    if (input.name !== undefined) {
+      try {
+        name = normalizeSecretName(input.name);
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : "Invalid name");
+      }
+    }
+    let nextEnv = env;
+    if (input.environment && input.environment !== env.name) {
+      nextEnv = await this.envFor(input.orgId, input.environment);
+    }
+    if (name !== item.name || nextEnv.id !== item.environmentId) {
+      const existing = await this.store.getItemByName(nextEnv.id, name);
+      if (existing && existing.id !== item.id) {
+        throw new HttpError(409, "Item name already exists in this environment");
+      }
     }
     const next = {
       ...item,
+      name,
+      kind: nextKind,
+      environmentId: nextEnv.id,
       inject,
-      username: storedItemUsername(item.kind, inject, input.username !== undefined ? input.username : item.username),
+      username: storedItemUsername(nextKind, inject, nextUsernameRaw),
       allowedHostsJson: input.allowedHosts ? JSON.stringify(input.allowedHosts) : item.allowedHostsJson,
       updatedAt: nowIso(this.now()),
     };
+    const newValue = input.value !== undefined && input.value.length > 0 ? input.value : undefined;
+    const loginShapeChanged = itemStoresLoginPayload(item.kind) !== itemStoresLoginPayload(nextKind);
+    if (newValue !== undefined || loginShapeChanged) {
+      if (newValue !== undefined) {
+        if (Buffer.byteLength(newValue, "utf8") > MAX_ITEM_BYTES) {
+          throw new HttpError(400, "Value exceeds 64KiB");
+        }
+      }
+      const secret = newValue ?? (await this.decryptItem(input.orgId, item.id)).secret;
+      const payload = itemStoresLoginPayload(nextKind)
+        ? JSON.stringify({ username: next.username, password: secret })
+        : secret;
+      const dek = await this.dekForOrg(input.orgId);
+      const envelope = encrypt(payload, dek, input.orgId);
+      await this.store.updateItemEnvelope(item.id, {
+        iv: envelope.iv,
+        ciphertext: envelope.ciphertext,
+        tag: envelope.tag,
+        last4: last4(secret),
+        updatedAt: next.updatedAt,
+      });
+    }
     await this.store.updateItemMeta(item.id, {
+      name: next.name,
+      kind: next.kind,
+      environmentId: next.environmentId,
       username: next.username,
       inject: next.inject,
       allowedHostsJson: next.allowedHostsJson,
       updatedAt: next.updatedAt,
     });
-    await this.#audit(input.orgId, "store", input.actor, item.name, null);
+    await this.#audit(input.orgId, "store", input.actor, next.name, null);
     const saved = await this.store.getItem(item.id);
     if (!saved) throw new HttpError(500, "Update failed");
-    return this.#publicItem(env.name, saved);
+    return this.#publicItem(nextEnv.name, saved);
   }
 
   async startSpotifyUserOauth(input: {

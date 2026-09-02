@@ -321,13 +321,25 @@ export class SqliteHostedStore implements VaultStore {
 
   async updateItemMeta(
     id: string,
-    patch: Pick<ItemRecord, "username" | "inject" | "allowedHostsJson" | "updatedAt">,
+    patch: Pick<
+      ItemRecord,
+      "name" | "kind" | "environmentId" | "username" | "inject" | "allowedHostsJson" | "updatedAt"
+    >,
   ): Promise<void> {
     this.#db
       .prepare(
-        "UPDATE items SET username = ?, inject = ?, allowed_hosts_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE items SET name = ?, kind = ?, environment_id = ?, username = ?, inject = ?, allowed_hosts_json = ?, updated_at = ? WHERE id = ?",
       )
-      .run(patch.username, patch.inject, patch.allowedHostsJson, patch.updatedAt, id);
+      .run(
+        patch.name,
+        patch.kind,
+        patch.environmentId,
+        patch.username,
+        patch.inject,
+        patch.allowedHostsJson,
+        patch.updatedAt,
+        id,
+      );
   }
 
   async deleteItem(id: string): Promise<void> {

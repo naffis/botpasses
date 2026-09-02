@@ -197,13 +197,13 @@ document.addEventListener("DOMContentLoaded", function() {
       '<form id="fulfill" data-need-id="' + escapeAttr(needId) + '">' +
       '<label>Name <input name="name" required value="' + escapeAttr(need.suggested_name || "") + '" /></label>' +
       '<label>Allowed hosts (comma) <input name="allowed_hosts" required value="' + escapeAttr(need.host || "") + '" /></label>' +
-      '<label>Kind <select name="kind"><option value="secret" selected>API token</option><option value="client_secret">OAuth client secret (Spotify app)</option><option value="login">Username and password</option></select></label>' +
-      '<label id="fulfill-username" hidden>Client ID or HTTP Basic username <input name="username" autocomplete="username" /></label>' +
+      '<label>Kind <select name="kind"><option value="secret" selected>API token</option><option value="client_secret">Client ID and secret</option></select></label>' +
+      '<label id="fulfill-username" hidden><span id="fulfill-username-label">Client ID</span> <input name="username" autocomplete="username" /></label>' +
       '<p id="fulfill-inject-summary" class="hint">Sent as Authorization: Bearer. Typical for API tokens. A Client Secret is not an access token.</p>' +
       '<details id="fulfill-inject-advanced"><summary>Change how it is sent</summary>' +
       '<label>Send as <select name="inject"><option value="bearer" selected>Authorization: Bearer (typical API token)</option><option value="client_credentials">OAuth client secret (mint app token)</option><option value="basic">HTTP Basic (username + password)</option><option value="header:Authorization">Raw Authorization header</option></select></label>' +
       '</details>' +
-      '<label>Value <input name="value" type="password" autocomplete="off" required /></label>' +
+      '<label><span id="fulfill-value-label">Value</span> <input name="value" type="password" autocomplete="off" required /></label>' +
       '<button type="submit">Store and grant</button></form>'
     ) : "";
     details.innerHTML = '<div class="banner">' + escapeHtml(heading) + "</div>" + task + formHtml;
@@ -219,11 +219,19 @@ document.addEventListener("DOMContentLoaded", function() {
     const row = document.getElementById("fulfill-username");
     const summary = document.getElementById("fulfill-inject-summary");
     if (!form) return;
+    const userLabel = document.getElementById("fulfill-username-label");
+    const valueLabel = document.getElementById("fulfill-value-label");
     function sync() {
-      const show = form.kind.value === "login" || form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials";
+      const show = form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials";
       if (row) {
         row.hidden = !show;
         if (!show) form.username.value = "";
+      }
+      if (userLabel) {
+        userLabel.textContent = (form.kind.value === "client_secret" || form.inject.value === "client_credentials") ? "Client ID" : "HTTP Basic username";
+      }
+      if (valueLabel) {
+        valueLabel.textContent = (form.kind.value === "client_secret" || form.inject.value === "client_credentials") ? "Client Secret" : "Value";
       }
       if (summary) {
         if (form.inject.value === "basic") summary.textContent = "Sent as HTTP Basic (username + password).";
@@ -233,9 +241,10 @@ document.addEventListener("DOMContentLoaded", function() {
       }
     }
     form.kind.addEventListener("change", function() {
-      if (form.kind.value === "login") form.inject.value = "basic";
-      else if (form.kind.value === "client_secret") form.inject.value = "client_credentials";
-      else form.inject.value = "bearer";
+      if (form.kind.value === "client_secret") {
+        form.inject.value = "client_credentials";
+        if (!form.allowed_hosts.value) form.allowed_hosts.value = "api.spotify.com, accounts.spotify.com";
+      } else form.inject.value = "bearer";
       sync();
     });
     form.inject.addEventListener("change", sync);
@@ -252,8 +261,8 @@ document.addEventListener("DOMContentLoaded", function() {
         body: JSON.stringify({
           name: form.name.value, value: form.value.value, allowed_hosts: hosts,
           inject: form.kind.value === "client_secret" ? "client_credentials" : form.inject.value,
-          kind: form.kind.value === "login" ? "login" : "secret",
-          username: (form.kind.value === "login" || form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials") ? (form.username.value || undefined) : undefined
+          kind: form.kind.value === "client_secret" ? "client_secret" : "secret",
+          username: (form.kind.value === "client_secret" || form.inject.value === "basic" || form.inject.value === "client_credentials") ? (form.username.value || undefined) : undefined
         })
       });
       const data = await r.json().catch(function() { return {}; });
