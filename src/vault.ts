@@ -39,7 +39,7 @@ import {
 import type {
   AuditRecord,
   GrantRecord,
-  GrantScope,
+  LocalGrantScope,
   RunResult,
   SecretBinding,
   SecretMeta,
@@ -167,7 +167,7 @@ export class Vault {
     secretName: string;
     agentId: string;
     toolId: string;
-    scope?: GrantScope;
+    scope?: LocalGrantScope;
     ttl?: string;
     actor?: string;
   }): GrantRecord {
@@ -205,7 +205,7 @@ export class Vault {
     secretName?: string;
     agentId: string;
     toolId: string;
-    scope?: GrantScope;
+    scope?: LocalGrantScope;
     ttl?: string;
     actor?: string;
   }): GrantRecord {

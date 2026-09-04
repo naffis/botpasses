@@ -13,7 +13,7 @@ import { normalizeActorId, normalizeSecretName } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
 import { hostAllowedBy } from "./hosted/connector.ts";
 import { HTTP_REQUEST_TOOL, publicLocalGrant, type Vault } from "./vault.ts";
-import type { GrantScope } from "./types.ts";
+import type { LocalGrantScope } from "./types.ts";
 
 export const MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
@@ -318,7 +318,7 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
-function optionalScope(value: unknown): GrantScope | undefined {
+function optionalScope(value: unknown): LocalGrantScope | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (value === "once" || value === "session") return value;
   throw new Error("scope must be once or session");

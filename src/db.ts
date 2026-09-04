@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AuditAction, AuditRecord, GrantRecord, GrantScope, GrantStatus, SecretMeta } from "./types.ts";
+import type { AuditAction, AuditRecord, GrantRecord, LocalGrantScope, GrantStatus, SecretMeta } from "./types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS vault_meta (
@@ -316,7 +316,7 @@ function mapGrant(row: GrantRow): GrantRecord {
     secretName: row.secret_name,
     agentId: row.agent_id,
     toolId: row.tool_id,
-    scope: row.scope as GrantScope,
+    scope: row.scope as LocalGrantScope,
     status: row.status as GrantStatus,
     expiresAt: row.expires_at,
     createdAt: row.created_at,

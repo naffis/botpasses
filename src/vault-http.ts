@@ -15,7 +15,7 @@ import { assertAllowedHostname } from "./hosted/ssrf.ts";
 import { injectModeOf } from "./hosted/store-form-fields.ts";
 import { normalizeActorId, normalizeSecretName, suggestedNameFromHost } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
-import type { AuditAction, GrantRecord, GrantScope } from "./types.ts";
+import type { AuditAction, GrantRecord, LocalGrantScope } from "./types.ts";
 
 /** The grant "tool" a local MCP `http_request` call is keyed on: `vault grant --tool http_request`. */
 export const HTTP_REQUEST_TOOL = "http_request";
@@ -81,7 +81,7 @@ export type LocalHttpHost = {
   findItemsByHost(host: string): LocalItemMeta[];
   /** Newest pending or active grant for the triple, with expiry already settled. */
   openGrant(secretName: string, agentId: string, toolId: string): GrantRecord | undefined;
-  requestGrant(input: { secretName: string; agentId: string; toolId: string; scope?: GrantScope; actor?: string }): GrantRecord;
+  requestGrant(input: { secretName: string; agentId: string; toolId: string; scope?: LocalGrantScope; actor?: string }): GrantRecord;
   setGrantStatus(id: string, status: GrantRecord["status"], revokedAt: string | null): void;
   decrypt(name: string): string;
   audit(action: AuditAction, parts: { secretName?: string; agentId?: string; toolId?: string; actor?: string }): void;

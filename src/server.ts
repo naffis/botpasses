@@ -5,7 +5,7 @@ import { tokensEqual } from "./crypto.ts";
 import { handleMcpRpc, newMcpSession, type JsonRpcRequest, type McpSession } from "./mcp.ts";
 import { operatorHtml } from "./operator-page.ts";
 import type { LoopbackRole, Vault } from "./vault.ts";
-import type { GrantScope } from "./types.ts";
+import type { LocalGrantScope } from "./types.ts";
 
 export type ServerOptions = {
   vault: Vault;
@@ -274,7 +274,7 @@ function hostsFrom(value: unknown): string[] | undefined {
   return undefined;
 }
 
-function asScope(value: unknown): GrantScope | undefined {
+function asScope(value: unknown): LocalGrantScope | undefined {
   if (value === "once" || value === "session") return value;
   return undefined;
 }

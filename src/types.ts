@@ -1,4 +1,4 @@
-export type GrantScope = "once" | "session";
+export type LocalGrantScope = "once" | "session";
 export type GrantStatus = "pending" | "active" | "revoked" | "consumed" | "expired";
 
 export type AuditAction =
@@ -21,7 +21,7 @@ export type GrantRecord = {
   secretName: string;
   agentId: string;
   toolId: string;
-  scope: GrantScope;
+  scope: LocalGrantScope;
   status: GrantStatus;
   expiresAt: string | null;
   createdAt: string;

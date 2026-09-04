@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Repository: the local plane's grant scope type is `LocalGrantScope` (`once` or `session`); it no longer shares the name `GrantScope` with the hosted scope object.
 - Docs: the threat model covers trust decided at boot, proxy trust, single-use sign-in state, the canonical request path, and prompt-grant semantics; ADR 0008 records the hardening decisions and their consequences. The security page links it and names ADR 0006 correctly.
 - Repository: `npm run botpasses` is gone; it ran the same command as `npm run vault` (the `botpasses` bin name stays for `npx`). One `nowIso`, one `sha256Hex`, one `tokensEqual`, one `sendHtml`, and one `VAULT_DEPLOY_PLANE` parser replace their copies; the unused `OperatorIdentity.clientIp`, the `clientIp` auth-route option, `FindItemsStatus`, and `loadout.lock.json` are removed. `.env.example` lists `FLY_ALLOC_ID` and no longer repeats `VAULT_OIDC_PREVIOUS_JWK` and `VAULT_TRUST_PROXY`.
 - Fixed: `vault init` on a fresh machine created `master.key` before its directory existed and failed with ENOENT; the home directory is created first (mode 0700).

@@ -14,7 +14,7 @@ import { maskLast4 } from "./ids.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
 import { defaultHome, initVaultHome, loadMasterKey, loopbackBearer, Vault } from "./vault.ts";
-import type { GrantScope } from "./types.ts";
+import type { LocalGrantScope } from "./types.ts";
 
 // Hosted dependencies (pg, the AWS KMS SDK, oidc-provider) load only for the commands that
 // need them, so `vault set` and `vault list` stay a sqlite-only startup.
@@ -234,7 +234,7 @@ function cmdGrant(argv: string[], io: Io): number {
     io.error("--ttl applies to --session grants only; a --once grant is spent by its first use and has no expiry.");
     return 1;
   }
-  const scope: GrantScope = values.session ? "session" : "once";
+  const scope: LocalGrantScope = values.session ? "session" : "once";
   const vault = open();
   try {
     const grant = vault.approveGrant({
