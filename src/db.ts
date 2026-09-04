@@ -85,6 +85,9 @@ export function openDb(home: string): DatabaseSync {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(dbPath(home));
   db.exec("PRAGMA journal_mode = WAL;");
+  // A second writer (`vault serve` next to `vault set`) waits up to 5 s for the lock instead of
+  // failing at once with "database is locked" (the default busy_timeout is 0).
+  db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   migrateLocalSchema(db);

@@ -17,7 +17,15 @@ import { Client } from "pg";
 /** Arbitrary constant; every runner takes the same lock. */
 export const MIGRATION_LOCK_KEY = 7_419_203_311;
 
-export type MigrationFile = { version: string; path: string; sql: string };
+/**
+ * `version` is the file name without `.sql` and is what `schema_migrations.version` records;
+ * `prefix` is the three-digit number that identifies the migration regardless of its name.
+ */
+export type MigrationFile = { version: string; prefix: string; path: string; sql: string };
+
+export function migrationPrefix(version: string): string {
+  return version.slice(0, 3);
+}
 
 export function listMigrations(dir: string): MigrationFile[] {
   const files = readdirSync(dir)
@@ -25,11 +33,11 @@ export function listMigrations(dir: string): MigrationFile[] {
     .sort((a, b) => a.localeCompare(b));
   const seen = new Set<string>();
   return files.map((f) => {
-    const version = f.slice(0, 3);
-    if (seen.has(version)) throw new Error(`duplicate migration version ${version}`);
-    seen.add(version);
+    const prefix = migrationPrefix(f);
+    if (seen.has(prefix)) throw new Error(`duplicate migration version ${prefix}`);
+    seen.add(prefix);
     const path = resolve(dir, f);
-    return { version: f.replace(/\.sql$/i, ""), path, sql: readFileSync(path, "utf8") };
+    return { version: f.replace(/\.sql$/i, ""), prefix, path, sql: readFileSync(path, "utf8") };
   });
 }
 
@@ -56,11 +64,19 @@ export async function runMigrations(
        )`,
     );
     const done = await client.query<{ version: string }>("SELECT version FROM schema_migrations");
-    const applied = new Set(done.rows.map((r) => r.version));
+    // Applied migrations are identified by their number, so a file that was renamed after it ran
+    // is neither applied twice nor silently accepted: it is refused with both names.
+    const applied = new Map(done.rows.map((r) => [migrationPrefix(r.version), r.version] as const));
     for (const m of migrations) {
-      if (applied.has(m.version)) {
+      const recorded = applied.get(m.prefix);
+      if (recorded === m.version) {
         result.skipped.push(m.version);
         continue;
+      }
+      if (recorded !== undefined) {
+        throw new Error(
+          `migration ${m.prefix} was applied as ${recorded} but the file is now ${m.version}; a migration file cannot be renamed after it was applied`,
+        );
       }
       await client.query("BEGIN");
       try {

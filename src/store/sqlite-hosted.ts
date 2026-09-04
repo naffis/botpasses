@@ -101,6 +101,8 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
+  // Wait up to 5 s for a concurrent writer instead of failing at once (default busy_timeout is 0).
+  db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(HOSTED_SCHEMA_SQLITE);
   db.exec(HOSTED_SCHEMA_IDENTITY);

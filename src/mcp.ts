@@ -352,8 +352,13 @@ export async function handleMcpRpc(
   session: McpSession = newMcpSession(),
   ctx: Omit<McpCallContext, "session"> = {},
 ): Promise<JsonRpcResponse | null> {
-  const id = req.id ?? null;
-  const method = req.method ?? "";
+  const id = typeof req.id === "string" || typeof req.id === "number" ? req.id : null;
+  // A frame without a method is not a request at all (JSON-RPC 2.0 section 5.1: -32600), which
+  // is different from a request for a method this server does not have (-32601).
+  if (typeof req.method !== "string" || req.method === "") {
+    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request: missing method" } };
+  }
+  const method = req.method;
   if (method.startsWith("notifications/")) return null;
 
   try {
