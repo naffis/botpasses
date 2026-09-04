@@ -533,7 +533,8 @@ export class HostedKernel {
       clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
       decryptItem: (orgId, itemId) => this.decryptItem(orgId, itemId),
       createItem: (input) => this.createItem(input),
-      rotateItem: (input) => this.rotateItem(input),
+      updateItem: (input) => this.updateItem(input),
+      audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),
     };
   }
 

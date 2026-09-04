@@ -272,7 +272,9 @@ export async function executeConnector(
     return {
       status: res.status,
       body,
-      headers: opts.redact === false ? originHeaders : redactOriginHeaders(originHeaders, item),
+      // Headers are never the payload a caller needs verbatim: redact them for the item even
+      // when the caller hand-redacts the body (token endpoints add the minted tokens too).
+      headers: redactOriginHeaders(originHeaders, item),
     };
   } catch (err) {
     if (err instanceof HttpError) throw err;

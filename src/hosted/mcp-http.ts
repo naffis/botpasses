@@ -8,6 +8,7 @@ import {
   type ConnectorItem,
   type ConnectorOpts,
   type ConnectorResult,
+  redactOriginHeaders,
 } from "./connector.ts";
 import { HttpError, isHttpError, isInjectDenied, isNeedItemError, isScopeDenied, type NeedItemPayload } from "./errors.ts";
 import type { HostedKernel, InjectOutcome } from "./kernel.ts";
@@ -352,7 +353,10 @@ async function tokenEndpointCall(
     try {
       const minted = readMintedAccessToken(origin.body);
       storeMint(deps.principal.orgId, item.itemId ?? item.name, clientId, "client_credentials", minted);
-      return originPayload({ ...origin, body: redact([minted.accessToken]) }, { minted: true, token_last4: minted.last4 });
+      return originPayload(
+        { ...origin, body: redact([minted.accessToken]), headers: redactOriginHeaders(origin.headers, item, [minted.accessToken]) },
+        { minted: true, token_last4: minted.last4 },
+      );
     } catch {
       return originPayload({ ...origin, body: redact() });
     }

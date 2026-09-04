@@ -5,7 +5,7 @@
  */
 import type { OauthGrantType } from "../../hosted-types.ts";
 import { redactOauthJson } from "../../redact.ts";
-import { executeConnector, redactConnectorBody, type ConnectorFetch, type ConnectorItem, type ConnectorResult, type PinnedTlsOpts } from "../connector.ts";
+import { executeConnector, redactConnectorBody, type ConnectorFetch, type ConnectorItem, type ConnectorResult, type PinnedTlsOpts, redactOriginHeaders } from "../connector.ts";
 import { HttpError, InjectDeniedError } from "../errors.ts";
 import type { MintedToken, Provider } from "./types.ts";
 
@@ -111,6 +111,7 @@ async function postTokenRequest(
     origin: {
       ...origin,
       body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra),
+      headers: redactOriginHeaders(origin.headers, originalItem, extra),
     },
   };
 }

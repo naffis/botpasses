@@ -9,7 +9,7 @@ import { unscopedFields, type ClientRecord, type EnvironmentRecord, type ItemPub
 import type { VaultStore } from "../store/types.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import { HttpError } from "./errors.ts";
-import { normalizeItemName, type CreateItemInput, type DecryptedItem, type RotateItemInput } from "./kernel-items.ts";
+import { normalizeItemName, type CreateItemInput, type DecryptedItem, type UpdateItemInput } from "./kernel-items.ts";
 import { exchangeAuthorizationCode, refreshItemName } from "./providers/oauth.ts";
 import { providerById } from "./providers/registry.ts";
 import type { Provider, ProviderId } from "./providers/types.ts";
@@ -27,7 +27,8 @@ export type ConnectHost = {
   clientInOrg: (orgId: string, clientId: string) => Promise<ClientRecord>;
   decryptItem: (orgId: string, itemId: string) => Promise<DecryptedItem>;
   createItem: (input: CreateItemInput) => Promise<ItemPublic>;
-  rotateItem: (input: RotateItemInput) => Promise<ItemPublic>;
+  updateItem: (input: UpdateItemInput) => Promise<ItemPublic>;
+  audit: (orgId: string, action: string, actor: string, itemName: string | null, clientId: string | null) => Promise<void>;
 };
 
 export type StartConnectInput = {
@@ -117,6 +118,9 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
   }
   const provider = connectProvider(opened.providerId);
   if (opened.orgId !== input.orgId) throw new HttpError(403, "OAuth state is not for this org");
+  // The account that started the connect must finish it: a state sealed for one operator
+  // cannot bind a different operator's provider account to the item.
+  if (opened.userId !== input.userId) throw new HttpError(403, "OAuth state is not for this account");
   const item = await host.store.getItem(opened.itemId);
   if (!item) throw new HttpError(404, "Unknown item");
   const decrypted = await host.decryptItem(input.orgId, item.id);
@@ -145,10 +149,22 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
   const envName = opened.environment === "production" ? "production" : "staging";
   const env = await host.envFor(input.orgId, envName);
   const existing = await host.store.getItemByName(env.id, name);
+  const allowedHosts = [...new Set([...provider.apiHosts, provider.tokenHost])];
   let last: string;
   let refreshId = existing?.id ?? "";
   if (existing) {
-    const rotated = await host.rotateItem({ orgId: input.orgId, actor: input.userId, itemId: existing.id, value: refresh });
+    // Reset how the refresh token may be sent, not only its value: an `<ITEM>_REFRESH` row
+    // someone stored earlier with other hosts or another inject mode must not receive a
+    // token the connecting operator never meant to send there.
+    const rotated = await host.updateItem({
+      orgId: input.orgId,
+      actor: input.userId,
+      itemId: existing.id,
+      value: refresh,
+      username: opened.clientId,
+      allowedHosts,
+      inject: "refresh",
+    });
     last = rotated.last4;
   } else {
     const created = await host.createItem({
@@ -159,12 +175,13 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
       name,
       value: refresh,
       username: opened.clientId,
-      allowedHosts: [...new Set([...provider.apiHosts, provider.tokenHost])],
+      allowedHosts,
       inject: "refresh",
     });
     last = created.last4;
     refreshId = created.id;
   }
+  await host.audit(input.orgId, "provider_connected", input.userId, name, null);
   if (opened.agentClientId) {
     const agent = await host.clientInOrg(input.orgId, opened.agentClientId);
     const have = await host.store.findItemPolicy(input.orgId, agent.id, refreshId);
@@ -181,6 +198,7 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
         ...unscopedFields(),
         expiresAt: null,
       });
+      await host.audit(input.orgId, "grant", input.userId, name, agent.id);
     }
   }
   return { item_name: name, last4: last, provider: provider.id };

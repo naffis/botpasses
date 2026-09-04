@@ -193,6 +193,8 @@ test("user connect helpers are provider-generic", () => {
   assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8888/callback");
   assert.equal(chooseRedirect(spotify, "https://botpasses.com"), "https://botpasses.com/integrations/spotify/callback");
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "https://evil.example/cb"), /redirect_uri/);
+  assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "http://127.0.0.1:8888/callback"), /redirect_uri/, "the dev loopback callback is not a landing place for a hosted deployment");
+  assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788", "http://127.0.0.1:8888/callback"), "http://127.0.0.1:8888/callback");
   const kek = parseMasterKey(generateMasterKey());
   const state = sealOauthState(
     { providerId: "google", orgId: "org", userId: "u", itemId: "i", itemName: "GOOGLE_SECRET", environment: "staging", clientId: "cid", redirectUri: "https://x/cb", codeVerifier: "v", exp: Date.now() + 60_000 },
@@ -265,11 +267,31 @@ test("user connect over HTTP: start returns the provider authorize URL; the call
     const decrypted = await ctx.kernel.decryptItem(ctx.orgId, refresh.id);
     assert.equal(decrypted.secret, REFRESH);
 
-    // A second connect rotates the stored refresh token in place.
+    // A second connect rotates the stored refresh token in place and resets how it may be sent:
+    // hosts and inject mode someone set on the row earlier do not survive a fresh connect.
+    await ctx.kernel.updateItem({
+      orgId: ctx.orgId,
+      actor: "user_other",
+      itemId: refresh.id,
+      allowedHosts: ["mallory.example"],
+      inject: "query:t",
+    });
     const again = await startConnect(ctx, "spotify", { item_name: "SPOTIFY_SECRET", environment: "staging" });
     const rotated = await callback(ctx, "spotify", { code: "c0de", state: again.state });
     assert.equal(rotated.location, "/console#vault?connected=spotify");
-    assert.equal((await ctx.kernel.listItems(ctx.orgId, "staging")).filter((i) => i.name === "SPOTIFY_REFRESH").length, 1);
+    const after = (await ctx.kernel.listItems(ctx.orgId, "staging")).filter((i) => i.name === "SPOTIFY_REFRESH");
+    assert.equal(after.length, 1);
+    assert.equal(after[0]?.inject, "refresh");
+    assert.deepEqual(after[0]?.allowedHosts, ["api.spotify.com", "accounts.spotify.com"]);
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "provider_connected" && a.itemName === "SPOTIFY_REFRESH").length, 2);
+
+    // The account that started the connect must finish it.
+    const other = await startConnect(ctx, "spotify", { item_name: "SPOTIFY_SECRET", environment: "staging" });
+    await assert.rejects(
+      () => ctx.kernel.finishProviderUserOauth({ providerId: "spotify", orgId: ctx.orgId, userId: "user_someone_else", state: other.state, code: "c0de" }),
+      (err: unknown) => isHttpError(err) && err.status === 403 && /account/.test(err.message),
+    );
 
     // Unknown provider, and a provider-less callback (denied at the vendor) both land back on the console.
     const nope = await startConnect(ctx, "nope", { item_name: "SPOTIFY_SECRET", environment: "staging" });
@@ -316,6 +338,7 @@ test("user connect for a second provider (GitHub, no PKCE) and the narrowed auto
     const mine = await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, refresh.id);
     assert.equal(mine?.kind, "item_standing", "the named agent gets a standing policy");
     assert.equal(await ctx.kernel.store.findItemPolicy(ctx.orgId, other.id, refresh.id), undefined, "other agents do not");
+    assert.ok((await ctx.kernel.store.listAudit(ctx.orgId, 50)).some((a) => a.action === "grant" && a.clientId === ctx.model.id), "the standing policy is audited");
     const exchange = ctx.hits.find((h) => h.url.includes("/login/oauth/access_token"));
     assert.ok(exchange);
     assert.equal(exchange.auth, "", "post_body providers carry the client secret in the form");
@@ -394,7 +417,11 @@ test("redactOauthJson never emits access_token values", () => {
 
 test("Spotify token mint uses Basic + form body and redacts the access token", async () => {
   const ctx = await setup(async (url) => {
-    if (url.includes("accounts.spotify.com/api/token")) return tokenJson();
+    if (url.includes("accounts.spotify.com/api/token")) {
+      const res = tokenJson();
+      res.headers.set("link", `<https://accounts.spotify.com/next?t=${CLIENT_SECRET}&a=${ACCESS}>; rel="next"`);
+      return res;
+    }
     return new Response("nope", { status: 404 });
   });
   try {
@@ -413,6 +440,8 @@ test("Spotify token mint uses Basic + form body and redacts the access token", a
     assert.doesNotMatch(blob, new RegExp(ACCESS));
     assert.match(String(payload.body), /\[redacted\]/);
     assert.equal(payload.minted, true);
+    const headers = payload.origin_headers as Record<string, string>;
+    assert.equal(headers.link, "<https://accounts.spotify.com/next?t=[redacted]&a=[redacted]>; rel=\"next\"", "origin headers on the token path are redacted for the secret and the minted token");
     const hit = ctx.hits.find((h) => h.url.includes("/api/token"));
     assert.ok(hit);
     assert.match(hit.auth, /^Basic /);

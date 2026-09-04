@@ -45,13 +45,12 @@ export function hostedRedirect(provider: Provider, publicUrl: string): string {
  */
 export function chooseRedirect(provider: Provider, publicUrl: string, requested?: string): string {
   const hosted = hostedRedirect(provider, publicUrl);
-  if (!requested) {
-    return publicUrl.startsWith("http://127.0.0.1") || publicUrl.startsWith("http://localhost")
-      ? LOOPBACK_REDIRECT
-      : hosted;
-  }
-  if (requested === hosted || requested === LOOPBACK_REDIRECT) return requested;
-  throw new HttpError(400, `redirect_uri must be the Botpasses callback or ${LOOPBACK_REDIRECT}`);
+  const loopback = publicUrl.startsWith("http://127.0.0.1") || publicUrl.startsWith("http://localhost");
+  if (!requested) return loopback ? LOOPBACK_REDIRECT : hosted;
+  if (requested === hosted) return requested;
+  // The dev loopback callback is only a valid landing place when Botpasses itself runs on loopback.
+  if (requested === LOOPBACK_REDIRECT && loopback) return requested;
+  throw new HttpError(400, loopback ? `redirect_uri must be the Botpasses callback or ${LOOPBACK_REDIRECT}` : "redirect_uri must be the Botpasses callback");
 }
 
 export function sealOauthState(payload: ProviderOauthState, kek: Buffer): string {

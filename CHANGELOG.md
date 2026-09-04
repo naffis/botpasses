@@ -4,6 +4,7 @@
 
 ## 0.5.0 — 2026-09-04
 
+- Security: a provider connect that finds an existing `<ITEM>_REFRESH` resets its hosts and inject mode to the provider defaults, not only its value, so a row someone stored earlier with other settings cannot receive the token; the connect state is bound to the operator who started it; the dev loopback callback is accepted only when Botpasses itself runs on loopback; connects and the `agent_client_id` standing policy are audited (`provider_connected`, `grant`). Origin response headers are redacted on the token-endpoint paths too, including for the minted token.
 - Changed: provider user connect is generic. `POST /api/integrations/:provider/start` and `GET /integrations/:provider/callback` work for every registry provider with an authorize URL (Spotify, GitHub, Google, Slack, Stripe Connect); the `spotify` paths are the same routes. The console shows "Connect <Provider> account" on credentials whose hosts belong to a provider, and one dialog serves them all. The refresh token is stored as `<ITEM>_REFRESH`, allowed on the provider's API and token hosts, and the callback refuses a state minted for another provider.
 - Changed: connecting an account no longer gives every model client standing access to the refresh token. Pass `agent_client_id` on the start request to grant one named agent; otherwise approve in the inbox as usual.
 - Changed: the hosted sweep also deletes unaccepted org invites more than seven days past expiry (`sweep_expired` logs `orgInvites`). `VAULT_PLAN_LIMITS_JSON` is documented in `.env.example` and the README.
