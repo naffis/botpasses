@@ -78,7 +78,8 @@ test("Bearer item: token and its encodings are redacted; unrelated 4-char runs a
 test("redaction runs before the 256 KiB cut, so a secret straddling the cap never leaks a prefix", async () => {
   const bearer = item(CANARY, "bearer");
   const cap = 256 * 1024;
-  const filler = "x".repeat(cap - 10);
+  // 20 characters of the secret land inside the cap; truncate-then-redact would leave them.
+  const filler = "x".repeat(cap - 20);
   const result = await executeConnector(
     bearer,
     { method: "GET", path: "/big" },
