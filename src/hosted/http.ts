@@ -1,9 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "../brand.ts";
-import { assertSafePublicObject } from "../redact.ts";
-import type { ItemKind, VaultEnvName } from "../hosted-types.ts";
-import { defaultInjectForKind } from "./store-form-fields.ts";
+import { HEALTH_PRODUCT } from "../brand.ts";
+import type { VaultEnvName } from "../hosted-types.ts";
 import {
   requireModelOrOperator,
   requireOperator,
@@ -15,7 +13,7 @@ import {
 } from "./auth.ts";
 import { AgentPassAuthority, agentPassEnabled } from "./agentpass.ts";
 import { type ConnectorFetch } from "./connector.ts";
-import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
+import { HttpError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import {
   handleHostedMcpRpc,
@@ -26,25 +24,22 @@ import {
 import { hostedCollectHtml, hostedCollectMissingHtml } from "./collect-page.ts";
 import { hostedOperatorHtml } from "./operator-page.ts";
 import { hostedPageHeaders, MARKETING_CSP_EXTRAS, newCspNonce, securityHeaders } from "./security-headers.ts";
-import { captureException } from "./observe.ts";
 import { isPublicSitePath, tryServeSite } from "./static-site.ts";
 import { hostedAsset } from "./hosted-assets.ts";
 import { hostedFont } from "./console-fonts.ts";
 import { handleAuthApi, tryAuthPage } from "./http-auth-routes.ts";
 import { handleAccessApi } from "./http-access-routes.ts";
+import { handleClientRoutes } from "./http-client-routes.ts";
+import { handleGrantRoutes } from "./http-grant-routes.ts";
+import { handleItemRoutes } from "./http-item-routes.ts";
+import { asEnv, json, optional, readJson, sendError } from "./http-util.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
-import {
-  isMcpClientSurface,
-  isOauthDiscoveryPath,
-  mcpWwwAuthenticate,
-  oauthDiscoveryDocument,
-} from "./oauth-metadata.ts";
-import { bindCors, corsHeaders, corsPath, corsPublicUrl, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
+import { isMcpClientSurface, isOauthDiscoveryPath, oauthDiscoveryDocument } from "./oauth-metadata.ts";
+import { bindCors, corsHeaders, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
 import type Provider from "oidc-provider";
 
-const BODY_CAP = 128 * 1024;
 const KEEPALIVE_MS = 25_000;
 
 export { hostAllowed } from "./http-cors.ts";
@@ -444,183 +439,9 @@ export function createHostedServer(opts: HostedHttpOpts) {
     ) {
       return;
     }
-    if (method === "GET" && path === "/api/items") {
-      const op = requireOperator(principal);
-      const raw = url.searchParams.get("environment");
-      if (raw === null || raw === "") {
-        json(res, 200, { items: await opts.kernel.listItemsOnPlane(op.orgId) });
-        return;
-      }
-      json(res, 200, { items: await opts.kernel.listItems(op.orgId, asEnv(raw)) });
-      return;
-    }
-    if (method === "POST" && path === "/api/items") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const kind = asKind(body.kind);
-      const item = await opts.kernel.createItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        environment: asEnv(body.environment),
-        kind,
-        name: String(body.name ?? ""),
-        value: String(body.value ?? ""),
-        username: optional(body.username),
-        allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-        inject: String(body.inject ?? defaultInjectForKind(kind)),
-        folderName: optional(body.folder_name ?? body.folderName),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    const getNeedApi = /^\/api\/need-items\/([^/]+)$/.exec(path);
-    if (method === "GET" && getNeedApi) {
-      if (!principal || principal.channel !== "operator") {
-        json(res, 404, { error: "Unknown need" });
-        return;
-      }
-      const op = requireOperator(principal);
-      const needId = decodeURIComponent(getNeedApi[1] ?? "");
-      const row = await opts.kernel.store.getNeed(needId);
-      if (!row) {
-        json(res, 404, { error: "Unknown need" });
-        return;
-      }
-      if (row.orgId !== op.orgId) {
-        json(res, 403, { error: "Need is not in this organization" });
-        return;
-      }
-      const found = await opts.kernel.getNeed(needId);
-      if (!found) {
-        json(res, 404, { error: "Unknown need" });
-        return;
-      }
-      json(res, 200, {
-        id: found.need.id,
-        client_name: found.need.client_name,
-        suggested_name: found.need.suggested_name,
-        host: found.need.host,
-        task_description: found.need.task_description,
-        status: found.need.status,
-      });
-      return;
-    }
-    const rotateClient = /^\/api\/clients\/([^/]+)\/rotate$/.exec(path);
-    if (method === "POST" && rotateClient) {
-      const op = requireOperator(principal);
-      const out = await opts.kernel.rotateClient(
-        op.orgId,
-        op.userId,
-        decodeURIComponent(rotateClient[1] ?? ""),
-      );
-      json(res, 200, out);
-      return;
-    }
-    const fulfillNeed = /^\/api\/need-items\/([^/]+)\/fulfill$/.exec(path);
-    if (method === "POST" && fulfillNeed) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const result = await opts.kernel.fulfillNeed({
-        orgId: op.orgId,
-        actor: op.userId,
-        needId: decodeURIComponent(fulfillNeed[1] ?? ""),
-        value: String(body.value ?? ""),
-        name: optional(body.name),
-        allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-        inject: String(body.inject ?? defaultInjectForKind(body.kind === undefined ? "secret" : asKind(body.kind))),
-        kind: body.kind === undefined ? undefined : asKind(body.kind),
-        username: optional(body.username),
-      });
-      json(res, 200, { item: result.item, grant_status: result.grant_status });
-      return;
-    }
-    const itemMeta = /^\/api\/items\/([^/]+)\/meta$/.exec(path);
-    if (method === "POST" && itemMeta) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const item = await opts.kernel.updateItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        itemId: decodeURIComponent(itemMeta[1] ?? ""),
-        name: optional(body.name),
-        kind: body.kind === undefined ? undefined : asKind(body.kind),
-        environment: body.environment === undefined ? undefined : asEnv(body.environment),
-        username: optional(body.username),
-        inject: optional(body.inject),
-        allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
-          ? asHosts(body.allowed_hosts ?? body.allowedHosts)
-          : undefined,
-        value: optional(body.value),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    const itemUpdate = /^\/api\/items\/([^/]+)$/.exec(path);
-    if (method === "POST" && itemUpdate) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const item = await opts.kernel.updateItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        itemId: decodeURIComponent(itemUpdate[1] ?? ""),
-        name: optional(body.name),
-        kind: body.kind === undefined ? undefined : asKind(body.kind),
-        environment: body.environment === undefined ? undefined : asEnv(body.environment),
-        username: optional(body.username),
-        inject: optional(body.inject),
-        allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
-          ? asHosts(body.allowed_hosts ?? body.allowedHosts)
-          : undefined,
-        value: optional(body.value),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    if (method === "POST" && path === "/api/integrations/spotify/start") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const started = await opts.kernel.startSpotifyUserOauth({
-        orgId: op.orgId,
-        userId: op.userId,
-        itemName: String(body.item_name ?? body.itemName ?? ""),
-        environment: asEnv(body.environment),
-        clientId: optional(body.client_id ?? body.clientId),
-        redirectUri: optional(body.redirect_uri ?? body.redirectUri),
-      });
-      json(res, 200, started);
-      return;
-    }
-    const rotate = /^\/api\/items\/([^/]+)\/rotate$/.exec(path);
-    if (method === "POST" && rotate) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const item = await opts.kernel.rotateItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        itemId: decodeURIComponent(rotate[1] ?? ""),
-        value: String(body.value ?? ""),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    const del = /^\/api\/items\/([^/]+)$/.exec(path);
-    if (method === "DELETE" && del) {
-      const op = requireOperator(principal);
-      await opts.kernel.deleteItem(op.orgId, op.userId, decodeURIComponent(del[1] ?? ""));
-      json(res, 200, { ok: true });
-      return;
-    }
-    if (method === "POST" && path === "/api/folders") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const folder = await opts.kernel.createFolder(
-        op.orgId,
-        asEnv(body.environment),
-        String(body.name ?? ""),
-      );
-      json(res, 200, { folder });
-      return;
-    }
+    if (await handleItemRoutes(req, res, url, method, path, principal, opts.kernel)) return;
+    if (await handleClientRoutes(req, res, method, path, principal, opts.kernel, publicUrl)) return;
+    if (await handleGrantRoutes(req, res, url, method, path, principal, opts.kernel)) return;
     if (method === "DELETE" && path === "/api/orgs") {
       const op = requireOperator(principal);
       const body = await readJson(req);
@@ -639,122 +460,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
       const body = await readJson(req);
       const created = await opts.kernel.createOrg(String(body.name ?? "org"), userId);
       json(res, 200, created);
-      return;
-    }
-    if (method === "POST" && path === "/api/clients/trusted") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const created = await opts.kernel.createTrustedClient({
-        orgId: op.orgId,
-        name: String(body.name ?? "trusted"),
-        environment: asEnv(body.environment),
-      });
-      json(res, 200, { client: { id: created.client.id, name: created.client.name }, token: created.plaintext });
-      return;
-    }
-    if (method === "POST" && path === "/api/clients/model") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const created = await opts.kernel.createModelClient({
-        orgId: op.orgId,
-        name: String(body.name ?? "grok"),
-        environment: asEnv(body.environment),
-        issueBearer: true,
-      });
-      json(res, 200, {
-        client: { id: created.client.id, name: created.client.name, kind: created.client.kind },
-        token: created.plaintext,
-        mcp_url: `${publicUrl.replace(/\/$/, "")}/mcp`,
-      });
-      return;
-    }
-    if (method === "POST" && path === "/api/grants/request") {
-      const actor = requireModelOrOperator(principal);
-      const orgId = actor.orgId;
-      if (!(await limiter.allow(orgId))) throw new HttpError(429, "request_grant rate limit");
-      const body = await readJson(req);
-      const clientId =
-        actor.channel === "model" ? actor.clientId : String(body.client_id ?? body.clientId ?? "");
-      const result = await opts.kernel.requestGrant({
-        orgId,
-        clientId,
-        itemName: String(body.item_name ?? body.itemName ?? ""),
-        environment: asEnv(body.environment),
-        taskId: optional(body.task_id ?? body.taskId),
-        taskDescription: optional(body.task_description ?? body.taskDescription),
-        operatorEmail: optional(body.operator_email ?? body.operatorEmail),
-      });
-      json(res, 200, {
-        grant: result.grant,
-        approval_code: result.code,
-        notify_failed: result.notifyFailed ?? false,
-      });
-      return;
-    }
-    if (method === "GET" && path === "/api/inbox") {
-      const op = requireOperator(principal);
-      const grants = await opts.kernel.inboxGrantCards(op.orgId);
-      const needs = await opts.kernel.listInboxNeeds(op.orgId);
-      const agentpass = agentPassEnabled()
-        ? (await opts.kernel.store.listAgentPasses(op.orgId)).filter((p) => p.status === "pending")
-        : [];
-      json(res, 200, { grants, needs, agentpass });
-      return;
-    }
-    if (method === "GET" && path === "/api/audit") {
-      const op = requireOperator(principal);
-      const clientId = optional(url.searchParams.get("client_id"));
-      const itemName = optional(url.searchParams.get("item_name"));
-      const filter = clientId || itemName ? { clientId, itemName } : undefined;
-      const audit = await opts.kernel.store.listAudit(op.orgId, 200, filter);
-      assertSafePublicObject("listAudit", audit);
-      json(res, 200, { audit });
-      return;
-    }
-    const approve = /^\/api\/grants\/([^/]+)\/approve$/.exec(path);
-    if (method === "POST" && approve) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const grant = await opts.kernel.approveGrant({
-        orgId: op.orgId,
-        grantId: decodeURIComponent(approve[1] ?? ""),
-        policy: asPolicy(body.policy),
-        confirmName: optional(body.confirm_name ?? body.confirmName),
-        role: op.role,
-        actor: op.userId,
-      });
-      json(res, 200, { grant });
-      return;
-    }
-    const revoke = /^\/api\/grants\/([^/]+)\/revoke$/.exec(path);
-    if (method === "POST" && revoke) {
-      const op = requireOperator(principal);
-      const grant = await opts.kernel.revokeGrant(
-        op.orgId,
-        op.userId,
-        decodeURIComponent(revoke[1] ?? ""),
-      );
-      json(res, 200, { grant });
-      return;
-    }
-    if (method === "POST" && path === "/api/grants/approve-by-code") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const grant = await opts.kernel.approveByCode(
-        op.orgId,
-        op.userId,
-        op.role,
-        String(body.code ?? ""),
-      );
-      json(res, 200, { grant });
-      return;
-    }
-    if ((method === "GET" || method === "POST") && path === "/approve") {
-      const op = requireOperator(principal);
-      const token =
-        url.searchParams.get("token") ?? String((await readJson(req)).token ?? "");
-      const grant = await opts.kernel.approveMagic(op.orgId, op.userId, op.role, token);
-      json(res, 200, { grant });
       return;
     }
     if (method === "POST" && path === "/runtime/resolve") {
@@ -880,39 +585,6 @@ function envFromMcpRpc(body: JsonRpcRequest): VaultEnvName {
   return env === "production" ? "production" : "staging";
 }
 
-function asEnv(value: unknown): VaultEnvName {
-  if (value === "production") return "production";
-  return "staging";
-}
-
-function asKind(value: unknown): ItemKind {
-  if (value === "login") return "login";
-  if (value === "client_secret") return "client_secret";
-  return "secret";
-}
-
-function asHosts(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value === "string") return value.split(",").map((s) => s.trim()).filter(Boolean);
-  return [];
-}
-
-function asPolicy(value: unknown) {
-  if (
-    value === "prompt" ||
-    value === "session" ||
-    value === "item_standing" ||
-    value === "folder_standing"
-  ) {
-    return value;
-  }
-  return "prompt" as const;
-}
-
-function optional(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function mcpToolName(body: JsonRpcRequest): string | undefined {
   const name = body.params?.name;
   return typeof name === "string" ? name : undefined;
@@ -929,63 +601,6 @@ function sseKeepalive(res: ServerResponse): void {
     res.write(": keepalive\n\n");
   }, KEEPALIVE_MS);
   res.on("close", () => clearInterval(timer));
-}
-
-function json(res: ServerResponse, status: number, body: unknown, skipSecurity = false): void {
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    ...(skipSecurity ? {} : securityHeaders({ html: false })),
-    ...corsHeaders(res),
-  });
-  res.end(JSON.stringify(body));
-}
-
-function sendError(res: ServerResponse, err: unknown, path = ""): void {
-  void captureException(err);
-  const routePath = path || corsPath(res);
-  if (isNeedItemError(err)) {
-    const headers: Record<string, string> = {
-      "content-type": "application/json; charset=utf-8",
-      ...securityHeaders({ html: false }),
-      ...corsHeaders(res),
-    };
-    res.writeHead(err.status, headers);
-    res.end(JSON.stringify(err.payload));
-    return;
-  }
-  if (isHttpError(err)) {
-    const headers: Record<string, string> = {
-      "content-type": "application/json; charset=utf-8",
-      ...securityHeaders({ html: false }),
-      ...corsHeaders(res),
-    };
-    if (err.status === 401) {
-      headers["www-authenticate"] =
-        routePath === "/mcp" || routePath.startsWith("/mcp")
-          ? mcpWwwAuthenticate(corsPublicUrl(res), WWW_AUTHENTICATE_REALM)
-          : `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
-    }
-    res.writeHead(err.status, headers);
-    res.end(JSON.stringify({ error: err.message, ...err.extra }));
-    return;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  json(res, 400, { error: message });
-}
-
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-    size += buf.length;
-    if (size > BODY_CAP) throw new HttpError(413, "Body too large");
-    chunks.push(buf);
-  }
-  if (chunks.length === 0) return {};
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  if (!parsed || typeof parsed !== "object") return {};
-  return parsed as Record<string, unknown>;
 }
 
 export { KEEPALIVE_MS };
