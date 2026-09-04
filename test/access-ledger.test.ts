@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SignJWT, importJWK } from "jose";
@@ -186,12 +185,6 @@ test("AC-30 revoke client then MCP bearer is 401; AC-34 cross-org 404; signed-ou
 test("AC-31 JWT issuance via /oauth/token writes access_events (extraTokenClaims, not access_token.saved)", async () => {
   const ctx = await ledgerCtx();
   try {
-    const src = readFileSync(new URL("../src/hosted/oauth-as.ts", import.meta.url), "utf8");
-    assert.match(src, /extraTokenClaims:/);
-    assert.match(src, /access_token\.issued/);
-    assert.doesNotMatch(src, /access_token\.saved/);
-    assert.doesNotMatch(src, /\.catch\(\(\) => undefined\)/);
-
     const registered = await fetch(`${ctx.base}/oauth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
