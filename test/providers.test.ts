@@ -1,0 +1,483 @@
+/**
+ * Provider abstraction (3.2): the registry is data, the engines are generic, and the Spotify
+ * behaviour the product shipped with (Basic + form mint, /v1/me hint, grant reuse) still holds.
+ */
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { test } from "node:test";
+import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { createHostedServer } from "../src/hosted/http.ts";
+import { HostedKernel } from "../src/hosted/kernel.ts";
+import { assertRedirectUri } from "../src/hosted/oauth-as.ts";
+import { isTokenPath, pathMatchesPrefix, PROVIDERS, providerById, providerForHost, userPathHint } from "../src/hosted/providers/registry.ts";
+import { cachedMint, clearMintCache, storeMint } from "../src/hosted/providers/token-cache.ts";
+import { authorizeUrl, chooseRedirect, openOauthState, sealOauthState } from "../src/hosted/providers/user-oauth.ts";
+import { chooseSpotifyRedirect, spotifyAuthorizeUrl } from "../src/hosted/spotify.ts";
+import { redactOauthJson } from "../src/redact.ts";
+import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
+import { CANARY, cleanup, tempHome } from "./helpers.ts";
+
+const CLIENT_ID = "97540628b46c43059710d66714d75870";
+const CLIENT_SECRET = "spotify_client_secret_CANARY_b91c";
+const ACCESS = "BQC_fake_access_token_do_not_leak_zzzz";
+const REFRESH = "AQD_fake_refresh_token_do_not_leak_rrrr";
+
+function mcpText(rpc: unknown): Record<string, unknown> {
+  const rec = rpc as { result?: { content?: { text?: string }[] } };
+  return JSON.parse(rec.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+}
+
+async function setup(handler: (url: string, init?: RequestInit) => Promise<Response> | Response) {
+  clearMintCache();
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "hosted.sqlite"));
+  const kernel = new HostedKernel({
+    store,
+    kek: parseMasterKey(generateMasterKey()),
+    publicUrl: "http://127.0.0.1:8788",
+  });
+  const { orgId } = await kernel.createOrg("acme", "user_owner");
+  await kernel.createItem({
+    orgId,
+    actor: "user_owner",
+    environment: "staging",
+    kind: "secret",
+    name: "SPOTIFY_SECRET",
+    value: CLIENT_SECRET,
+    username: CLIENT_ID,
+    allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+    inject: "client_credentials",
+  });
+  const { client: model } = await kernel.createModelClient({
+    orgId,
+    name: "grok",
+    environment: "staging",
+  });
+  const hits: { url: string; auth: string; contentType: string; body: string }[] = [];
+  const http = createHostedServer({
+    kernel,
+    host: "127.0.0.1",
+    port: 0,
+    fetchImpl: async (url, init) => {
+      const headers = new Headers(init?.headers);
+      hits.push({
+        url: String(url),
+        auth: headers.get("authorization") ?? "",
+        contentType: headers.get("content-type") ?? "",
+        body: typeof init?.body === "string" ? init.body : "",
+      });
+      return handler(String(url), init);
+    },
+    resolveAddresses: async () => ["8.8.8.8"],
+  });
+  const addr = await http.listen();
+  return {
+    home,
+    store,
+    kernel,
+    orgId,
+    model,
+    http,
+    hits,
+    base: `http://${addr.host}:${addr.port}`,
+    op: {
+      "x-test-channel": "operator",
+      "x-test-user": "user_owner",
+      "x-test-org": orgId,
+      "content-type": "application/json",
+    },
+    modelH: {
+      "x-test-channel": "model",
+      "x-test-client": model.id,
+      "content-type": "application/json",
+    },
+  };
+}
+
+type Ctx = Awaited<ReturnType<typeof setup>>;
+
+async function approve(ctx: Ctx, itemName = "SPOTIFY_SECRET", policy: "prompt" | "item_standing" = "prompt") {
+  const asked = await ctx.kernel.requestGrant({
+    orgId: ctx.orgId,
+    clientId: ctx.model.id,
+    itemName,
+    environment: "staging",
+  });
+  await ctx.kernel.approveGrant({
+    orgId: ctx.orgId,
+    grantId: asked.grant.id,
+    policy,
+    role: "owner",
+    actor: "user_owner",
+  });
+  return asked.grant.id;
+}
+
+async function call(ctx: Ctx, args: Record<string, unknown>) {
+  const res = await fetch(`${ctx.base}/mcp`, {
+    method: "POST",
+    headers: ctx.modelH,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "http_request", arguments: args },
+    }),
+  });
+  const rpc = await res.json();
+  return { res, rpc, payload: mcpText(rpc) };
+}
+
+async function teardown(ctx: Ctx) {
+  await ctx.http.close();
+  await ctx.store.close();
+  cleanup(ctx.home);
+}
+
+const tokenJson = (extra: Record<string, unknown> = {}) =>
+  new Response(JSON.stringify({ access_token: ACCESS, token_type: "Bearer", expires_in: 3600, ...extra }), { status: 200 });
+
+test("registry: five providers, looked up by API host or token host, with grant types that match the vendor", () => {
+  assert.deepEqual(PROVIDERS.map((p) => p.id), ["spotify", "github", "google", "slack", "stripe"]);
+  assert.equal(providerForHost("api.github.com")?.id, "github");
+  assert.equal(providerForHost("GitHub.com")?.id, "github");
+  assert.equal(providerForHost("gmail.googleapis.com")?.id, "google");
+  assert.equal(providerForHost("oauth2.googleapis.com")?.id, "google");
+  assert.equal(providerForHost("connect.stripe.com")?.id, "stripe");
+  assert.equal(providerForHost("slack.com")?.id, "slack");
+  assert.equal(providerForHost("api.example.com"), undefined);
+  assert.equal(providerById("nope"), undefined);
+  const github = providerById("github");
+  assert.ok(github);
+  assert.equal(github.grantTypes.includes("client_credentials"), false, "GitHub Apps have no client_credentials grant");
+  assert.equal(github.tokenAuth, "post_body");
+  assert.equal(providerById("spotify")?.tokenAuth, "basic");
+  assert.equal(providerById("google")?.pkce, true);
+  for (const p of PROVIDERS) {
+    assert.ok(p.grantTypes.length > 0, `${p.id} grant types`);
+    assert.ok(p.redactKeys.includes("access_token"), `${p.id} redacts access_token`);
+    assert.ok(p.authorizeUrl?.startsWith("https://"), `${p.id} authorize url`);
+    assert.doesNotMatch(p.displayName, /—/);
+  }
+});
+
+test("registry: token paths and user-path hints are answered from data", () => {
+  const spotify = providerById("spotify");
+  assert.ok(spotify);
+  assert.equal(isTokenPath(spotify, "accounts.spotify.com", "/api/token?x=1"), true);
+  assert.equal(isTokenPath(spotify, "api.spotify.com", "/api/token"), false);
+  assert.ok(userPathHint(spotify, "api.spotify.com", "/v1/me"));
+  assert.ok(userPathHint(spotify, "api.spotify.com", "/v1/me/playlists?limit=5"));
+  assert.ok(userPathHint(spotify, "api.spotify.com", "/v1/users/abc/playlists"));
+  assert.equal(userPathHint(spotify, "api.spotify.com", "/v1/users/abc"), undefined, "public profile works with an app token");
+  assert.equal(userPathHint(spotify, "api.spotify.com", "/v1/search?q=x"), undefined);
+  assert.equal(userPathHint(spotify, "accounts.spotify.com", "/v1/me"), undefined, "hints apply to API hosts only");
+  assert.equal(pathMatchesPrefix("/v1/users/abc/playlists/1", "/v1/users/*/playlists"), true);
+  assert.equal(pathMatchesPrefix("/v1/users", "/v1/users/*/playlists"), false);
+  assert.match(userPathHint(spotify, "api.spotify.com", "/v1/me")?.message ?? "", /Connect a Spotify user/);
+});
+
+test("user connect helpers are provider-generic; the spotify shim delegates to them", () => {
+  const spotify = providerById("spotify");
+  const google = providerById("google");
+  const stripe = providerById("stripe");
+  assert.ok(spotify && google && stripe);
+  const url = new URL(authorizeUrl(spotify, { clientId: "cid", redirectUri: "https://x/cb", state: "s", codeVerifier: "v".repeat(43) }));
+  assert.equal(url.origin + url.pathname, "https://accounts.spotify.com/authorize");
+  assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+  assert.match(url.searchParams.get("scope") ?? "", /playlist-read-private/);
+  assert.equal(spotifyAuthorizeUrl({ clientId: "cid", redirectUri: "https://x/cb", state: "s", codeVerifier: "v".repeat(43) }), url.toString());
+  const stripeUrl = new URL(authorizeUrl(stripe, { clientId: "ca_x", redirectUri: "https://x/cb", state: "s", codeVerifier: "v" }));
+  assert.equal(stripeUrl.searchParams.get("code_challenge"), null, "no PKCE for providers that do not support it");
+  assert.equal(stripeUrl.searchParams.get("scope"), "read_write");
+  assert.equal(chooseRedirect(google, "https://botpasses.com"), "https://botpasses.com/integrations/google/callback");
+  assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8888/callback");
+  assert.equal(chooseSpotifyRedirect("https://botpasses.com"), "https://botpasses.com/integrations/spotify/callback");
+  assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "https://evil.example/cb"), /redirect_uri/);
+  const kek = parseMasterKey(generateMasterKey());
+  const state = sealOauthState(
+    { providerId: "google", orgId: "org", userId: "u", itemId: "i", itemName: "GOOGLE_SECRET", environment: "staging", clientId: "cid", redirectUri: "https://x/cb", codeVerifier: "v", exp: Date.now() + 60_000 },
+    kek,
+  );
+  assert.equal(openOauthState(state, kek).providerId, "google");
+  assert.throws(() => openOauthState(state, parseMasterKey(generateMasterKey())), /Invalid OAuth state/);
+});
+
+test("token cache is keyed by org, item, client, and grant type and drops entries near expiry", () => {
+  clearMintCache();
+  const token = { accessToken: ACCESS, expiresAt: Date.now() + 120_000, last4: "zzzz", tokenType: "Bearer" };
+  storeMint("org", "itm", "cid", "client_credentials", token);
+  assert.equal(cachedMint("org", "itm", "cid", "client_credentials")?.accessToken, ACCESS);
+  assert.equal(cachedMint("org", "itm", "cid", "refresh_token"), undefined);
+  assert.equal(cachedMint("org", "other", "cid", "client_credentials"), undefined);
+  assert.equal(cachedMint("org", "itm", "cid", "client_credentials", Date.now() + 61_000), undefined, "one minute of skew");
+  assert.equal(cachedMint("org", "itm", "cid", "client_credentials"), undefined, "the expired entry was evicted");
+});
+
+test("assertRedirectUri accepts Grok/Cursor desktop schemes", () => {
+  assert.doesNotThrow(() => assertRedirectUri("cursor://anysphere.cursor-mcp/oauth/callback"));
+  assert.doesNotThrow(() => assertRedirectUri("grok://oauth/callback"));
+  assert.doesNotThrow(() => assertRedirectUri("http://127.0.0.1:8888/callback"));
+  assert.throws(() => assertRedirectUri("javascript:alert(1)"));
+});
+
+test("redactOauthJson never emits access_token values", () => {
+  const out = redactOauthJson(JSON.stringify({ access_token: ACCESS, token_type: "Bearer", expires_in: 3600 }));
+  assert.doesNotMatch(out, new RegExp(ACCESS));
+  assert.match(out, /\[redacted\]/);
+});
+
+test("Spotify token mint uses Basic + form body and redacts the access token", async () => {
+  const ctx = await setup(async (url) => {
+    if (url.includes("accounts.spotify.com/api/token")) return tokenJson();
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    await approve(ctx);
+    const { res, payload } = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "POST",
+      path: "https://accounts.spotify.com/api/token",
+      client_id: CLIENT_ID,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(payload.origin_status, 200);
+    assert.equal(payload.status, 200, "deprecated duplicate kept for one release");
+    const blob = JSON.stringify(payload);
+    assert.doesNotMatch(blob, new RegExp(CLIENT_SECRET));
+    assert.doesNotMatch(blob, new RegExp(ACCESS));
+    assert.match(String(payload.body), /\[redacted\]/);
+    assert.equal(payload.minted, true);
+    const hit = ctx.hits.find((h) => h.url.includes("/api/token"));
+    assert.ok(hit);
+    assert.match(hit.auth, /^Basic /);
+    assert.doesNotMatch(hit.auth, /Bearer /);
+    assert.match(hit.contentType, /application\/x-www-form-urlencoded/);
+    assert.match(hit.body, /grant_type=client_credentials/);
+    const expected = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
+    assert.equal(hit.auth, `Basic ${expected}`);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("minted app token calls /v1/search; /v1/me explains user OAuth", async () => {
+  const ctx = await setup(async (url) => {
+    if (url.includes("accounts.spotify.com/api/token")) return tokenJson();
+    if (url.includes("/v1/search")) {
+      return new Response(JSON.stringify({ tracks: { items: [{ name: "test" }] } }), { status: 200 });
+    }
+    if (url.includes("/v1/me")) {
+      return new Response(JSON.stringify({ error: { message: "Unauthorized" } }), { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    const grantId = await approve(ctx);
+    const me = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "GET",
+      path: "https://api.spotify.com/v1/me",
+      client_id: CLIENT_ID,
+    });
+    assert.equal(me.payload.origin_status, 401);
+    assert.match(String(me.payload.hint ?? ""), /user OAuth|\/v1\/me|Client credentials|Connect a Spotify user/i);
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+
+    const search = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "GET",
+      path: "https://api.spotify.com/v1/search?q=test&type=track",
+      client_id: CLIENT_ID,
+    });
+    assert.equal(search.payload.origin_status, 200);
+    assert.doesNotMatch(JSON.stringify(search.payload), new RegExp(ACCESS));
+    assert.doesNotMatch(JSON.stringify(search.payload), new RegExp(CLIENT_SECRET));
+    const searchAuth = ctx.hits.find((h) => h.url.includes("/v1/search"))?.auth ?? "";
+    assert.equal(searchAuth, `Bearer ${ACCESS}`);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("failed Spotify 401/410 reuses the same prompt grant", async () => {
+  let tokenStatus = 401;
+  const ctx = await setup(async (url) => {
+    if (url.includes("/api/token")) {
+      if (tokenStatus === 410) return new Response("", { status: 410 });
+      if (tokenStatus === 401) return new Response("invalid", { status: 401 });
+      return tokenJson();
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    const grantId = await approve(ctx);
+    const first = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "POST",
+      path: "https://accounts.spotify.com/api/token",
+      client_id: CLIENT_ID,
+    });
+    assert.equal(first.payload.origin_status, 401);
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+
+    tokenStatus = 410;
+    const gone = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "POST",
+      path: "https://accounts.spotify.com/api/token",
+      client_id: CLIENT_ID,
+    });
+    assert.equal(gone.payload.origin_status, 410);
+    assert.equal(gone.payload.body, "");
+    assert.match(String(gone.payload.hint), /410/);
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+
+    tokenStatus = 200;
+    const ok = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "POST",
+      path: "https://accounts.spotify.com/api/token",
+      client_id: CLIENT_ID,
+    });
+    assert.equal(ok.payload.origin_status, 200);
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed");
+    assert.doesNotMatch(JSON.stringify(ok.payload), new RegExp(CLIENT_SECRET));
+    assert.doesNotMatch(JSON.stringify(ok.payload), new RegExp(ACCESS));
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("a stored <ITEM>_REFRESH token is exchanged in the form body (no Basic) and the user path succeeds", async () => {
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("accounts.spotify.com/api/token")) {
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      if (form.get("grant_type") === "refresh_token" && form.get("refresh_token") === REFRESH && form.get("client_id") === CLIENT_ID && !auth) {
+        return tokenJson({ refresh_token: REFRESH, scope: "user-read-email" });
+      }
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    if (url.includes("/v1/me")) {
+      return auth === `Bearer ${ACCESS}`
+        ? new Response(JSON.stringify({ id: "user1", email: "u@example.com" }), { status: 200 })
+        : new Response("", { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    await approve(ctx, "SPOTIFY_REFRESH", "item_standing");
+    const me = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(me.payload.origin_status, 200, JSON.stringify(me.payload));
+    assert.equal(me.payload.user_token, true);
+    assert.equal(me.payload.token_last4, ACCESS.slice(-4));
+    const blob = JSON.stringify(me.payload);
+    for (const secret of [REFRESH, ACCESS, CLIENT_SECRET]) assert.doesNotMatch(blob, new RegExp(secret));
+    const mint = ctx.hits.find((h) => h.url.includes("/api/token"));
+    assert.ok(mint);
+    assert.equal(mint.auth, "", "refresh_token grant carries client_id in the body, not a Basic header");
+    assert.match(mint.body, /grant_type=refresh_token/);
+    const second = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(second.payload.origin_status, 200);
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "the refreshed token is cached");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("a post_body provider (GitHub) gets client_id and client_secret in the form, never in a header", async () => {
+  const GH_SECRET = "gh_app_client_secret_CANARY_0a1b";
+  const ctx = await setup(async (url, init) => {
+    if (url.includes("github.com/login/oauth/access_token")) {
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      if (form.get("client_secret") !== GH_SECRET) return new Response(JSON.stringify({ error: "incorrect_client_credentials" }), { status: 401 });
+      return new Response(JSON.stringify({ access_token: ACCESS, token_type: "bearer", scope: "repo" }), { status: 200 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "client_secret",
+      name: "GITHUB_APP_SECRET",
+      value: GH_SECRET,
+      username: "Iv1.abc123",
+      allowedHosts: ["api.github.com", "github.com"],
+      inject: "client_credentials",
+    });
+    await approve(ctx, "GITHUB_APP_SECRET");
+    const { payload } = await call(ctx, {
+      item_name: "GITHUB_APP_SECRET",
+      method: "POST",
+      path: "https://github.com/login/oauth/access_token",
+      body: { grant_type: "authorization_code", code: "c0de", redirect_uri: "https://botpasses.com/integrations/github/callback" },
+    });
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.minted, undefined, "an authorization_code exchange is not cached as an app token");
+    assert.doesNotMatch(JSON.stringify(payload), new RegExp(GH_SECRET));
+    assert.doesNotMatch(JSON.stringify(payload), new RegExp(ACCESS));
+    const hit = ctx.hits.find((h) => h.url.includes("/login/oauth/access_token"));
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    assert.match(hit.contentType, /x-www-form-urlencoded/);
+    assert.equal(new URLSearchParams(hit.body).get("client_id"), "Iv1.abc123");
+    assert.equal(new URLSearchParams(hit.body).get("code"), "c0de");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("avm-style model principal can tools/list without leaking secrets", async () => {
+  const ctx = await setup(async () => new Response("{}", { status: 200 }));
+  try {
+    const listed = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: ctx.modelH,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const body = await listed.text();
+    assert.equal(listed.status, 200);
+    assert.doesNotMatch(body, new RegExp(CLIENT_SECRET));
+    assert.doesNotMatch(body, /avm_/);
+    assert.match(body, /http_request/);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("isolation: canary secret never appears after store grant mint or search", async () => {
+  const ctx = await setup(async (url) => {
+    if (url.includes("/api/token")) return tokenJson();
+    return new Response(JSON.stringify({ tracks: { items: [] } }), { status: 200 });
+  });
+  try {
+    await approve(ctx);
+    const search = await call(ctx, {
+      item_name: "SPOTIFY_SECRET",
+      method: "GET",
+      path: "https://api.spotify.com/v1/search?q=test&type=track",
+    });
+    const inbox = await (await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op })).json();
+    const blob = JSON.stringify({ search, inbox, hits: ctx.hits.map((h) => ({ url: h.url, type: h.contentType })) });
+    assert.doesNotMatch(blob, new RegExp(CLIENT_SECRET));
+    assert.doesNotMatch(blob, new RegExp(ACCESS));
+    assert.doesNotMatch(blob, new RegExp(CANARY));
+  } finally {
+    await teardown(ctx);
+  }
+});

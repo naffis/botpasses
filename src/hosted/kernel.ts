@@ -1044,6 +1044,8 @@ export class HostedKernel {
     itemName: string;
     environment: VaultEnvName;
     auditAfterSend?: boolean;
+    /** The call this credential is for; scoped grants (3.1) are checked against it. */
+    request?: { host: string; method: string; path: string };
   }): Promise<{
     secret: string;
     username: string | null;
