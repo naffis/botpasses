@@ -51,7 +51,8 @@ test("MCP and HTTP reference docs name hosted tools and forbid get_secret", () =
   assert.match(publicHttp, /`\/api\/folders`/);
   assert.match(publicHttp, /`\/api\/orgs`/);
   assert.match(publicHttp, /`\/approve\?token=/);
-  assert.match(publicHttp, /spotify\/callback/);
+  assert.match(publicHttp, /integrations\/:provider\/callback/);
+  assert.match(publicHttp, /integrations\/spotify\/callback/);
   const publicMcp = read("site/src/content/docs/reference/mcp-tools.md");
   assert.match(publicMcp, /collect_url/);
   assert.match(publicMcp, /need_item/);

@@ -64,8 +64,8 @@ Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end 
 | GET | `/api/need-items/:id` | Operator only. Metadata of a pending collect request. Unauthenticated is 404 |
 | POST | `/api/need-items/:id/fulfill` | `{ "value", "name?", "allowed_hosts?", "inject?", "kind?", "username?" }`. Stores the value from the collect page and activates the requesting agent's approval |
 | GET | `/collect/:id` | HTML shell for the collect page. Details load only for a signed-in operator |
-| POST | `/api/integrations/spotify/start` | `{ "item_name", "environment?", "client_id?" }`. Returns `authorize_url` and `redirect_uri` for a Spotify user connect |
-| GET | `/integrations/spotify/callback` | Operator cookie. Exchanges the code, stores the refresh token, redirects to the console |
+| POST | `/api/integrations/:provider/start` | `:provider` is `spotify`, `github`, `google`, `slack`, or `stripe` (unknown is 404). `{ "item_name", "environment?", "client_id?", "redirect_uri?", "agent_client_id?" }`. Returns `authorize_url`, `redirect_uri`, and `provider` for a user connect. `agent_client_id` names one agent that gets a standing approval on the refresh credential after connect |
+| GET | `/integrations/:provider/callback` | Operator cookie, authenticator step passed. Exchanges the code, stores the refresh token as `<ITEM>_REFRESH`, redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>`. `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `spotify` as the provider |
 
 Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 400.
 
