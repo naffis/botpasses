@@ -146,7 +146,9 @@ export function applyInject(item: InjectSubject, req: InjectRequest): InjectedRe
           status: "inject_denied",
         });
       }
-      // RFC 6749 section 6: refresh_token grant. Public (PKCE) clients identify with client_id.
+      // RFC 6749 section 6: refresh_token grant as a public (PKCE) client, identified by client_id
+      // alone. A confidential client's exchange never comes through here: mcp-http.ts
+      // `refreshTokenCall` sends the sibling client secret item per `provider.tokenAuth` instead.
       return {
         headers: {},
         path: req.path,
