@@ -292,6 +292,101 @@ for (const backend of backends) {
     }
   });
 
+  test(`[${backend.name}] atomic auth counters: OTP attempts, TOTP failures and lock, replay step, single-use backup code`, async () => {
+    const { store, done } = await backend.open();
+    try {
+      const id = ids("at");
+      const userId = id("user");
+      await store.insertUser(user(userId, `${id("u")}@example.com`));
+      const email = `${id("otp")}@example.com`;
+      await store.insertEmailOtp({
+        id: id("challenge"),
+        email,
+        codeScrypt: "00:00",
+        expiresAt: "2026-01-01T00:10:00.000Z",
+        attempts: 0,
+        sentAt: "2026-01-01T00:00:00.000Z",
+      });
+      const now = "2026-01-01T00:01:00.000Z";
+      const otpClaims = await Promise.all([1, 2, 3, 4, 5, 6].map(() => store.claimOtpAttempt(id("challenge"), now, 5)));
+      assert.deepEqual(
+        otpClaims.filter((n) => n !== undefined).sort(),
+        [1, 2, 3, 4, 5],
+        "five claims each get their own slot (in any order under concurrency)",
+      );
+      assert.equal(otpClaims.filter((n) => n === undefined).length, 1, "the sixth is refused");
+      assert.equal(await store.claimOtpAttempt(id("challenge"), "2026-01-01T00:11:00.000Z", 50), undefined, "expired");
+      assert.equal(await store.claimOtpAttempt(id("missing"), now, 5), undefined);
+      // A resend expires the previous challenge in the same instant; the live one is the latest.
+      await store.updateEmailOtp({ id: id("challenge"), email, codeScrypt: "00:00", expiresAt: now, attempts: 5, sentAt: now });
+      await store.insertEmailOtp({ id: id("resend"), email, codeScrypt: "11:11", expiresAt: "2026-01-01T00:11:00.000Z", attempts: 0, sentAt: now });
+      assert.equal((await store.latestEmailOtp(email))?.id, id("resend"));
+
+      // TOTP: the charge restarts at 1 after an expired lock and is refused while locked.
+      const claims = await Promise.all(Array.from({ length: 3 }, () => store.claimTotpAttempt(userId, now)));
+      assert.deepEqual([...claims].sort(), [1, 2, 3]);
+      await store.lockTotp(userId, "2026-01-01T00:16:00.000Z");
+      assert.equal(await store.claimTotpAttempt(userId, now), undefined, "locked");
+      assert.equal(await store.claimTotpAttempt(userId, "2026-01-01T00:16:00.000Z"), 1, "an expired lock restarts the count");
+      assert.equal((await store.getUser(userId))?.totpLockedUntil, null);
+      await store.resetTotpFailures(userId);
+      assert.equal((await store.getUser(userId))?.totpFailures, 0);
+      assert.equal(await store.claimTotpAttempt(id("nobody"), now), undefined);
+
+      assert.equal(await store.consumeTotpStep(userId, 100), true);
+      assert.equal(await store.consumeTotpStep(userId, 100), false, "replay of the same step");
+      assert.equal(await store.consumeTotpStep(userId, 99), false, "an older step");
+      assert.equal(await store.consumeTotpStep(userId, 101), true);
+      assert.equal((await store.getUser(userId))?.totpLastStep, 101);
+
+      await store.insertBackupCode(userId, sha(id("code")));
+      assert.deepEqual(
+        await Promise.all([store.markBackupUsed(userId, sha(id("code")), now), store.markBackupUsed(userId, sha(id("code")), now)]),
+        [true, false],
+      );
+    } finally {
+      await done();
+    }
+  });
+
+  test(`[${backend.name}] memberships list oldest first and sessions belong to the org they act in`, async () => {
+    const { store, done } = await backend.open();
+    try {
+      const id = ids("mo");
+      const userId = id("user");
+      const other = id("other");
+      await store.insertUser(user(userId, `${id("u")}@example.com`));
+      await store.insertUser(user(other, `${id("o")}@example.com`));
+      // Inserted newest first with ids that sort the other way, so only joined_at can order them.
+      await store.insertMember({ orgId: id("c-newest"), userId, role: "operator", joinedAt: "2026-03-01T00:00:00.000Z" });
+      await store.insertMember({ orgId: id("b-older"), userId, role: "owner", joinedAt: "2026-02-01T00:00:00.000Z" });
+      await store.insertMember({ orgId: id("a-legacy"), userId, role: "owner" });
+      assert.deepEqual(
+        (await store.listMembershipsForUser(userId)).map((m) => m.orgId),
+        [id("a-legacy"), id("b-older"), id("c-newest")],
+        "rows without joined_at (pre-migration) first, then by joined_at",
+      );
+      await store.insertMember({ orgId: id("c-newest"), userId: other, role: "owner", joinedAt: "2026-01-01T00:00:00.000Z" });
+
+      // No active org: the session acts in the first membership only.
+      await store.insertSession(session(sha(id("s-first")), userId, "2026-01-01T00:00:00.000Z"));
+      await store.insertSession(session(sha(id("s-other")), other, "2026-01-01T00:00:00.000Z"));
+      assert.deepEqual((await store.listOperatorSessions(id("a-legacy"))).map((s) => s.idHash), [sha(id("s-first"))]);
+      assert.deepEqual(await store.listOperatorSessions(id("b-older")), []);
+      assert.deepEqual((await store.listOperatorSessions(id("c-newest"))).map((s) => s.userId), [other]);
+      // Pinned to a member org: listed there and nowhere else.
+      await store.setSessionActiveOrg(sha(id("s-first")), id("c-newest"));
+      assert.deepEqual(await store.listOperatorSessions(id("a-legacy")), []);
+      assert.ok((await store.listOperatorSessions(id("c-newest"))).some((s) => s.idHash === sha(id("s-first"))));
+      // Pinned to an org the user left (or never joined): falls back to the first membership.
+      await store.setSessionActiveOrg(sha(id("s-first")), id("gone"));
+      assert.deepEqual((await store.listOperatorSessions(id("a-legacy"))).map((s) => s.idHash), [sha(id("s-first"))]);
+      assert.ok(!(await store.listOperatorSessions(id("c-newest"))).some((s) => s.idHash === sha(id("s-first"))));
+    } finally {
+      await done();
+    }
+  });
+
   test(`[${backend.name}] access events: jti lookup, revoke one, revoke per client`, async () => {
     const { store, done } = await backend.open();
     try {
@@ -339,12 +434,12 @@ for (const backend of backends) {
       await store.insertUser(user(invitee, inviteeEmail));
       const { orgId } = await kernel.createOrg(id("org"), owner);
 
-      const invited = await kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator" });
+      const invited = await kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator", ip: "127.0.0.1" });
       const token = new URL(invited.accept_url).searchParams.get("token") ?? "";
       assert.ok(token);
       assert.equal((await store.listInvites(orgId)).length, 1);
       await assert.rejects(
-        kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator" }),
+        kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator", ip: "127.0.0.1" }),
         /already pending/,
       );
 

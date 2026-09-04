@@ -436,11 +436,9 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
     if (method === "POST" && path === "/api/orgs") {
-      const userId = principal?.channel === "operator" ? principal.userId : undefined;
-      if (!userId) throw new HttpError(401, "Authentication required");
+      const op = requireOperator(principal);
       const body = await readJson(req);
-      const created = await opts.kernel.createOrg(String(body.name ?? "org"), userId);
-      json(res, 200, created);
+      json(res, 200, await opts.kernel.createOrgForUser(String(body.name ?? ""), op.userId));
       return;
     }
     if (method === "POST" && path === "/runtime/resolve") {

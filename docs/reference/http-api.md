@@ -8,7 +8,7 @@ JSON bodies are capped at 128 KiB. Hosted operator mutations need a session cook
 
 | Channel | How | May call |
 | --- | --- | --- |
-| `operator` | HttpOnly session (`__Host-bp_session` on HTTPS, `bp_session` on loopback) or `VAULT_BOOTSTRAP_TOKEN` | `/api/*` operator routes, Access, inbox, approve/revoke. `ready === false` → 403 `{ error: "mfa_required", enroll_url: "/enroll-totp" }` (not enrolled) or `{ error: "mfa_required", verify_url: "/verify-totp" }` (enrolled, authenticator step pending) |
+| `operator` | HttpOnly session (`__Host-bp_session` on HTTPS, read only on a request the proxy marks `x-forwarded-proto: https`, no plain-name fallback; `bp_session` on loopback) or `VAULT_BOOTSTRAP_TOKEN` (on a plane only with `VAULT_BOOTSTRAP_ALLOW_PLANE=1`; every use logs `auth_bootstrap_used`) | `/api/*` operator routes, Access, inbox, approve/revoke. `ready === false` → 403 `{ error: "mfa_required", enroll_url: "/enroll-totp" }` (not enrolled) or `{ error: "mfa_required", verify_url: "/verify-totp" }` (enrolled, authenticator step pending) |
 | `model` | OAuth JWT (`aud` exactly `${origin}/mcp`, `jti` required and not revoked) or `avm_…` | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
 | `trusted` | `avt_…` | `POST /runtime/resolve` only |
 
@@ -38,8 +38,8 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/verify-totp` | Sign-in authenticator step. One field (authenticator code or backup code). Anonymous → 302 `/sign-in`; not enrolled → 302 `/enroll-totp`; ready → 302 `/console` |
 | GET | `/consent` | Ready operator + oidc interaction. Else 302 `/sign-in` or `/enroll-totp` |
 | GET | `/device` | RFC 8628 user-code page (oidc when the provider is mounted) |
-| POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true, message }` (identical for unknown emails). A still-valid unused code is not emailed again. Per-IP limit reads `Fly-Client-IP`, then the last `X-Forwarded-For` hop |
-| POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session with `mfa_at` null. `{ ok, enroll, verify }`. 401 carries `attempts_remaining` |
+| POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true, message }` (identical for unknown emails). The code is emailed before the challenge is stored (503 and no challenge when delivery fails). A resend replaces a still-valid code: the old one stops working and the send counts against the budget. Per-IP limit reads `Fly-Client-IP`, then the last `X-Forwarded-For` hop, only behind Fly or with `VAULT_TRUST_PROXY=1`; otherwise the socket peer |
+| POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session with `mfa_at` null. `{ ok, enroll, verify }`. 401 carries `attempts_remaining`. Attempts are claimed atomically in the store; 25 verifies per email and 50 per address in 15 minutes (429) |
 | POST | `/api/auth/totp/start` | Session + CSRF. Returns `{ otpauth_url, qr_svg }`. QR is local SVG. Re-enroll (already enrolled) needs a ready session and `{ current_code }` (403 `current_code_required`). Pending secret is stored wrapped, so enrollment survives a restart |
 | POST | `/api/auth/totp/confirm` | `{ code }` + CSRF. Enrollment only. Rotates the session (`mfa_at` set), deletes other pre-MFA sessions and unused backup codes, returns `backup_codes` once. 429 `{ retry_after }` while locked |
 | POST | `/api/auth/totp/verify` | `{ code }` + CSRF. Sign-in authenticator step: authenticator or backup code. Rotates the session with `mfa_at` set. 10 failures lock for 15 minutes (429 `{ retry_after }`) |
@@ -48,7 +48,7 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | POST | `/api/auth/logout` | CSRF for cookie sessions. Clears session cookies and ends the OAuth server's own session |
 | POST | `/consent` | JSON `{ uid, decision }`. CSRF required |
 
-OTP: 8 digits, 10 minutes, 5 verify failures kill the challenge, 5 sends / email / 15 min, 10 sends / IP / 15 min. TOTP: RFC 6238 SHA-1, 6 digits, no replay, 10 failures lock 15 minutes. TOTP secrets are wrapped under an identity DEK (itself wrapped by the KEK, re-wrapped on `vault kek-rotate`). Sessions issued by the email step are not `ready` until `totp/verify` or `totp/confirm` sets `mfa_at`.
+OTP: 8 digits, 10 minutes, 5 verify failures kill the challenge, 5 sends / email / 15 min, 10 sends / IP / 15 min. TOTP: RFC 6238 SHA-1, 6 digits, no replay, 10 failures lock 15 minutes; the attempt is charged, the step consumed, and a backup code marked used with conditional updates, so a code passes once even under concurrent submission. Cookies: `Max-Age` is the 7-day absolute lifetime; the server-side 12-hour idle expiry (extended on every request) is authoritative. The CSRF token (`bp_csrf` / `__Host-bp_csrf`, sent back as `X-CSRF-Token`) is signed for the session cookie it accompanies. TOTP secrets are wrapped under an identity DEK (itself wrapped by the KEK, re-wrapped on `vault kek-rotate`). Sessions issued by the email step are not `ready` until `totp/verify` or `totp/confirm` sets `mfa_at`.
 
 ## Operator vault
 
@@ -62,7 +62,7 @@ All require `operatorReady` unless noted.
 | POST | `/api/items/:id/rotate` | `{ value }` | `{ item }` |
 | DELETE | `/api/items/:id` | | `{ ok: true }` |
 | POST | `/api/folders` | `{ environment, name }` | `{ folder }` |
-| POST | `/api/orgs` | `{ name }` | created org (session user, TOTP not required for first create) |
+| POST | `/api/orgs` | `{ name }` (1 to 80 printable characters, trimmed; 400 otherwise) | `{ orgId }`. Ready session required (403 `mfa_required` before the authenticator step). 402 `plan_limit` kind `orgs` past the per-user limit (10 owned orgs on the free tier) |
 | DELETE | `/api/orgs` | `{ confirm_name }` | `{ ok: true }` |
 | GET | `/api/inbox` | | `{ grants, needs, agentpass }` pending |
 | GET | `/api/audit` | optional `?client_id=` and `?item_name=` | `{ audit }` actions and item names, no values |
@@ -96,7 +96,7 @@ Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reac
 | --- | --- | --- |
 | GET | `/api/access` | Live snapshot only: `operators`, `clients`, `grants`, `sessions`. Clients and grants include `created_at`, `first_access_at`, `last_access_at`, and `fetched` (item names). Clients include `last4` of the machine bearer when issued. No `events` or `audit` array. No `avm_` / `avt_` / JWT |
 | GET | `/api/access/events` | Ledger newest-first, limit 200: kind, client_id, issued/expires/revoked. `jti` is hashed |
-| POST | `/api/sessions/:id/revoke` | `:id` is the 12-character prefix shown in Access (shorter or ambiguous is 400). Owners may revoke another member's session; operators only their own others (403). 400 `cannot_revoke_current` if it is this session |
+| POST | `/api/sessions/:id/revoke` | `:id` is the 12-character prefix shown in Access (shorter or ambiguous is 400). Only sessions acting in the caller's org are listed and revocable: a session's org is its pinned `active_org_id` while the user is still a member, else the user's first membership (404 otherwise). Owners may revoke another member's session; operators only their own others (403). 400 `cannot_revoke_current` if it is this session. Logs `auth_session_revoked` |
 | POST | `/api/sessions/revoke-others` | Deletes every other operator session |
 
 ## Runtime inject (trusted only)
@@ -156,7 +156,7 @@ Owner-only mutations; every member may read. All need a ready session plus `X-CS
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
 | GET | `/api/members` | | `{ members: [{ user_id, email, role, joined_at }], invites: [{ id, email, role, created_at, expires_at, expired }] }` |
-| POST | `/api/members/invite` | `{ email, role }` | `{ invite, accept_url }` (link also emailed when Resend is configured; 7-day expiry; 409 for a pending invite or existing member; 402 `plan_limit` kind `members`) |
+| POST | `/api/members/invite` | `{ email, role }` | `{ invite, accept_url }` (link also emailed when Resend is configured; 7-day expiry; 409 for a pending invite or existing member; 402 `plan_limit` kind `members`; 429 past 10 invites per inviting account or 30 per address in an hour) |
 | POST | `/api/members/:userId/role` | `{ role }` | The last owner cannot be demoted (400) |
 | DELETE | `/api/members/:userId` | | The last owner cannot be removed (400) |
 | DELETE | `/api/invites/:id` | | Cancels a pending invite |
@@ -164,7 +164,7 @@ Owner-only mutations; every member may read. All need a ready session plus `X-CS
 | POST | `/api/invites/accept` | `{ token }` | Joins the caller (email must match; 403 `invite_email_mismatch`; 404 bad token; 410 used or expired) and pins the joined org on the session |
 | GET | `/api/orgs` | | Orgs the caller belongs to, with roles |
 | POST | `/api/session/org` | `{ org_id }` | Pins the active org on this session (membership checked) |
-| GET | `/api/plan` | | `{ limits, usage }` for credentials, agents, members, calls (this UTC month) |
+| GET | `/api/plan` | | `{ limits, usage }` for credentials, agents, members, calls (this UTC month); `limits` also carries the per-user `orgs` cap, which has no per-org usage |
 
 Plan limits: free tier is 25 credentials, 10 agents, 3 members, 5000 `http_request` calls per month; `VAULT_PLAN_LIMITS_JSON` overrides. Exceeding one is `402 { error: "plan_limit", kind, limit }`. Audit actions: `member_invited`, `member_joined`, `member_removed`, `member_role`.
 

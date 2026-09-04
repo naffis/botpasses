@@ -12,7 +12,7 @@ import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { testAuthResolver, type AuthResolver, type Principal } from "../src/hosted/auth.ts";
 import { createHostedServer, type HostedHttpOpts } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
-import { OperatorIdentity, signCsrf } from "../src/hosted/operator-identity.ts";
+import { OperatorIdentity, hashToken, signCsrf } from "../src/hosted/operator-identity.ts";
 import { openHostedSqlite, type SqliteHostedStore } from "../src/store/sqlite-hosted.ts";
 import type { VaultStore } from "../src/store/types.ts";
 import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome } from "./helpers.ts";
@@ -190,30 +190,39 @@ test("cookie-authenticated POST /mcp requires a valid CSRF token and a same-orig
   try {
     const rpc = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_items", arguments: {} } });
     const cookieUser = { "x-cookie-user": "user_owner", "content-type": "application/json" };
-    const csrf = signCsrf(TEST_SESSION_SECRET, "raw-token-value");
+    // The CSRF token is signed for the session cookie it travels with (I7).
+    const sessionToken = "session-raw-token";
+    const csrf = signCsrf(TEST_SESSION_SECRET, "raw-token-value", hashToken(sessionToken));
+    const jar = `bp_session=${sessionToken}; bp_csrf=${csrf}`;
     const noCsrf = await fetch(`${ctx.base}/mcp`, { method: "POST", headers: { ...cookieUser, origin: "http://127.0.0.1:8788" }, body: rpc });
     assert.equal(noCsrf.status, 403);
     const badCsrf = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: `bp_csrf=${csrf}`, "x-csrf-token": "wrong.sig" },
+      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: jar, "x-csrf-token": "wrong.sig" },
       body: rpc,
     });
     assert.equal(badCsrf.status, 403);
+    const otherSession = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: `bp_session=another-session; bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      body: rpc,
+    });
+    assert.equal(otherSession.status, 403, "a token minted for one session does not verify with another session cookie");
     const crossOrigin = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, origin: "https://evil.example", cookie: `bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      headers: { ...cookieUser, origin: "https://evil.example", cookie: jar, "x-csrf-token": csrf },
       body: rpc,
     });
     assert.equal(crossOrigin.status, 403);
     const noOrigin = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, cookie: `bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      headers: { ...cookieUser, cookie: jar, "x-csrf-token": csrf },
       body: rpc,
     });
     assert.equal(noOrigin.status, 403);
     const ok = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: `bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: jar, "x-csrf-token": csrf },
       body: rpc,
     });
     assert.equal(ok.status, 200);

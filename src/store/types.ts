@@ -287,17 +287,38 @@ export type VaultStore = {
   insertEmailOtp(row: EmailOtpRecord): Promise<void>;
   latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined>;
   updateEmailOtp(row: EmailOtpRecord): Promise<void>;
+  /**
+   * Atomically spends one verify attempt on a challenge that is still live (not expired and
+   * under `maxAttempts`). Returns the attempt count after the claim, or undefined when the
+   * challenge is missing, expired, or exhausted, so concurrent guesses cannot share a slot.
+   */
+  claimOtpAttempt(id: string, nowIso: string, maxAttempts: number): Promise<number | undefined>;
   countEmailOtpSince(email: string, sinceIso: string): Promise<number>;
   insertBackupCode(userId: string, codeScrypt: string): Promise<void>;
   listBackupCodes(userId: string): Promise<{ codeScrypt: string; usedAt: string | null }[]>;
-  markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void>;
+  /** True when this call consumed the code; false when it was already used (single use under concurrency). */
+  markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<boolean>;
   insertSession(row: OperatorSessionRow): Promise<void>;
   getSession(idHash: string): Promise<OperatorSessionRow | undefined>;
   deleteSession(idHash: string): Promise<void>;
   deleteOtherSessions(userId: string, keepHash: string): Promise<void>;
+  /**
+   * Sessions acting in `orgId`: the session's `active_org_id` when the user is still a member
+   * of it, otherwise the user's first membership (the `listMembershipsForUser` order).
+   */
   listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]>;
   touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void>;
   updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void>;
+  /**
+   * Atomically charges one authenticator attempt: increments `totp_failures` (restarting at 1
+   * when a lock has expired, which also clears it). Returns the count after the charge, or
+   * undefined while the user is locked or unknown.
+   */
+  claimTotpAttempt(userId: string, nowIso: string): Promise<number | undefined>;
+  /** Replay guard: records `step` only when it is newer than the last accepted one. True when accepted. */
+  consumeTotpStep(userId: string, step: number): Promise<boolean>;
+  lockTotp(userId: string, untilIso: string): Promise<void>;
+  resetTotpFailures(userId: string): Promise<void>;
   /** Users with a confirmed or pending authenticator secret (for KEK rotation re-wraps). */
   listUsersWithTotp(): Promise<UserRow[]>;
   deleteUnusedBackupCodes(userId: string): Promise<void>;

@@ -8,16 +8,24 @@ import type { MemberRole } from "../hosted-types.ts";
 import type { InviteRecord, VaultStore } from "../store/types.ts";
 import { inviteEmail } from "./email.ts";
 import { HttpError } from "./errors.ts";
+import type { IpWindowLimiter } from "./identity-limiter.ts";
 import { normalizeEmail } from "./operator-identity.ts";
 import { assertWithinLimit, type PlanLimits } from "./plan-limits.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Invite spam bounds: per inviting account and per client address, sliding hour. */
+export const INVITE_WINDOW_MS = 60 * 60 * 1000;
+export const INVITE_ACTOR_MAX = 10;
+export const INVITE_IP_MAX = 30;
+export const ORG_NAME_MAX = 80;
 
 export type MemberHost = {
   store: VaultStore;
   now: () => Date;
   publicUrl: string;
   planLimits: PlanLimits;
+  /** Shared across requests; the kernel owns it so limits hold for the life of the process. */
+  inviteLimiter: IpWindowLimiter;
   sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
   audit(orgId: string, action: string, actor: string, itemName: string | null, clientId: string | null): Promise<void>;
 };
@@ -114,10 +122,17 @@ export async function seatsInUse(host: MemberHost, orgId: string): Promise<numbe
 
 export async function inviteMember(
   host: MemberHost,
-  input: { orgId: string; actorUserId: string; actorRole: MemberRole; email: string; role: MemberRole },
+  input: { orgId: string; actorUserId: string; actorRole: MemberRole; email: string; role: MemberRole; ip: string },
 ): Promise<{ invite: PendingInvite; accept_url: string; email_sent: boolean }> {
   requireOwner(input.actorRole);
   const email = normalizeEmail(input.email);
+  const nowMs = host.now().getTime();
+  if (
+    !host.inviteLimiter.allow(`actor:${input.actorUserId}`, INVITE_ACTOR_MAX, INVITE_WINDOW_MS, nowMs) ||
+    !host.inviteLimiter.allow(`ip:${input.ip}`, INVITE_IP_MAX, INVITE_WINDOW_MS, nowMs)
+  ) {
+    throw new HttpError(429, "Too many invites; try again later");
+  }
   const org = await host.store.getOrg(input.orgId);
   if (!org) throw new HttpError(404, "Unknown org");
   const existingUser = await host.store.getUserByEmail(email);
@@ -272,6 +287,21 @@ export async function acceptInvite(
   await host.store.acceptInvite(invite.id, at);
   await host.audit(invite.orgId, "member_joined", input.userId, null, null);
   return { org_id: org.id, org_name: org.name, role: invite.role };
+}
+
+/** 1 to 80 characters after trimming, no control characters (400 otherwise). */
+export function assertOrgName(raw: string): string {
+  const name = raw.trim();
+  if (!name || name.length > ORG_NAME_MAX || /\p{C}/u.test(name)) {
+    throw new HttpError(400, `name must be 1 to ${ORG_NAME_MAX} printable characters`);
+  }
+  return name;
+}
+
+/** 402 `plan_limit` kind `orgs` when the user already owns the plan's number of orgs. */
+export async function assertMayCreateOrg(host: MemberHost, userId: string): Promise<void> {
+  const owned = (await host.store.listMembershipsForUser(userId)).filter((m) => m.role === "owner").length;
+  assertWithinLimit("orgs", owned, host.planLimits);
 }
 
 /** Orgs the user belongs to, with the one this session resolves to marked active. */

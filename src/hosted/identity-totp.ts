@@ -75,26 +75,6 @@ export function lockRemainingMs(state: Pick<UserSecurityState, "totpLockedUntil"
   return Math.max(0, until - nowMs);
 }
 
-/** Counter after one wrong code: an expired lock resets the count; the tenth failure locks for 15 minutes. */
-export function afterTotpFailure(state: UserSecurityState, nowMs: number): UserSecurityState {
-  const lockExpired = state.totpLockedUntil !== null && lockRemainingMs(state, nowMs) === 0;
-  const failures = (lockExpired ? 0 : state.totpFailures) + 1;
-  const locked = failures >= TOTP_MAX_FAILURES;
-  return {
-    ...state,
-    totpFailures: failures,
-    totpLockedUntil: locked ? new Date(nowMs + TOTP_LOCK_MS).toISOString() : lockExpired ? null : state.totpLockedUntil,
-  };
-}
-
-export function afterTotpSuccess(state: UserSecurityState): UserSecurityState {
-  return { ...state, totpFailures: 0, totpLockedUntil: null };
-}
-
-export function attemptsRemaining(state: Pick<UserSecurityState, "totpFailures">): number {
-  return Math.max(0, TOTP_MAX_FAILURES - state.totpFailures);
-}
-
 export function securityOf(user: UserSecurityState): UserSecurityState {
   return {
     totpFailures: user.totpFailures,

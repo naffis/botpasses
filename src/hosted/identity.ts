@@ -50,8 +50,10 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
     if (bearer && opts.oidcJwk && opts.issuer) {
       return principalFromAccessJwt(kernel, bearer, opts.oidcJwk, opts.issuer);
     }
-    const secure = opts.secureCookies || requestSecure(req);
-    const loaded = await opts.identity.loadSession(req.headers.cookie, secure);
+    // Secure cookies are `__Host-` names only and are honoured only on a TLS request: a plain
+    // `bp_session` cookie tossed onto an HTTPS origin, or a session replayed over HTTP, is ignored.
+    if (opts.secureCookies && !requestSecure(req)) return undefined;
+    const loaded = await opts.identity.loadSession(req.headers.cookie, opts.secureCookies);
     if (!loaded) return undefined;
     const enrolled = totpEnabled(loaded.user);
     // Ready means this session passed the authenticator step, not merely that the user has one.

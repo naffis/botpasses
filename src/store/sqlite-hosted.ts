@@ -976,10 +976,9 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
-    const rows = this.#db.prepare("SELECT * FROM org_members WHERE user_id = ?").all(userId) as Record<
-      string,
-      unknown
-    >[];
+    const rows = this.#db
+      .prepare("SELECT * FROM org_members WHERE user_id = ? ORDER BY joined_at NULLS FIRST, org_id")
+      .all(userId) as Record<string, unknown>[];
     return rows.map(mapMemberRecord);
   }
 
@@ -1086,8 +1085,9 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined> {
+    // A resend expires the previous challenge in the same instant; the live one sorts first.
     const r = this.#db
-      .prepare("SELECT * FROM email_otp_challenges WHERE email = ? ORDER BY sent_at DESC LIMIT 1")
+      .prepare("SELECT * FROM email_otp_challenges WHERE email = ? ORDER BY sent_at DESC, expires_at DESC LIMIT 1")
       .get(email.toLowerCase()) as Record<string, unknown> | undefined;
     return r ? mapOtp(r) : undefined;
   }
@@ -1096,6 +1096,16 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare("UPDATE email_otp_challenges SET attempts = ?, expires_at = ? WHERE id = ?")
       .run(row.attempts, row.expiresAt, row.id);
+  }
+
+  async claimOtpAttempt(id: string, nowIso: string, maxAttempts: number): Promise<number | undefined> {
+    const r = this.#db
+      .prepare(
+        `UPDATE email_otp_challenges SET attempts = attempts + 1
+         WHERE id = ? AND attempts < ? AND expires_at > ? RETURNING attempts`,
+      )
+      .get(id, maxAttempts, nowIso) as { attempts: number } | undefined;
+    return r ? Number(r.attempts) : undefined;
   }
 
   async countEmailOtpSince(email: string, sinceIso: string): Promise<number> {
@@ -1123,10 +1133,11 @@ export class SqliteHostedStore implements VaultStore {
     }));
   }
 
-  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void> {
-    this.#db
+  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<boolean> {
+    const r = this.#db
       .prepare("UPDATE backup_codes SET used_at = ? WHERE user_id = ? AND code_scrypt = ? AND used_at IS NULL")
       .run(usedAt, userId, codeScrypt);
+    return Number(r.changes) > 0;
   }
 
   async insertSession(row: OperatorSessionRow): Promise<void> {
@@ -1156,10 +1167,17 @@ export class SqliteHostedStore implements VaultStore {
     const rows = this.#db
       .prepare(
         `SELECT s.* FROM operator_sessions s
-         JOIN org_members m ON m.user_id = s.user_id
-         WHERE m.org_id = ?`,
+         WHERE (
+           s.active_org_id = ?
+           AND EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = s.active_org_id AND m.user_id = s.user_id)
+         ) OR (
+           (s.active_org_id IS NULL
+             OR NOT EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = s.active_org_id AND m.user_id = s.user_id))
+           AND ? = (SELECT f.org_id FROM org_members f WHERE f.user_id = s.user_id
+                    ORDER BY f.joined_at NULLS FIRST, f.org_id LIMIT 1)
+         )`,
       )
-      .all(orgId) as Record<string, unknown>[];
+      .all(orgId, orgId) as Record<string, unknown>[];
     return rows.map(mapSess);
   }
 
@@ -1184,6 +1202,34 @@ export class SqliteHostedStore implements VaultStore {
         patch.totpPendingAt,
         userId,
       );
+  }
+
+  async claimTotpAttempt(userId: string, nowIso: string): Promise<number | undefined> {
+    const r = this.#db
+      .prepare(
+        `UPDATE users SET
+           totp_failures = CASE WHEN totp_locked_until IS NOT NULL THEN 1 ELSE totp_failures + 1 END,
+           totp_locked_until = NULL
+         WHERE id = ? AND (totp_locked_until IS NULL OR totp_locked_until <= ?)
+         RETURNING totp_failures`,
+      )
+      .get(userId, nowIso) as { totp_failures: number } | undefined;
+    return r ? Number(r.totp_failures) : undefined;
+  }
+
+  async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+    const r = this.#db
+      .prepare("UPDATE users SET totp_last_step = ? WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)")
+      .run(step, userId, step);
+    return Number(r.changes) > 0;
+  }
+
+  async lockTotp(userId: string, untilIso: string): Promise<void> {
+    this.#db.prepare("UPDATE users SET totp_locked_until = ? WHERE id = ?").run(untilIso, userId);
+  }
+
+  async resetTotpFailures(userId: string): Promise<void> {
+    this.#db.prepare("UPDATE users SET totp_failures = 0, totp_locked_until = NULL WHERE id = ?").run(userId);
   }
 
   async listUsersWithTotp(): Promise<UserRow[]> {

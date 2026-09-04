@@ -661,6 +661,18 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     }) ?? "",
     /VAULT_BOOTSTRAP_TOKEN/,
   );
+  // I2: a well-formed token on a plane is refused unless the deployer opts in for the break-glass window.
+  const planeBootstrap = {
+    VAULT_MODE: "hosted",
+    DATABASE_URL: "postgres://x",
+    VAULT_KEK: "aa".repeat(32),
+    VAULT_BOOTSTRAP_TOKEN: "b".repeat(40),
+    VAULT_PUBLIC_URL: STAGING_ORIGIN,
+    VAULT_DEPLOY_PLANE: "staging",
+  };
+  assert.match(hostedBootError(planeBootstrap) ?? "", /VAULT_BOOTSTRAP_ALLOW_PLANE=1/);
+  assert.doesNotMatch(hostedBootError({ ...planeBootstrap, VAULT_BOOTSTRAP_ALLOW_PLANE: "1" }) ?? "", /BOOTSTRAP/);
+  assert.doesNotMatch(hostedBootError({ ...planeBootstrap, VAULT_DEPLOY_PLANE: undefined }) ?? "", /BOOTSTRAP/);
   assert.match(
     hostedBootError({
       VAULT_MODE: "hosted",

@@ -88,7 +88,8 @@ export type AuthEventKind =
   | "totp_locked"
   | "backup_code_used"
   | "session_revoked"
-  | "signed_out";
+  | "signed_out"
+  | "bootstrap_used";
 
 /**
  * Authentication events, one line each, for alerting on brute force and lockouts. Emails

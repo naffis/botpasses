@@ -999,7 +999,10 @@ export class PostgresStore implements VaultStore {
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
-    const r = await this.#pool.query("SELECT * FROM org_members WHERE user_id = $1", [userId]);
+    const r = await this.#pool.query(
+      "SELECT * FROM org_members WHERE user_id = $1 ORDER BY joined_at NULLS FIRST, org_id",
+      [userId],
+    );
     return r.rows.map((row) => {
       const rec = asRecord(row);
       return {
@@ -1090,8 +1093,9 @@ export class PostgresStore implements VaultStore {
   }
 
   async latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined> {
+    // A resend expires the previous challenge in the same instant; the live one sorts first.
     const r = await this.#pool.query(
-      "SELECT * FROM email_otp_challenges WHERE email = $1 ORDER BY sent_at DESC LIMIT 1",
+      "SELECT * FROM email_otp_challenges WHERE email = $1 ORDER BY sent_at DESC, expires_at DESC LIMIT 1",
       [email.toLowerCase()],
     );
     return r.rows[0] ? mapOtp(asRecord(r.rows[0])) : undefined;
@@ -1103,6 +1107,15 @@ export class PostgresStore implements VaultStore {
       row.expiresAt,
       row.id,
     ]);
+  }
+
+  async claimOtpAttempt(id: string, nowIso: string, maxAttempts: number): Promise<number | undefined> {
+    const r = await this.#pool.query(
+      `UPDATE email_otp_challenges SET attempts = attempts + 1
+       WHERE id = $1 AND attempts < $2 AND expires_at > $3 RETURNING attempts`,
+      [id, maxAttempts, nowIso],
+    );
+    return r.rows[0] ? Number(asRecord(r.rows[0]).attempts) : undefined;
   }
 
   async countEmailOtpSince(email: string, sinceIso: string): Promise<number> {
@@ -1128,11 +1141,12 @@ export class PostgresStore implements VaultStore {
     });
   }
 
-  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void> {
-    await this.#pool.query(
+  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<boolean> {
+    const r = await this.#pool.query(
       "UPDATE backup_codes SET used_at = $1 WHERE user_id = $2 AND code_scrypt = $3 AND used_at IS NULL",
       [usedAt, userId, codeScrypt],
     );
+    return (r.rowCount ?? 0) > 0;
   }
 
   async insertSession(row: OperatorSessionRow): Promise<void> {
@@ -1157,7 +1171,16 @@ export class PostgresStore implements VaultStore {
 
   async listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]> {
     const r = await this.#pool.query(
-      `SELECT s.* FROM operator_sessions s JOIN org_members m ON m.user_id = s.user_id WHERE m.org_id = $1`,
+      `SELECT s.* FROM operator_sessions s
+       WHERE (
+         s.active_org_id = $1
+         AND EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = s.active_org_id AND m.user_id = s.user_id)
+       ) OR (
+         (s.active_org_id IS NULL
+           OR NOT EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = s.active_org_id AND m.user_id = s.user_id))
+         AND $1 = (SELECT f.org_id FROM org_members f WHERE f.user_id = s.user_id
+                   ORDER BY f.joined_at NULLS FIRST, f.org_id LIMIT 1)
+       )`,
       [orgId],
     );
     return r.rows.map((row) => mapSess(asRecord(row)));
@@ -1185,6 +1208,34 @@ export class PostgresStore implements VaultStore {
         userId,
       ],
     );
+  }
+
+  async claimTotpAttempt(userId: string, nowIso: string): Promise<number | undefined> {
+    const r = await this.#pool.query(
+      `UPDATE users SET
+         totp_failures = CASE WHEN totp_locked_until IS NOT NULL THEN 1 ELSE totp_failures + 1 END,
+         totp_locked_until = NULL
+       WHERE id = $1 AND (totp_locked_until IS NULL OR totp_locked_until <= $2)
+       RETURNING totp_failures`,
+      [userId, nowIso],
+    );
+    return r.rows[0] ? Number(asRecord(r.rows[0]).totp_failures) : undefined;
+  }
+
+  async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+    const r = await this.#pool.query(
+      "UPDATE users SET totp_last_step = $1 WHERE id = $2 AND (totp_last_step IS NULL OR totp_last_step < $1)",
+      [step, userId],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
+  async lockTotp(userId: string, untilIso: string): Promise<void> {
+    await this.#pool.query("UPDATE users SET totp_locked_until = $1 WHERE id = $2", [untilIso, userId]);
+  }
+
+  async resetTotpFailures(userId: string): Promise<void> {
+    await this.#pool.query("UPDATE users SET totp_failures = 0, totp_locked_until = NULL WHERE id = $1", [userId]);
   }
 
   async listUsersWithTotp(): Promise<UserRow[]> {

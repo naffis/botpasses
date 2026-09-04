@@ -9,6 +9,7 @@ import { authDocument, escapeAttr, escapeHtml } from "./auth-shell.ts";
 import { HttpError, isHttpError } from "./errors.ts";
 import { json, readJson, sendHtml } from "./http-util.ts";
 import { needsTotpVerify } from "./identity.ts";
+import { requestClientIp } from "./identity-limiter.ts";
 import { asMemberRole, type InvitePreview } from "./kernel-members.ts";
 import type { HostedKernel } from "./kernel.ts";
 
@@ -55,6 +56,7 @@ export async function handleMemberRoutes(
       actorRole: op.role,
       email: String(body.email ?? ""),
       role: asMemberRole(body.role ?? "operator"),
+      ip: requestClientIp(req),
     });
     json(res, 200, out);
     return true;

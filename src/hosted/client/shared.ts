@@ -54,6 +54,17 @@ export function arr<T>(v: unknown, guard: (x: unknown) => x is T): T[] {
   return Array.isArray(v) ? v.filter(guard) : [];
 }
 
+/**
+ * Where a 403 `mfa_required` sends the browser: the `verify_url` (enrolled, this session has
+ * not passed the authenticator step) or `enroll_url` (no authenticator yet) the server named.
+ * Only same-origin paths are followed. Undefined for every other response.
+ */
+export function mfaRedirectUrl(status: number, body: Json): string | undefined {
+  if (status !== 403 || body.error !== "mfa_required") return undefined;
+  const next = str(body.verify_url) || str(body.enroll_url);
+  return next.startsWith("/") && !next.startsWith("//") ? next : undefined;
+}
+
 export async function api(url: string, init: RequestInit = {}): Promise<ApiResult> {
   let res: Response;
   try {
@@ -68,6 +79,8 @@ export async function api(url: string, init: RequestInit = {}): Promise<ApiResul
   } catch {
     body = {};
   }
+  const next = mfaRedirectUrl(res.status, body);
+  if (next && typeof location !== "undefined") location.assign(next);
   return { ok: res.ok, status: res.status, body };
 }
 

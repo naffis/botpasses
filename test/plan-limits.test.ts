@@ -17,13 +17,14 @@ import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
 
 test("free tier limits and the env override", () => {
-  assert.deepEqual(PLAN_LIMITS.free, { credentials: 25, agents: 10, members: 3, calls: 5000 });
+  assert.deepEqual(PLAN_LIMITS.free, { credentials: 25, agents: 10, members: 3, calls: 5000, orgs: 10 });
   assert.deepEqual(planLimits("free", {}), PLAN_LIMITS.free);
   assert.deepEqual(planLimits("free", { [PLAN_LIMITS_ENV]: '{"credentials":100,"calls":50000}' }), {
     credentials: 100,
     agents: 10,
     members: 3,
     calls: 50000,
+    orgs: 10,
   });
   assert.deepEqual(parsePlanLimitsOverride(undefined), {});
   assert.deepEqual(parsePlanLimitsOverride("  "), {});
@@ -36,7 +37,7 @@ test("free tier limits and the env override", () => {
 });
 
 test("assertWithinLimit is exact at the boundary and throws a 402 plan_limit", () => {
-  const limits = { credentials: 3, agents: 1, members: 2, calls: 10 };
+  const limits = { credentials: 3, agents: 1, members: 2, calls: 10, orgs: 10 };
   assert.doesNotThrow(() => assertWithinLimit("credentials", 2, limits));
   assert.throws(
     () => assertWithinLimit("credentials", 3, limits),
@@ -54,7 +55,7 @@ test("assertWithinLimit is exact at the boundary and throws a 402 plan_limit", (
   assert.equal(monthStartIso(new Date("2026-01-01T00:00:00Z")), "2026-01-01T00:00:00.000Z");
 });
 
-async function kernelWithLimits(limits: { credentials: number; agents: number; members: number; calls: number }) {
+async function kernelWithLimits(limits: { credentials: number; agents: number; members: number; calls: number; orgs: number }) {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "plan.sqlite"));
   const clock = { now: Date.parse("2026-09-15T10:00:00Z") };
@@ -80,7 +81,7 @@ const item = (n: number) => ({
 });
 
 test("kernel refuses the credential, agent, and call over the plan limit with 402", async () => {
-  const ctx = await kernelWithLimits({ credentials: 2, agents: 1, members: 3, calls: 3 });
+  const ctx = await kernelWithLimits({ credentials: 2, agents: 1, members: 3, calls: 3, orgs: 10 });
   const { kernel, orgId, store } = ctx;
   try {
     await kernel.createItem({ orgId, ...item(1) });
@@ -113,7 +114,7 @@ test("kernel refuses the credential, agent, and call over the plan limit with 40
 
     const report = await kernel.planReport(orgId);
     assert.equal(report.plan, "free");
-    assert.deepEqual(report.limits, { credentials: 2, agents: 1, members: 3, calls: 3 });
+    assert.deepEqual(report.limits, { credentials: 2, agents: 1, members: 3, calls: 3, orgs: 10 });
     assert.deepEqual(report.usage, { credentials: 2, agents: 1, members: 1, calls: 3 });
     assert.equal(report.period_start, "2026-09-01T00:00:00.000Z");
   } finally {
@@ -123,7 +124,7 @@ test("kernel refuses the credential, agent, and call over the plan limit with 40
 });
 
 test("HTTP: GET /api/plan reports usage; POST /api/items over the limit is 402 plan_limit", async () => {
-  const ctx = await kernelWithLimits({ credentials: 1, agents: 10, members: 3, calls: 5000 });
+  const ctx = await kernelWithLimits({ credentials: 1, agents: 10, members: 3, calls: 5000, orgs: 10 });
   const http = createHostedServer({ kernel: ctx.kernel, host: "127.0.0.1", port: 0 });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;

@@ -19,6 +19,7 @@ import {
 import type { VaultStore } from "../store/types.ts";
 import { clientUsage, grantUsage, sessionUsage } from "./access-usage.ts";
 import { HttpError } from "./errors.ts";
+import { logAuthEvent } from "./observe.ts";
 import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import type { PlanLimitKind } from "./plan-limits.ts";
 
@@ -226,6 +227,12 @@ export async function revokeSession(host: ClientHost, orgId: string, actor: Sess
   const match = matches[0];
   if (!match || matches.length > 1) throw new HttpError(404, "Unknown session");
   if (match.idHash === actor.sessionHash) throw new HttpError(400, "cannot_revoke_current");
+  logAuthEvent("session_revoked", {
+    org_id: orgId,
+    actor_user_id: actor.userId,
+    user_id: match.userId,
+    session_id: match.idHash.slice(0, SESSION_ID_MIN_CHARS),
+  });
   if (match.userId !== actor.userId && actor.role !== "owner") {
     throw new HttpError(403, "Only owners may revoke another member's session");
   }

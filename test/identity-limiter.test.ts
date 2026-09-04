@@ -23,6 +23,32 @@ test("IpWindowLimiter caps its key set with least-recently-used eviction", () =>
   assert.equal(limiter.allow("a", 1, 1000, 5), true, "a was the oldest and got evicted in turn");
 });
 
+test("I8: without a trusted proxy X-Forwarded-For is ignored and the socket peer is the address", async (t) => {
+  const prevTrust = process.env.VAULT_TRUST_PROXY;
+  const prevFly = process.env.FLY_APP_NAME;
+  delete process.env.VAULT_TRUST_PROXY;
+  delete process.env.FLY_APP_NAME;
+  t.after(() => {
+    if (prevTrust !== undefined) process.env.VAULT_TRUST_PROXY = prevTrust;
+    if (prevFly !== undefined) process.env.FLY_APP_NAME = prevFly;
+  });
+  const ctx = await identityServer();
+  try {
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i += 1) {
+      const r = await api(ctx, "/api/auth/otp/send", {
+        body: { email: `direct${i}@example.com` },
+        headers: { "x-forwarded-for": `198.51.100.${i}`, "fly-client-ip": `192.0.2.${i}` },
+      });
+      statuses.push(r.status);
+    }
+    assert.deepEqual(statuses.slice(0, 10), Array(10).fill(200));
+    assert.equal(statuses[10], 429, "eleven distinct spoofed headers are still one loopback caller");
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("S8: a spoofed first X-Forwarded-For hop does not bypass the per-IP OTP limit", async (t) => {
   // Fly-Client-IP is trusted only behind Fly or with VAULT_TRUST_PROXY=1; this test runs as if behind Fly.
   const prevTrust = process.env.VAULT_TRUST_PROXY;
