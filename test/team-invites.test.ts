@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { CSRF_COOKIE_JS } from "../src/hosted/auth-js.ts";
 import { inviteEmail } from "../src/hosted/email.ts";
 import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
@@ -187,7 +188,9 @@ test("accept: page states, email mismatch 403, matching email joins, reuse 410, 
     assert.match(await mismatchPage.text(), /signed in as <strong>other@example.com<\/strong>, but this invite is for <strong>new@example.com/);
 
     const matchPage = await fetch(`${ctx.base}${pagePath}`, { headers: ctx.headers("user_new", ctx.personalOrgId) });
-    assert.match(await matchPage.text(), /data-testid="accept-form"/);
+    const matchHtml = await matchPage.text();
+    assert.match(matchHtml, /data-testid="accept-form"/);
+    assert.ok(matchHtml.includes(CSRF_COOKIE_JS), "the accept script reads the CSRF cookie through the shared reader (R1-7)");
 
     const missing = await fetch(`${ctx.base}/accept-invite?token=nope`);
     assert.equal(missing.status, 404);

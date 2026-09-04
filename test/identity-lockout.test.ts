@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { isHttpError } from "../src/hosted/errors.ts";
 import { TOTP_LOCK_MS, TOTP_MAX_FAILURES } from "../src/hosted/identity-totp.ts";
+import { hashToken } from "../src/hosted/operator-identity.ts";
 import {
   api,
+  codeFromEmail,
   expectStatus,
   identityServer,
   logout,
@@ -12,6 +15,80 @@ import {
   totpCode,
   wrongTotpCode,
 } from "./identity-harness.ts";
+
+const OTP_WINDOW_MS = 15 * 60 * 1000;
+
+test("R1-4: verifies with no live code do not spend the per-email budget; a correct sign-in from another address still works", async () => {
+  const clock = { now: Date.now() };
+  const ctx = await identityServer({ clock });
+  try {
+    const email = "victim@example.com";
+    const cookies = { secure: false };
+    // 25 bogus verifies for an address that never asked for a code (the per-email budget).
+    for (let i = 0; i < 25; i += 1) {
+      await assert.rejects(ctx.identity.verifyOtp(email, "00000000", cookies, `198.51.100.${i}`), (e: unknown) =>
+        e instanceof Error && e.message === "Invalid code",
+      );
+    }
+    const sent = await api(ctx, "/api/auth/otp/send", { body: { email } });
+    await expectStatus(sent, 200, "otp/send");
+    const otp = codeFromEmail(ctx.emails.filter((e) => e.to === email).at(-1)?.html ?? "");
+    const issued = await ctx.identity.verifyOtp(email, otp, cookies, "203.0.113.7");
+    assert.equal(issued.user.email, email, "the owner signs in from another address");
+
+    // Wrong codes against a live challenge are what the per-email key counts.
+    const other = "counted@example.com";
+    await expectStatus(await api(ctx, "/api/auth/otp/send", { body: { email: other } }), 200, "otp/send");
+    for (let i = 0; i < 3; i += 1) {
+      await assert.rejects(ctx.identity.verifyOtp(other, "00000000", cookies, `198.51.100.${40 + i}`));
+    }
+    assert.equal(
+      ctx.identity.ipLimiter.allow(`verify-email:${other}`, 3, OTP_WINDOW_MS, clock.now),
+      false,
+      "three wrong codes are three hits on the per-email key",
+    );
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("R1-6: two concurrent confirms of the same enrollment code succeed exactly once and mint one backup-code set", async () => {
+  const clock = { now: Date.now() };
+  const ctx = await identityServer({ clock });
+  try {
+    const email = "twice@example.com";
+    const pending = await otpSignIn(ctx, email);
+    const start = await api(ctx, "/api/auth/totp/start", { jar: pending.jar, csrf: true, body: {} });
+    await expectStatus(start, 200, "totp/start");
+    const secret = new URL((await readJson<{ otpauth_url: string }>(start)).otpauth_url).searchParams.get("secret") ?? "";
+    const code = totpCode(secret, clock.now);
+    const before = await ctx.store.getUserByEmail(email);
+    assert.ok(before);
+    // Driven in-process so both confirms read the pending secret before either writes; over
+    // HTTP the synchronous SQLite path finishes the first before the second is parsed.
+    const confirm = () => ctx.identity.confirmTotp(before.id, hashToken(pending.jar.token), code, { secure: false });
+    const outcomes = await Promise.allSettled([confirm(), confirm()]);
+    const wins = outcomes.filter((o) => o.status === "fulfilled");
+    assert.equal(wins.length, 1, `exactly one confirm wins: ${outcomes.map((o) => o.status).join(",")}`);
+    for (const o of outcomes) {
+      if (o.status === "rejected") assert.ok(isHttpError(o.reason) && (o.reason.status === 400 || o.reason.status === 401), String(o.reason));
+    }
+    const winner = wins[0];
+    assert.ok(winner && winner.status === "fulfilled");
+    const shown = winner.value.backup_codes;
+    const user = await ctx.store.getUserByEmail(email);
+    assert.ok(user);
+    const unused = (await ctx.store.listBackupCodes(user.id)).filter((c) => c.usedAt === null);
+    assert.equal(unused.length, shown.length, "one backup-code set exists");
+    assert.equal(user.totpPendingWrappedIv, null, "the pending secret is consumed");
+    // The set the winner showed is the live one: its first code passes the authenticator step.
+    await ctx.identity.verifyTotp(user.id, hashToken(winner.value.sessionToken), shown[0] ?? "", { secure: false });
+    const left = (await ctx.store.listBackupCodes(user.id)).filter((c) => c.usedAt === null);
+    assert.equal(left.length, shown.length - 1, "the winner's code was the one consumed");
+  } finally {
+    await ctx.close();
+  }
+});
 
 test("S8: ten wrong authenticator codes lock the account for 15 minutes; the lock survives a correct code", async () => {
   const clock = { now: Date.now() };

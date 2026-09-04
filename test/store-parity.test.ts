@@ -340,6 +340,27 @@ for (const backend of backends) {
       assert.equal(await store.consumeTotpStep(userId, 101), true);
       assert.equal((await store.getUser(userId))?.totpLastStep, 101);
 
+      // A pending authenticator secret is consumed exactly once, and only the one that is pending.
+      const security = await store.getUser(userId);
+      assert.ok(security);
+      await store.updateUserSecurity(userId, {
+        totpFailures: security.totpFailures,
+        totpLockedUntil: security.totpLockedUntil,
+        totpPendingWrappedIv: id("iv"),
+        totpPendingWrappedCiphertext: id("ct"),
+        totpPendingWrappedTag: id("tag"),
+        totpPendingAt: now,
+      });
+      assert.equal(await store.consumePendingTotp(userId, id("other-iv")), false, "a different pending secret is not consumed");
+      const pendingRaces = await Promise.all([store.consumePendingTotp(userId, id("iv")), store.consumePendingTotp(userId, id("iv"))]);
+      assert.deepEqual([...pendingRaces].sort(), [false, true], "one concurrent confirm wins");
+      const cleared = await store.getUser(userId);
+      assert.equal(cleared?.totpPendingWrappedIv, null);
+      assert.equal(cleared?.totpPendingWrappedCiphertext, null);
+      assert.equal(cleared?.totpPendingWrappedTag, null);
+      assert.equal(cleared?.totpPendingAt, null);
+      assert.equal(await store.consumePendingTotp(userId, id("iv")), false, "nothing pending any more");
+
       await store.insertBackupCode(userId, sha(id("code")));
       // Two concurrent consumes: exactly one wins, in whichever order the pool answers them.
       const consumed = await Promise.all([store.markBackupUsed(userId, sha(id("code")), now), store.markBackupUsed(userId, sha(id("code")), now)]);

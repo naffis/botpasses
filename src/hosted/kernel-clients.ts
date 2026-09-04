@@ -236,16 +236,16 @@ export async function revokeSession(host: ClientHost, orgId: string, actor: Sess
   const match = matches[0];
   if (!match || matches.length > 1) throw new HttpError(404, "Unknown session");
   if (match.idHash === actor.sessionHash) throw new HttpError(400, "cannot_revoke_current");
+  if (match.userId !== actor.userId && actor.role !== "owner") {
+    throw new HttpError(403, "Only owners may revoke another member's session");
+  }
+  await host.store.deleteSession(match.idHash);
   logAuthEvent("session_revoked", {
     org_id: orgId,
     actor_user_id: actor.userId,
     user_id: match.userId,
     session_id: match.idHash.slice(0, SESSION_ID_MIN_CHARS),
   });
-  if (match.userId !== actor.userId && actor.role !== "owner") {
-    throw new HttpError(403, "Only owners may revoke another member's session");
-  }
-  await host.store.deleteSession(match.idHash);
 }
 
 export async function listAccess(host: ClientHost, orgId: string, currentSessionHash?: string) {

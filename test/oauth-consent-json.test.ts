@@ -1,7 +1,9 @@
 /**
  * The consent page's script cannot read the Location of a 303 (browsers hide redirects from
- * fetch), so a caller that accepts JSON gets `200 { location }` and navigates itself. Node
- * clients and a no-script form submit keep the 303 (B1).
+ * fetch), so a caller that accepts JSON gets `200 { location }` and navigates itself. A caller
+ * that sends the CSRF header without `Accept: application/json` keeps the 303 (B1). A form
+ * submit without the header (a browser with scripts off) is 403: POST /consent needs the
+ * double-submit token like every other cookie-session mutation (R1-3).
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -99,7 +101,7 @@ test("B1 consent POST answers a JSON caller with 200 { location }; the resume UR
     assert.equal(plain.status, 303, await plain.text());
     assert.match(new URL(plain.headers.get("location") ?? "", srv.base).pathname, /^\/oauth\/authorize\//);
 
-    // A no-script form submit (form body) is understood too and gets the 303.
+    // A form body with the CSRF header is understood too and gets the 303.
     const formUid = await pendingUid(op.jar, pkce().challenge, "four");
     const form = await srv.go("/consent", {
       method: "POST",
@@ -110,6 +112,18 @@ test("B1 consent POST answers a JSON caller with 200 { location }; the resume UR
     assert.equal(form.status, 303, await form.text());
     const formResumed = await srv.go(new URL(form.headers.get("location") ?? "", srv.base).pathname, { jar: op.jar });
     assert.ok(new URL(formResumed.headers.get("location") ?? "").searchParams.get("code"));
+
+    // The consent form carries no CSRF field, so a submit without the header (scripts off)
+    // is refused; it never reaches the provider and the pending request stays undecided.
+    const bareUid = await pendingUid(op.jar, pkce().challenge, "five");
+    const bare = await srv.go("/consent", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie: op.jar.header() },
+      body: new URLSearchParams({ uid: bareUid, decision: "allow" }),
+    });
+    assert.equal(bare.status, 403, await bare.text());
+    const stillPending = await srv.go("/consent", { jar: op.jar });
+    assert.equal(stillPending.status, 200, "the interaction is still open after the refused submit");
   } finally {
     await srv.close();
   }

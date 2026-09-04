@@ -292,6 +292,12 @@ export type VaultStore = {
   claimTotpAttempt(userId: string, nowIso: string): Promise<number | undefined>;
   /** Replay guard: records `step` only when it is newer than the last accepted one. True when accepted. */
   consumeTotpStep(userId: string, step: number): Promise<boolean>;
+  /**
+   * Clears the pending authenticator secret only while it is still the one wrapped under
+   * `pendingIv`. True when this call cleared it, so two concurrent confirms of one
+   * enrollment cannot both succeed.
+   */
+  consumePendingTotp(userId: string, pendingIv: string): Promise<boolean>;
   lockTotp(userId: string, untilIso: string): Promise<void>;
   resetTotpFailures(userId: string): Promise<void>;
   /** Users with a confirmed or pending authenticator secret (for KEK rotation re-wraps). */
@@ -330,9 +336,17 @@ export type VaultStore = {
   deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void>;
   /**
    * Deletes rows of `kind` whose payload clientId is one of `clientIds` and whose
-   * accountId is `accountId` (or absent). Rows bound to another account survive.
+   * accountId is `accountId` (or absent). Rows bound to another account survive. With
+   * `onlyWithoutGrant`, rows that carry a grant id are left alone: those belong to a Grant
+   * and are swept with it (by org), never by account, since one account can hold grants for
+   * the same client id in several orgs.
    */
-  deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void>;
+  deleteOidcPayloadsForClient(
+    kind: string,
+    clientIds: string[],
+    accountId: string | null,
+    onlyWithoutGrant?: boolean,
+  ): Promise<void>;
   /** Rows of `kind` whose payload clientId is one of `clientIds` (used to find an org's grants at revoke). */
   listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]>;
   /**

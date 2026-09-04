@@ -39,8 +39,11 @@ function grantOrg(payload: Payload): string | undefined {
  * Grant at consent (`org:<id>` resource scope); every token under such a grant goes with
  * it, whichever org member consented. Grants written before the org marker existed are
  * matched by account: any org member's grant for this client id. The account-scoped
- * sweep for the recorded consenting account (rows with no grant id) is kept as before;
- * a client with no recorded consenting account only loses rows that carry no account.
+ * sweep for the recorded consenting account then removes only rows that carry no grant id:
+ * a grant-bound row belongs to its Grant, and the consenter's grants for the same client id
+ * in other orgs (and their tokens) must survive. Without an org scope the legacy account
+ * sweep runs over every kind; a client with no recorded consenting account only loses rows
+ * that carry no account.
  */
 export async function destroyOidcPayloadsForClient(
   store: VaultStore,
@@ -70,6 +73,13 @@ export async function destroyOidcPayloadsForClient(
       }
       await store.deleteOidcPayload(row.id, "Grant");
     }
+    // Grants were handled by org above; the account sweep must not reach a Grant row (its
+    // grant_id is null) or any token under one, so only the grant-bound kinds are visited
+    // and only their grantless rows go.
+    for (const kind of GRANT_BOUND_OIDC_KINDS) {
+      await store.deleteOidcPayloadsForClient(kind, ids, client.consentedByUserId, true);
+    }
+    return;
   }
   for (const kind of CLIENT_OWNED_OIDC_KINDS) {
     await store.deleteOidcPayloadsForClient(kind, ids, client.consentedByUserId);

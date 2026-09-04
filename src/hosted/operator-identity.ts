@@ -262,15 +262,18 @@ export class OperatorIdentity {
    * The attempt is claimed atomically in the store before the hash check, so concurrent
    * guesses cannot share one slot; a missing or exhausted challenge still costs one scrypt so
    * the response time does not say whether a challenge exists.
+   *
+   * The per-address budget is charged on every call. The per-email budget is charged only
+   * by a wrong code against a live challenge: anyone can post verifies for someone else's
+   * address, and charging those would let 25 bogus requests lock that person out from every
+   * address for 15 minutes. A correct code never counts; the challenge still dies at
+   * OTP_MAX_ATTEMPTS.
    */
   async verifyOtp(emailRaw: string, otp: string, cookies: CookieOpts, ip: string): Promise<IssuedSession> {
     const email = normalizeEmail(emailRaw);
     const now = this.now();
     const nowMs = now.getTime();
-    if (
-      !this.ipLimiter.allow(`verify-ip:${ip}`, OTP_VERIFY_IP_MAX, OTP_EMAIL_WINDOW_MS, nowMs) ||
-      !this.ipLimiter.allow(`verify-email:${email}`, OTP_VERIFY_EMAIL_MAX, OTP_EMAIL_WINDOW_MS, nowMs)
-    ) {
+    if (!this.ipLimiter.allow(`verify-ip:${ip}`, OTP_VERIFY_IP_MAX, OTP_EMAIL_WINDOW_MS, nowMs)) {
       throw new HttpError(429, "Too many requests");
     }
     const ch = await this.store.latestEmailOtp(email);
@@ -281,6 +284,9 @@ export class OperatorIdentity {
     }
     const ok = await scryptVerify(otp.trim(), ch.codeScrypt);
     if (!ok) {
+      if (!this.ipLimiter.allow(`verify-email:${email}`, OTP_VERIFY_EMAIL_MAX, OTP_EMAIL_WINDOW_MS, nowMs)) {
+        throw new HttpError(429, "Too many requests");
+      }
       if (attempts >= OTP_MAX_ATTEMPTS) {
         await this.store.updateEmailOtp({ ...ch, attempts, expiresAt: now.toISOString() });
         logAuthEvent("otp_locked", { email, attempts });
@@ -346,7 +352,11 @@ export class OperatorIdentity {
   /**
    * Confirm the pending secret. Replaces the confirmed secret, drops unused backup codes and
    * issues a new set, rotates the current session into an MFA-passed one and deletes the
-   * user's other pre-MFA sessions.
+   * user's other pre-MFA sessions. The pending secret is consumed with one conditional
+   * update after the code matches, so of two concurrent confirms exactly one replaces the
+   * secret and mints backup codes; the other finds no enrollment in flight. The user's step
+   * guard is not used here: a re-enroll started with an authenticator code in this same 30 s
+   * step must still be able to confirm the new secret.
    */
   async confirmTotp(
     userId: string,
@@ -363,6 +373,9 @@ export class OperatorIdentity {
     const { secret } = await this.keys.unwrap(user.id, "totp_pending", pending);
     const step = matchTotpStep(secret, code.trim(), nowMs);
     if (step === null) throw await this.#totpFailure(user.id, failures);
+    if (!(await this.store.consumePendingTotp(user.id, pending.iv))) {
+      throw new HttpError(400, "Authenticator enrollment not started");
+    }
     const wrapped = await this.keys.wrap(user.id, "totp", secret);
     const next: UserRow = {
       ...user,

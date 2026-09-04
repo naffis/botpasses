@@ -8,9 +8,18 @@
 
 export const FLASH_CLEAR_MS = 6000;
 
-export function csrf(): string {
-  const m = document.cookie.match(/(?:^|; )(?:__Host-bp_csrf|bp_csrf)=([^;]+)/);
+/**
+ * The CSRF token from a cookie header. The `__Host-` cookie wins whenever it is present; the
+ * plain name is only a fallback for the loopback console, since a subdomain can plant a plain
+ * `bp_csrf` that would otherwise sort first and break every mutation on the HTTPS origin.
+ */
+export function csrfFromCookie(cookie: string): string {
+  const m = /(?:^|; )__Host-bp_csrf=([^;]+)/.exec(cookie) ?? /(?:^|; )bp_csrf=([^;]+)/.exec(cookie);
   return m?.[1] ? decodeURIComponent(m[1]) : "";
+}
+
+export function csrf(): string {
+  return csrfFromCookie(document.cookie);
 }
 
 export function bootstrapToken(): string {
