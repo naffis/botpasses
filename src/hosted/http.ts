@@ -21,7 +21,7 @@ import { hostedPageHeaders, MARKETING_CSP_EXTRAS, newCspNonce, securityHeaders }
 import { isPublicSitePath, tryServeSite } from "./static-site.ts";
 import { hostedAsset } from "./hosted-assets.ts";
 import { hostedFont } from "./console-fonts.ts";
-import { handleAuthApi, tryAuthPage } from "./http-auth-routes.ts";
+import { handleAuthApi, hasPendingTotp, tryAuthPage } from "./http-auth-routes.ts";
 import { handleAccessApi } from "./http-access-routes.ts";
 import { handleClientRoutes } from "./http-client-routes.ts";
 import { handleConnectCallback } from "./http-connect-routes.ts";
@@ -37,6 +37,7 @@ import {
   optional,
   originIsLoopback,
   readJson,
+  readJsonOrForm,
   robotsTxt,
   sendError,
 } from "./http-util.ts";
@@ -171,9 +172,10 @@ export function createHostedServer(opts: HostedHttpOpts) {
       }
       const asset = hostedAsset(path);
       if (asset) {
+        // Only a content-hashed path may be cached forever; the plain name changes on deploy.
         res.writeHead(200, {
           "content-type": asset.type,
-          "cache-control": "public, max-age=31536000, immutable",
+          "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-cache",
           ...securityHeaders({ html: false, cache: false }),
         });
         res.end(asset.body);
@@ -189,20 +191,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
       });
       res.end(robotsTxt(deployPlane));
       return;
-    }
-    if (siteRoot && (method === "GET" || method === "HEAD") && isPublicSitePath(path)) {
-      if (
-        tryServeSite(
-          req,
-          res,
-          siteRoot,
-          path,
-          hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce(), ...MARKETING_CSP_EXTRAS }),
-          securityHeaders({ html: false, cache: false }),
-        )
-      ) {
-        return;
-      }
     }
     if (agentpass && method === "GET" && path === "/agentpass/configuration") {
       json(res, 200, agentpass.configuration());
@@ -220,6 +208,22 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (!allowLoopback && originHdr && originIsLoopback(originHdr) && !isMcpClientSurface(path)) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
+    }
+
+    // The marketing site is served only on an allowed Host, like every other page.
+    if (siteRoot && (method === "GET" || method === "HEAD") && isPublicSitePath(path)) {
+      if (
+        tryServeSite(
+          req,
+          res,
+          siteRoot,
+          path,
+          hostedPageHeaders(deployPlane, { html: true, nonce: newCspNonce(), ...MARKETING_CSP_EXTRAS }),
+          securityHeaders({ html: false, cache: false }),
+        )
+      ) {
+        return;
+      }
     }
 
     if (oidcProvider && isOauthPath(path) && !path.startsWith("/.well-known/")) {
@@ -257,12 +261,13 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
     if (
-      tryAuthPage(
+      await tryAuthPage(
         method,
         path,
         res,
         operatorAppHeaders(newCspNonce()),
         principal,
+        identity ? (userId) => hasPendingTotp(identity, userId) : undefined,
       )
     ) {
       return;
@@ -387,7 +392,8 @@ export function createHostedServer(opts: HostedHttpOpts) {
       );
     }
     if (oidcProvider && method === "POST" && path === "/consent") {
-      const body = await readJson(req);
+      // The consent page is an HTML form; its script posts JSON, a no-script submit posts a form.
+      const body = await readJsonOrForm(req);
       await handleConsentPost(
         oidcProvider,
         req,

@@ -133,8 +133,8 @@ function codeDialog(): string {
     <p id="code-dialog-lede" class="hint"></p>
     <p id="code-dialog-error" class="flash" role="alert"></p>
     <form id="code-dialog-form" novalidate>
-      <label for="code-dialog-input">6-digit authenticator code</label>
-      <input id="code-dialog-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required />
+      <label for="code-dialog-input">Authenticator code or backup code</label>
+      <input id="code-dialog-input" name="code" autocomplete="one-time-code" maxlength="10" required />
       <div class="dialog-actions">
         <button type="submit" class="btn-primary" id="code-dialog-submit">Continue</button>
         <button type="button" class="btn-ghost" data-close>Cancel</button>

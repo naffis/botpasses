@@ -2,7 +2,7 @@
 
 Canonical hosted and local HTTP routes. Public copy: [site HTTP API](../../site/src/content/docs/reference/http-api.md). Router: [src/hosted/http.ts](../../src/hosted/http.ts). Access: [src/hosted/http-access-routes.ts](../../src/hosted/http-access-routes.ts). Auth pages/API: [src/hosted/http-auth-routes.ts](../../src/hosted/http-auth-routes.ts). Local loopback: [src/server.ts](../../src/server.ts).
 
-JSON bodies are capped at 128 KiB. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api` and `POST /mcp` `tools/call` is 401. Handshake methods (`initialize`, `ping`, `tools/list`) succeed without a Bearer so Grok does not show a connect card. A valid `avm_…` is sufficient for all MCP methods.
+JSON bodies are capped at 128 KiB and must be sent as `Content-Type: application/json` (any other type is `415 { error: "Content-Type must be application/json" }`; a POST with no body and no type reads as `{}`). Only `POST /approve` and `POST /consent`, which back HTML forms, also accept `application/x-www-form-urlencoded`. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api` and `POST /mcp` `tools/call` is 401. Handshake methods (`initialize`, `ping`, `tools/list`) succeed without a Bearer so Grok does not show a connect card. A valid `avm_…` is sufficient for all MCP methods.
 
 ## Principals
 
@@ -34,19 +34,20 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/sign-in` `/sign-up` | One HTML template (heading chosen by route). Ready session → 302 `/console`. Email verified, no authenticator → 302 `/enroll-totp`. Enrolled but this session has not passed the authenticator step → 302 `/verify-totp` |
-| GET | `/enroll-totp` | Session required. Ready → 302 `/console`. Enrolled pending session → 302 `/verify-totp`. Shows backup codes in a dedicated step after confirm (Copy, Download, Continue) |
+| GET | `/enroll-totp` | Session required. Ready → 302 `/console`, unless a re-enroll secret is in flight (a `totp/start` with the current code, live for 10 minutes): then the page renders and shows that secret. Enrolled pending session → 302 `/verify-totp`. Shows backup codes in a dedicated step after confirm (Copy, Download, Continue) |
 | GET | `/verify-totp` | Sign-in authenticator step. One field (authenticator code or backup code). Anonymous → 302 `/sign-in`; not enrolled → 302 `/enroll-totp`; ready → 302 `/console` |
-| GET | `/consent` | Ready operator + oidc interaction. Else 302 `/sign-in` or `/enroll-totp` |
-| GET | `/device` | RFC 8628 user-code page (oidc when the provider is mounted) |
+| GET | `/consent` | Ready operator + oidc interaction. Else 302 `/sign-in` or `/enroll-totp`. Only mounted with the OAuth provider (404 otherwise) |
+| GET | `/device` | RFC 8628 user-code page, served by the OAuth provider. Only mounted with the provider (404 otherwise) |
 | POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true, message }` (identical for unknown emails). A still-valid unused code is not emailed again. Per-IP limit reads `Fly-Client-IP`, then the last `X-Forwarded-For` hop |
 | POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session with `mfa_at` null. `{ ok, enroll, verify }`. 401 carries `attempts_remaining` |
 | POST | `/api/auth/totp/start` | Session + CSRF. Returns `{ otpauth_url, qr_svg }`. QR is local SVG. Re-enroll (already enrolled) needs a ready session and `{ current_code }` (403 `current_code_required`). Pending secret is stored wrapped, so enrollment survives a restart |
+| GET | `/api/auth/totp/pending` | Session. The enrollment in flight, `{ otpauth_url, qr_svg }` exactly as `start` returned it, while it is live (10 minutes); 404 `no_pending_enrollment` otherwise. An enrolled account needs a session that passed the authenticator step (403 `mfa_required`). The enroll page reads this first and calls `start` only when nothing is pending, so a reload or the console's re-enroll shows the secret `confirm` will check |
 | POST | `/api/auth/totp/confirm` | `{ code }` + CSRF. Enrollment only. Rotates the session (`mfa_at` set), deletes other pre-MFA sessions and unused backup codes, returns `backup_codes` once. 429 `{ retry_after }` while locked |
 | POST | `/api/auth/totp/verify` | `{ code }` + CSRF. Sign-in authenticator step: authenticator or backup code. Rotates the session with `mfa_at` set. 10 failures lock for 15 minutes (429 `{ retry_after }`) |
 | GET | `/api/auth/me` | Ready session. `{ email, totp_enabled, backup_codes_remaining, created_at }` |
 | POST | `/api/auth/backup-codes/regenerate` | `{ code }` + CSRF. Replaces every unused backup code. `{ backup_codes }` once |
 | POST | `/api/auth/logout` | CSRF for cookie sessions. Clears session cookies and ends the OAuth server's own session |
-| POST | `/consent` | JSON `{ uid, decision }`. CSRF required |
+| POST | `/consent` | JSON `{ uid, decision }` (a form body is accepted too). CSRF required. With `Accept: application/json` (the page's script) the answer is `200 { location }` and the page navigates to that resume URL itself, because a script cannot read a redirect's Location; otherwise 303 to the same URL. Only `decision: "allow"` grants |
 
 OTP: 8 digits, 10 minutes, 5 verify failures kill the challenge, 5 sends / email / 15 min, 10 sends / IP / 15 min. TOTP: RFC 6238 SHA-1, 6 digits, no replay, 10 failures lock 15 minutes. TOTP secrets are wrapped under an identity DEK (itself wrapped by the KEK, re-wrapped on `vault kek-rotate`). Sessions issued by the email step are not `ready` until `totp/verify` or `totp/confirm` sets `mfa_at`.
 
@@ -146,7 +147,9 @@ No `/api/items`, OAuth, or Access panel on the local plane.
 
 ## Static site
 
-`site/dist` (Astro) is served by [src/hosted/static-site.ts](../../src/hosted/static-site.ts) for `/`, `/design`, `/security`, `/privacy`, `/terms`, `/changelog`, `/docs/**`, `/_astro/**`, `/pagefind/**`, `/sitemap-*.xml`, `/favicon.svg`, `/og.png`, `/llms.txt`, and `/.well-known/security.txt`. `*.html` and trailing-slash forms 308 to the canonical URL (`/console/` is handled by the router, not here). Unknown paths under those prefixes return the Astro `404.html` with status 404. HTML is `no-cache` from the static layer (the router's `no-store` wins today), `_astro/*` is `public, max-age=31536000, immutable`, other assets `public, max-age=3600`.
+`site/dist` (Astro) is served by [src/hosted/static-site.ts](../../src/hosted/static-site.ts) for `/`, `/design`, `/security`, `/privacy`, `/terms`, `/changelog`, `/docs/**`, `/_astro/**`, `/pagefind/**`, `/sitemap-*.xml`, `/favicon.svg`, `/og.png`, `/llms.txt`, and `/.well-known/security.txt`. `*.html` and trailing-slash forms 308 to the canonical URL (`/console/` is handled by the router, not here). Unknown paths under those prefixes return the Astro `404.html` with status 404. HTML is `no-cache` from the static layer (the router's `no-store` wins today), `_astro/*` is `public, max-age=31536000, immutable`, other assets `public, max-age=3600`. The site, like every page, is served only when the `Host` header is the public origin (`403 { error: "Origin/Host not allowed" }` otherwise); `/health`, `/ready`, discovery, and `/assets/*` answer on any Host for platform checks.
+
+First-party assets (`console.js`, `console.css`, `auth.js`, `auth.css`, `collect.js`, `mark.svg`) are referenced by the pages at content-hashed paths, `/assets/console.<sha8>.js`, and served `public, max-age=31536000, immutable`; the hash changes with the body, so a deploy never fights a cached bundle. The plain names still resolve to the current body but are `no-cache`.
 
 
 ## Team, org switcher, plan
@@ -182,4 +185,5 @@ Unexpected failures are `500 { error: "Internal error", request_id }` with an `x
 | 409 | Duplicate item name, consumed approval code |
 | 410 | Expired approval |
 | 413 | Body over 128 KiB |
+| 415 | A JSON route was sent a body that is not `application/json` |
 | 429 | OTP send or `request_grant` / need limiter |

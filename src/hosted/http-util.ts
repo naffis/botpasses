@@ -100,10 +100,27 @@ async function readRaw(req: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** JSON object body. Malformed JSON is a 400 that does not echo the bytes back. */
+function contentTypeOf(req: IncomingMessage): string {
+  const raw = req.headers["content-type"];
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function isJsonType(type: string): boolean {
+  return (type.split(";")[0] ?? "").trim() === "application/json";
+}
+
+/**
+ * JSON object body. A body must be declared `application/json`; a form or text type is 415 so a
+ * cross-site HTML form (which can only send form or text types) never reaches a JSON handler,
+ * whatever the CSRF check says. A bodiless request with no type reads as `{}`. Malformed JSON is
+ * a 400 that does not echo the bytes back.
+ */
 export async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const type = contentTypeOf(req);
+  if (type && !isJsonType(type)) throw new HttpError(415, "Content-Type must be application/json");
   const raw = await readRaw(req);
   if (raw.length === 0) return {};
+  if (!type) throw new HttpError(415, "Content-Type must be application/json");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.toString("utf8"));
@@ -115,9 +132,12 @@ export async function readJson(req: IncomingMessage): Promise<Record<string, unk
   return parsed as Record<string, unknown>;
 }
 
-/** JSON or `application/x-www-form-urlencoded` (HTML forms). Form values are strings. */
+/**
+ * JSON or `application/x-www-form-urlencoded` (HTML forms). Form values are strings. Only routes
+ * that render a real form use this; everything else goes through `readJson` and its type check.
+ */
 export async function readJsonOrForm(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const type = typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "";
+  const type = contentTypeOf(req);
   if (!type.includes("application/x-www-form-urlencoded")) return readJson(req);
   const raw = await readRaw(req);
   const out: Record<string, unknown> = {};

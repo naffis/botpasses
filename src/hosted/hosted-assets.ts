@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,15 +52,56 @@ figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 0.4rem; }
 #backups:empty, #otpauth:empty { display: none; }
 `;
 
-const ASSETS: Record<string, { type: string; body: string }> = {
-  "/assets/auth.css": { type: "text/css; charset=utf-8", body: AUTH_CSS },
-  "/assets/console.css": { type: "text/css; charset=utf-8", body: CONSOLE_CSS },
-  "/assets/auth.js": { type: "text/javascript; charset=utf-8", body: AUTH_JS },
-  "/assets/console.js": { type: "text/javascript; charset=utf-8", body: CONSOLE_JS },
-  "/assets/collect.js": { type: "text/javascript; charset=utf-8", body: COLLECT_JS },
-  "/assets/mark.svg": { type: "image/svg+xml", body: MARK_SVG },
+/** First-party files under `/assets/`, keyed by their plain file name. */
+export type AssetName = "auth.css" | "console.css" | "auth.js" | "console.js" | "collect.js" | "mark.svg";
+
+export type HostedAsset = {
+  type: string;
+  body: string;
+  /**
+   * True when the request path carried the content hash, so the body can never change under
+   * that URL and the router may serve it `immutable`. Plain names are served `no-cache`.
+   */
+  immutable: boolean;
 };
 
-export function hostedAsset(path: string): { type: string; body: string } | undefined {
-  return ASSETS[path];
+const SOURCES: Record<AssetName, { type: string; body: string }> = {
+  "auth.css": { type: "text/css; charset=utf-8", body: AUTH_CSS },
+  "console.css": { type: "text/css; charset=utf-8", body: CONSOLE_CSS },
+  "auth.js": { type: "text/javascript; charset=utf-8", body: AUTH_JS },
+  "console.js": { type: "text/javascript; charset=utf-8", body: CONSOLE_JS },
+  "collect.js": { type: "text/javascript; charset=utf-8", body: COLLECT_JS },
+  "mark.svg": { type: "image/svg+xml", body: MARK_SVG },
+};
+
+/** Eight hex characters of the body's SHA-256: enough to change on every edit, short in the URL. */
+export function assetContentHash(body: string): string {
+  return createHash("sha256").update(body).digest("hex").slice(0, 8);
+}
+
+/** `/assets/console.<sha8>.js`: the versioned path the page renderers reference. */
+export function assetPath(name: AssetName): string {
+  const dot = name.lastIndexOf(".");
+  const stem = name.slice(0, dot);
+  const ext = name.slice(dot + 1);
+  return `/assets/${stem}.${assetContentHash(SOURCES[name].body)}.${ext}`;
+}
+
+const HASHED = new Map<string, AssetName>();
+const PLAIN = new Map<string, AssetName>();
+for (const name of Object.keys(SOURCES) as AssetName[]) {
+  HASHED.set(assetPath(name), name);
+  PLAIN.set(`/assets/${name}`, name);
+}
+
+/**
+ * Resolve a request path. The hashed path (from `assetPath`) is immutable; the plain path still
+ * serves the current body so old bookmarks and tests keep working, but must be revalidated.
+ */
+export function hostedAsset(path: string): HostedAsset | undefined {
+  const hashed = HASHED.get(path);
+  if (hashed) return { ...SOURCES[hashed], immutable: true };
+  const plain = PLAIN.get(path);
+  if (plain) return { ...SOURCES[plain], immutable: false };
+  return undefined;
 }
