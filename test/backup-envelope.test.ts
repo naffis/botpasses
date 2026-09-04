@@ -4,12 +4,30 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey } from "../src/crypto.ts";
 import {
+  BACKUP_MAGIC,
+  BACKUP_VERSION,
   backupObjectUrl,
   decryptDump,
   encryptDump,
   parseBackupKey,
   requireOffsiteEnv,
 } from "../src/hosted/backup-envelope.ts";
+
+test("the envelope starts with the BPBK magic and a version byte that decryptDump checks (G12)", () => {
+  const key = parseBackupKey(generateMasterKey());
+  const blob = encryptDump(Buffer.from("pg-dump-fixture"), key);
+  assert.equal(blob.subarray(0, 4).toString("ascii"), "BPBK");
+  assert.equal(blob[4], BACKUP_VERSION);
+  assert.equal(BACKUP_MAGIC.toString("ascii"), "BPBK");
+  const wrongMagic = Buffer.from(blob);
+  wrongMagic.write("PGDM", 0, "ascii");
+  assert.throws(() => decryptDump(wrongMagic, key), /bad magic/);
+  const futureVersion = Buffer.from(blob);
+  futureVersion[4] = 9;
+  assert.throws(() => decryptDump(futureVersion, key), /unsupported backup envelope version 9/);
+  const headerless = blob.subarray(5);
+  assert.throws(() => decryptDump(headerless, key), /bad magic|too short/);
+});
 
 test("backup envelope round-trips and rejects the wrong key", () => {
   const key = parseBackupKey(generateMasterKey());
@@ -50,10 +68,10 @@ test("backup object key is stamped and not a pooled host", () => {
   assert.equal(url, "https://acct.r2.cloudflarestorage.com/bkt/botpasses-20260101T000000Z.dump.enc");
 });
 
-test("the envelope is versioned AES-GCM: tampering with any byte fails to open", () => {
+test("the envelope is versioned AES-GCM: tampering with any byte, header included, fails to open", () => {
   const key = parseBackupKey(generateMasterKey());
   const blob = encryptDump(Buffer.from("pg-dump-fixture"), key);
-  assert.ok(blob.length > 16 + 12, "carries a nonce and a tag beyond the ciphertext");
+  assert.ok(blob.length > 5 + 16 + 12, "carries a header, a nonce, and a tag beyond the ciphertext");
   for (const offset of [0, Math.floor(blob.length / 2), blob.length - 1]) {
     const tampered = Buffer.from(blob);
     tampered[offset] = (tampered[offset] ?? 0) ^ 0x01;
