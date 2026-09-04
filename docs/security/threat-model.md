@@ -43,7 +43,7 @@ Local: `VAULT_MASTER_KEY` / `master.key` encrypts sqlite rows. AAD is the secret
 | CLI `list` / `grant` / `audit` | **No** |
 | Audit table / email / inbox | **No** |
 | Unauthenticated `GET /collect/:id` | **No** (shell only) |
-| `vault run` child env / `POST /runtime/resolve` / connector origin | **Yes** — inject |
+| `vault run` child env / `POST /runtime/resolve` / connector origin | **Yes**. That is the inject |
 | Model context / chat transcript | **Must not.** Tests fail if a canary appears |
 
 ## Expand/contract

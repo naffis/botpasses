@@ -1,9 +1,20 @@
 ---
+import { getEntry, render } from "astro:content";
 import Base from "../layouts/Base.astro";
+
+const entry = await getEntry("changelog", "changelog");
+if (!entry) throw new Error("CHANGELOG.md was not loaded");
+const { Content } = await render(entry);
 ---
-<Base title="Changelog — Botpasses">
+<Base
+  title="Changelog"
+  description="Every Botpasses release and the unreleased changes on the main branch, published from the repository CHANGELOG at build time."
+>
   <h1>Changelog</h1>
-  <p>Product notes also live in the repository CHANGELOG.</p>
-  <h2>0.4.0</h2>
-  <p>Marketing site, first-party accounts, same-origin OAuth, and the Access panel.</p>
+  <p>
+    Published from the repository
+    <a href="https://github.com/naffis/botpasses/blob/dev/CHANGELOG.md" rel="noopener">CHANGELOG.md</a>
+    on every deploy. Newest first.
+  </p>
+  <Content />
 </Base>
