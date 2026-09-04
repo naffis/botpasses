@@ -97,16 +97,10 @@ export async function ensureVaultOrgForUser(host: OrgHost, userId: string, prefe
   if (existing[0]) return { orgId: existing[0].orgId, role: existing[0].role };
   const reclaimed = await reclaimEmptyCreatedOrg(host, userId);
   if (reclaimed) return reclaimed;
+  // A random id cannot collide, and `provisionOrg` ends with the owner membership.
   const orgId = `org_${randomUUID()}`;
-  try {
-    await provisionOrg(host, orgId, "workspace", userId);
-  } catch (err) {
-    if (!(err instanceof StoreConflictError) && !isUniqueViolation(err)) throw err;
-    // A concurrent sign-in provisioned first (the owner PK is the only unique key in play).
-  }
-  const again = await host.store.listMembershipsForUser(userId);
-  if (again[0]) return { orgId: again[0].orgId, role: again[0].role };
-  throw new HttpError(500, "Org provisioning did not produce a membership");
+  await provisionOrg(host, orgId, "workspace", userId);
+  return { orgId, role: "owner" };
 }
 
 /** Re-adds the creator as owner of an org they made that has no members at all. */

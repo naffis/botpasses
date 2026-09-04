@@ -1,4 +1,5 @@
 /** Structured next-step on MCP results. Steers the model without a user-pasted procedure. */
+import { BODY_TOO_LARGE, RAW_RESPONSE_CAP } from "./connector.ts";
 
 export type McpNext = {
   for_model: string;
@@ -19,6 +20,17 @@ function stringMap(value: unknown): Record<string, string> | undefined {
     if (typeof v === "string" && v.length > 0) out[k] = v;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** The `error` code of a connector-made JSON body (`body_too_large`), or undefined for an origin body. */
+function connectorErrorCode(body: unknown): string | undefined {
+  if (typeof body !== "string" || !body.startsWith("{")) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return isRecord(parsed) && typeof parsed.error === "string" ? parsed.error : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function withRetryArgs(next: McpNext, payload: PublicRecord): McpNext {
@@ -97,6 +109,14 @@ function nextBase(payload: PublicRecord): McpNext | undefined {
       return {
         for_model:
           `${hint || "The origin rejected the credential or the resource is gone."} Retry http_request with next.arguments. A standing or session approval still covers the retry; a one-call approval was spent by this answer, so if the retry returns a pending grant, tell the user to approve it. Do not ask for a token.`,
+        tool: "http_request",
+      };
+    }
+    if (originStatus === 502 && connectorErrorCode(payload.body) === BODY_TOO_LARGE) {
+      // Not transient: the same call gets the same oversized answer and spends another approval.
+      return {
+        for_model:
+          `The API answered, but its response was larger than ${RAW_RESPONSE_CAP / (1024 * 1024)} MiB and was discarded. Do not retry the same call. Narrow it first (pagination, a smaller limit or page size, a fields filter), then call http_request with the narrowed arguments. A one-call approval was spent by this answer; if the retry returns a pending grant, tell the user to approve it.`,
         tool: "http_request",
       };
     }

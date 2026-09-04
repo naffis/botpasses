@@ -12,7 +12,8 @@ import { HostedKernel } from "../src/hosted/kernel.ts";
 import { assertRedirectUri } from "../src/hosted/oauth-as.ts";
 import { isTokenPath, pathMatchesPrefix, PROVIDERS, providerById, providerForHost, userPathHint } from "../src/hosted/providers/registry.ts";
 import { cachedMint, clearMintCache, storeMint } from "../src/hosted/providers/token-cache.ts";
-import { readMintedAccessToken } from "../src/hosted/providers/oauth.ts";
+import { itemWithAccessToken, readMintedAccessToken, refreshAccessToken } from "../src/hosted/providers/oauth.ts";
+import type { ConnectorItem } from "../src/hosted/connector.ts";
 import { authorizeUrl, chooseRedirect, openOauthState, sealOauthState } from "../src/hosted/providers/user-oauth.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
 import { redactOauthJson } from "../src/redact.ts";
@@ -248,7 +249,91 @@ test("a Slack user-scope token exchange is read from authed_user", () => {
   assert.equal(nested.last4, "1234");
   const top = readMintedAccessToken(JSON.stringify({ access_token: "xoxb-bot-token-9999", authed_user: { id: "U1" } }));
   assert.equal(top.accessToken, "xoxb-bot-token-9999", "a top-level token still wins");
+  // A Slack refresh (token rotation) answer carries the rotated user token at the top level and no authed_user.
+  const refreshed = readMintedAccessToken(
+    JSON.stringify({ ok: true, access_token: "xoxe.xoxp-1-rotated-5678", refresh_token: "xoxe-1-rotated-refresh", token_type: "user", expires_in: 43200 }),
+  );
+  assert.equal(refreshed.accessToken, "xoxe.xoxp-1-rotated-5678");
+  assert.equal(refreshed.refreshToken, "xoxe-1-rotated-refresh");
+  assert.equal(refreshed.last4, "5678");
   assert.throws(() => readMintedAccessToken(JSON.stringify({ ok: true, authed_user: { id: "U1" } })), /did not return access_token/);
+});
+
+test("token_last4 never shows a whole short token: under four characters reads as **** (R3-9)", () => {
+  assert.equal(readMintedAccessToken(JSON.stringify({ access_token: "abc" })).last4, "****");
+  assert.equal(readMintedAccessToken(JSON.stringify({ access_token: "abcd" })).last4, "abcd");
+  assert.equal(readMintedAccessToken(JSON.stringify({ access_token: ACCESS })).last4, ACCESS.slice(-4));
+  const base: ConnectorItem = { secret: "s", username: "u", last4: "****", inject: "client_credentials", allowedHosts: ["api.spotify.com"], name: "X", kind: "client_secret" };
+  assert.equal(itemWithAccessToken(base, "abc").last4, "****");
+  assert.equal(itemWithAccessToken(base, ACCESS).last4, ACCESS.slice(-4));
+});
+
+/**
+ * R3-3: a refresh_token exchange authenticates the app like the code exchange did. `basic`
+ * providers get the client id and secret as HTTP Basic; `post_body` providers get `client_id`
+ * and `client_secret` form fields. The refresh token rides in the form, and none of the three
+ * values (client secret, refresh token, minted access token) reaches the returned body or headers.
+ */
+test("refreshAccessToken places the client secret per provider.tokenAuth for every provider and redacts every secret", async () => {
+  const CS = "provider_client_secret_CANARY_77aa";
+  const RT = "provider_refresh_token_CANARY_88bb";
+  for (const provider of PROVIDERS) {
+    const hosts = [...provider.apiHosts, provider.tokenHost];
+    const clientSecret: ConnectorItem = { secret: CS, username: CLIENT_ID, last4: CS.slice(-4), inject: "client_credentials", allowedHosts: hosts, name: "APP_SECRET", kind: "client_secret" };
+    const refresh: ConnectorItem = { secret: RT, username: CLIENT_ID, last4: RT.slice(-4), inject: "refresh", allowedHosts: hosts, name: "APP_REFRESH", kind: "secret" };
+    let sent: { url: string; auth: string; form: URLSearchParams } | undefined;
+    const { minted, origin } = await refreshAccessToken(provider, refresh, clientSecret, CLIENT_ID, {
+      resolveAddresses: async () => ["8.8.8.8"],
+      fetchImpl: async (url, init) => {
+        const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+        sent = { url: String(url), auth: new Headers(init?.headers).get("authorization") ?? "", form };
+        // An origin that echoes the request back in its body and a header, like a debug endpoint would.
+        return new Response(JSON.stringify({ access_token: ACCESS, token_type: "Bearer", expires_in: 3600, echo: { form: form.toString(), auth: sent.auth } }), {
+          status: 200,
+          headers: { "content-type": "application/json", "x-request-id": `${RT}:${CS}` },
+        });
+      },
+    });
+    assert.ok(sent, provider.id);
+    assert.equal(sent.url, `https://${provider.tokenHost}${provider.tokenPath}`, provider.id);
+    assert.equal(sent.form.get("grant_type"), "refresh_token", provider.id);
+    assert.equal(sent.form.get("refresh_token"), RT, provider.id);
+    switch (provider.tokenAuth) {
+      case "basic":
+        assert.equal(sent.auth, `Basic ${Buffer.from(`${CLIENT_ID}:${CS}`).toString("base64")}`, `${provider.id}: id and secret as HTTP Basic`);
+        assert.equal(sent.form.get("client_secret"), null, `${provider.id}: the secret is not also in the form`);
+        break;
+      case "post_body":
+        assert.equal(sent.auth, "", `${provider.id}: no Authorization header`);
+        assert.equal(sent.form.get("client_id"), CLIENT_ID, provider.id);
+        assert.equal(sent.form.get("client_secret"), CS, `${provider.id}: the secret is a form field`);
+        break;
+      default: {
+        const _exhaustive: never = provider.tokenAuth;
+        throw new Error(String(_exhaustive));
+      }
+    }
+    assert.equal(minted.accessToken, ACCESS, provider.id);
+    const visible = JSON.stringify(origin);
+    const hidden: [string, string][] = [["client secret", CS], ["refresh token", RT], ["access token", ACCESS], ["Basic pair", Buffer.from(`${CLIENT_ID}:${CS}`).toString("base64")]];
+    for (const [what, value] of hidden) {
+      assert.doesNotMatch(visible, new RegExp(value), `${provider.id}: the ${what} does not reach the result`);
+    }
+    assert.equal(origin.headers["x-request-id"], "[redacted]:[redacted]", provider.id);
+  }
+  // Both items must allow the token host; the refresh item alone is not enough.
+  const spotify = providerById("spotify");
+  assert.ok(spotify);
+  const apiOnly: ConnectorItem = { secret: CS, username: CLIENT_ID, last4: "77aa", inject: "client_credentials", allowedHosts: ["api.spotify.com"], name: "APP_SECRET", kind: "client_secret" };
+  const refreshOk: ConnectorItem = { ...apiOnly, secret: RT, inject: "refresh", allowedHosts: ["api.spotify.com", "accounts.spotify.com"], name: "APP_REFRESH", kind: "secret" };
+  await assert.rejects(
+    () => refreshAccessToken(spotify, refreshOk, apiOnly, CLIENT_ID, { resolveAddresses: async () => ["8.8.8.8"], fetchImpl: async () => tokenJson() }),
+    (err: unknown) => isHttpError(err) && err.status === 400 && err.extra.status === "inject_denied" && /accounts\.spotify\.com/.test(String(err.extra.hint)),
+  );
+  await assert.rejects(
+    () => refreshAccessToken(spotify, { ...refreshOk, allowedHosts: ["api.spotify.com"] }, { ...apiOnly, allowedHosts: refreshOk.allowedHosts }, CLIENT_ID, { resolveAddresses: async () => ["8.8.8.8"], fetchImpl: async () => tokenJson() }),
+    (err: unknown) => isHttpError(err) && err.status === 400 && err.extra.status === "inject_denied",
+  );
 });
 
 /** The provider's authorize URL from `POST /api/integrations/:provider/start`, with its sealed state. */
@@ -586,12 +671,15 @@ test("an origin 401 or 410 spends a one-call approval (the secret left the proce
   }
 });
 
-test("a stored <ITEM>_REFRESH token is exchanged in the form body (no Basic) and the user path succeeds", async () => {
+test("a stored <ITEM>_REFRESH token is exchanged with the client secret's credentials (Basic for Spotify) and the user path succeeds", async () => {
+  const basic = `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64")}`;
   const ctx = await setup(async (url, init) => {
     const auth = new Headers(init?.headers).get("authorization") ?? "";
     if (url.includes("accounts.spotify.com/api/token")) {
       const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (form.get("grant_type") === "refresh_token" && form.get("refresh_token") === REFRESH && form.get("client_id") === CLIENT_ID && !auth) {
+      // A confidential client: Spotify answers invalid_client to a refresh without the app's credentials.
+      if (auth !== basic) return new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 });
+      if (form.get("grant_type") === "refresh_token" && form.get("refresh_token") === REFRESH) {
         return tokenJson({ refresh_token: REFRESH, scope: "user-read-email" });
       }
       return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
@@ -621,12 +709,18 @@ test("a stored <ITEM>_REFRESH token is exchanged in the form body (no Basic) and
     assert.equal(me.payload.origin_status, 200, JSON.stringify(me.payload));
     assert.equal(me.payload.user_token, true);
     assert.equal(me.payload.token_last4, ACCESS.slice(-4));
-    const blob = JSON.stringify(me.payload);
-    for (const secret of [REFRESH, ACCESS, CLIENT_SECRET]) assert.doesNotMatch(blob, new RegExp(secret));
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    const blob = JSON.stringify({ payload: me.payload, audit });
+    for (const secret of [REFRESH, ACCESS, CLIENT_SECRET, Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64")]) {
+      assert.doesNotMatch(blob, new RegExp(secret), "neither secret reaches the result or the audit");
+    }
+    assert.ok(audit.some((a) => a.action === "inject" && a.itemName === "SPOTIFY_REFRESH"), "the refresh item's use is audited");
+    assert.ok(audit.some((a) => a.action === "inject" && a.itemName === "SPOTIFY_SECRET"), "and so is the client secret's");
     const mint = ctx.hits.find((h) => h.url.includes("/api/token"));
     assert.ok(mint);
-    assert.equal(mint.auth, "", "refresh_token grant carries client_id in the body, not a Basic header");
+    assert.equal(mint.auth, basic, "the refresh_token grant authenticates the app as the code exchange did");
     assert.match(mint.body, /grant_type=refresh_token/);
+    assert.doesNotMatch(mint.body, /client_secret=/, "a basic provider does not also get the secret in the form");
     const second = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
     assert.equal(second.payload.origin_status, 200);
     assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "the refreshed token is cached");
@@ -740,6 +834,47 @@ test("user-token path: a cached token needs no refresh approval; without one the
     assert.equal(second.payload.origin_status, 200, JSON.stringify(second.payload));
     assert.equal(second.payload.user_token, true, "the cached user token served the call without a refresh approval");
     assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "one exchange");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("a token endpoint that answers 2xx with an unusable body is audited inject, not inject_failed: the credential was sent (R3-6)", async () => {
+  const ctx = await setup(async (url) => {
+    if (url.includes("/api/token")) return new Response("<html>maintenance</html>", { status: 200, headers: { "content-type": "text/html" } });
+    return new Response(JSON.stringify({ tracks: [] }), { status: 200 });
+  });
+  try {
+    const grantId = await approve(ctx);
+    const search = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/search?q=x&type=track" });
+    assert.match(String(search.payload.error), /non-JSON body/, JSON.stringify(search.payload));
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "the mint was sent");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "the one-call approval stays spent");
+    let audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 0, "the origin was reached");
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "SPOTIFY_SECRET").length, 1);
+
+    // The same on the refresh path: the refresh item was sent to the token endpoint.
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    const refreshGrant = await approve(ctx, "SPOTIFY_REFRESH");
+    const me = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.match(String(me.payload.error), /non-JSON body/);
+    assert.equal((await ctx.kernel.store.getGrant(refreshGrant))?.status, "consumed");
+    audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 0);
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "SPOTIFY_REFRESH").length, 1);
+    assert.doesNotMatch(JSON.stringify({ search, me, audit }), new RegExp(CLIENT_SECRET));
   } finally {
     await teardown(ctx);
   }

@@ -50,7 +50,8 @@ async function tlsServer(dir: string, behaviour: Behaviour): Promise<{ server: S
           setTimeout(() => res.destroy(), 20);
           return;
         case "huge_chunked": {
-          res.writeHead(200, { "content-type": "text/plain" });
+          // A pagination header that echoes the request URL, as APIs with `query:` keys do.
+          res.writeHead(200, { "content-type": "text/plain", link: `<https://${HOST}${req.url}&page=2>; rel="next"` });
           const chunk = Buffer.alloc(256 * 1024, "x");
           for (let i = 0; i < 20; i += 1) res.write(chunk);
           res.end();
@@ -148,7 +149,15 @@ test("C1: an origin that closes the socket mid-body fails the call promptly as a
 
 test("C2: origin bodies past 1 MiB are cut on the wire and reported as body_too_large, declared or chunked, pinned or not", async () => {
   await pinned("huge_chunked", async (tls) => {
-    await assert.rejects(() => dial(tls, "/big"), (err: unknown) => err instanceof Error && err.message === BODY_TOO_LARGE && err.name === "OriginBodyTooLarge");
+    await assert.rejects(
+      () => dial(tls, `/big?api_key=${CANARY}`),
+      (err: unknown) => {
+        assert.ok(err instanceof Error && err.message === BODY_TOO_LARGE && err.name === "OriginBodyTooLarge");
+        const headers = (err as Error & { headers: Record<string, string> }).headers;
+        assert.ok(headers.link?.includes(CANARY), "the pinned path hands the raw headers to the connector, which redacts them");
+        return true;
+      },
+    );
   });
   await pinned("huge_declared", async (tls) => {
     const started = Date.now();
@@ -156,20 +165,41 @@ test("C2: origin bodies past 1 MiB are cut on the wire and reported as body_too_
     assert.ok(Date.now() - started < 4000, "a declared oversize body is refused without reading it");
   });
   let seenEncoding = "";
+  // R3-2: the body_too_large result carries origin headers, so they are redacted like any other
+  // answer's; here a Link header echoes the `query:` key.
   const out = await executeConnector(
-    item(CANARY),
+    item(CANARY, "query:api_key"),
     { method: "GET", path: "/big" },
     {
       resolveAddresses: async () => ["8.8.8.8"],
-      fetchImpl: async (_url, init) => {
+      fetchImpl: async (url, init) => {
         seenEncoding = new Headers(init?.headers).get("accept-encoding") ?? "";
-        return new Response("z".repeat(RAW_RESPONSE_CAP + 1), { status: 200 });
+        return new Response("z".repeat(RAW_RESPONSE_CAP + 1), {
+          status: 200,
+          headers: { link: `<${String(url)}&page=2>; rel="next"`, "x-request-id": Buffer.from(CANARY).toString("base64") },
+        });
       },
     },
   );
   assert.equal(out.status, 502);
   assert.match(out.body, new RegExp(BODY_TOO_LARGE));
   assert.equal(seenEncoding, "identity", "no compressed bodies that expand past the cap in memory");
+  assert.ok(!JSON.stringify(out).includes(CANARY), "the echoed key is redacted from body_too_large headers");
+  assert.ok(!JSON.stringify(out).includes(Buffer.from(CANARY).toString("base64")), "and so is its base64 form");
+  assert.equal(out.headers.link, `<https://${HOST}/big?api_key=[redacted]&page=2>; rel="next"`);
+  assert.equal(out.headers["x-request-id"], "[redacted]");
+  // The same for a declared oversize body, which is refused before the stream is read.
+  const declared = await executeConnector(
+    item(CANARY, "query:api_key"),
+    { method: "GET", path: "/big" },
+    {
+      resolveAddresses: async () => ["8.8.8.8"],
+      fetchImpl: async (url) =>
+        new Response("y", { status: 200, headers: { "content-length": String(5 * 1024 * 1024), link: `<${String(url)}>; rel="self"` } }),
+    },
+  );
+  assert.equal(declared.status, 502);
+  assert.ok(!JSON.stringify(declared).includes(CANARY));
   const fits = await executeConnector(
     item(CANARY),
     { method: "GET", path: "/ok" },
@@ -195,11 +225,28 @@ test("C3/G1: one canonical request path for validation, scope, storage, and the 
     "/v1/x#frag",
     "//evil.example/x",
     "v1/read",
+    // R3-4: double (and deeper) percent-encoding an origin decodes again, and NUL in any form.
+    "/v1/read/%252e%252e/admin",
+    "/v1/read/..%252fadmin",
+    "/v1/read/%252fadmin",
+    "/v1/read/%25252Fadmin",
+    "/v1/read/%25255Cadmin",
+    "/v1/read/%252Ehidden",
+    "/v1/read/..%00/admin",
+    "/v1/read/x%00y",
+    "/v1/read/x%2500y",
+    "/v1/read/x?q=%00",
+    "/v1/read/a\u0000b",
+    "/v1/read/a\u0001b",
+    "/v1/read/a\u007fb",
   ];
   for (const p of rejected) {
     assert.throws(() => canonicalRequestPath(p), (e: unknown) => isHttpError(e) && e.status === 400, p);
     assert.ok(hasDotSegments(p), p);
   }
+  // A literal percent sign that does not encode a separator, dot, or NUL is still fine.
+  assert.equal(canonicalRequestPath("/v1/discount/100%25"), "/v1/discount/100%25");
+  assert.equal(canonicalRequestPath("/v1/read/%2541"), "/v1/read/%2541");
   assert.equal(canonicalRequestPath("/v1/read/items?page=2&q=a%20b"), "/v1/read/items?page=2&q=a%20b");
   assert.equal(canonicalRequestPath("/v1/%7Bid%7D/x"), "/v1/%7Bid%7D/x");
   assert.equal(canonicalRequestPath("/a.b/c..d/"), "/a.b/c..d/");
@@ -219,7 +266,7 @@ test("C3/G1: one canonical request path for validation, scope, storage, and the 
   assert.throws(() => connectorTargetFromArgs({ host: HOST, method: "GET", path: `https://${HOST}/v1/read/..;/admin` }), (e: unknown) => isHttpError(e) && e.status === 400);
   await pinned("echo", async (tls) => {
     const res = await dial(tls, target.path);
-    assert.equal(((await res.json()) as { path: string }).path, target.path);
+    assert.equal((JSON.parse(res.body.toString("utf8")) as { path: string }).path, target.path);
   });
   let wire = "";
   await executeConnector(

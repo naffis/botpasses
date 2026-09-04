@@ -967,7 +967,10 @@ test("a prompt grant comes back only when the send never left the process (DNS, 
     assert.equal(out.origin_status, 503);
     assert.equal(await statusOf(answered), "consumed", "any origin status spends a one-call approval");
     const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
-    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 4, "unreachable origins are audited inject_failed");
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 3, "only origins unreachable before the handshake are audited inject_failed");
+    // R3-6: the audit row follows the grant. A failure that counts as sent (the approval was spent)
+    // is `inject`, not `inject_failed`: the unclassified transport failure plus the 503.
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "STRIPE_KEY").length, 2);
   } finally {
     await ctx.http.close();
     await ctx.store.close();

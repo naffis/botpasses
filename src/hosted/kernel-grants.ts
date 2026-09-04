@@ -292,14 +292,18 @@ export async function approveGrant(host: GrantHost, input: ApproveGrantInput): P
   if (!item) throw new HttpError(404, "Unknown item");
   const now = host.now();
   const at = nowIso(now);
+  const client = await host.store.getClient(grant.clientId);
+  const trusted = client?.kind === "trusted";
   const scope = resolveApprovalScope({
     scope: input.scope,
-    requested: grant.requestedScope,
+    // A trusted client's plain approve does not inherit the requested call: nothing could enforce
+    // it on resolve, so the approval is unrestricted rather than refused (an explicit scope still is).
+    requested: trusted ? null : grant.requestedScope,
     item,
     policy: input.policy,
     now,
   });
-  await refuseUnenforceableScope(host, grant, scope);
+  if (trusted) refuseUnenforceableScope(scope);
   const next: HostedGrantRecord = {
     ...grant,
     ...scope,
@@ -330,17 +334,11 @@ export async function approveGrant(host: GrantHost, input: ApproveGrantInput): P
 /**
  * A trusted (`avt_`) client resolves the plaintext through `/runtime/resolve`, where there is no
  * call to check `methods`, `path_prefixes`, or `hosts` against. Writing those limits would show
- * the operator a restriction nothing enforces, so the approval is refused; `max_calls` and
- * `ttl_seconds` are counted on resolve and stay allowed.
+ * the operator a restriction nothing enforces, so an approval that names them is refused;
+ * `max_calls` and `ttl_seconds` are counted on resolve and stay allowed.
  */
-async function refuseUnenforceableScope(
-  host: GrantHost,
-  grant: HostedGrantRecord,
-  scope: { methods: string[] | null; pathPrefixes: string[] | null; hosts: string[] | null },
-): Promise<void> {
+function refuseUnenforceableScope(scope: { methods: string[] | null; pathPrefixes: string[] | null; hosts: string[] | null }): void {
   if (scope.methods === null && scope.pathPrefixes === null && scope.hosts === null) return;
-  const client = await host.store.getClient(grant.clientId);
-  if (client?.kind !== "trusted") return;
   throw new HttpError(
     400,
     "Method, path, and host limits cannot be enforced for a trusted runtime client, which resolves the value directly. Approve with scope {} or with max_calls and ttl_seconds only.",
@@ -555,6 +553,12 @@ export async function consumeActiveGrant(
   return { ...match, callsUsed: used, status: "consumed", consumedAt: nowIso(at) };
 }
 
+/** A standing policy that can still activate a grant: neither expired nor spent (`max_calls`). */
+export function policyIsLive(policy: PolicyRecord, now: Date): boolean {
+  const spent = policy.maxCalls !== null && policy.callsUsed >= policy.maxCalls;
+  return !isPast(policy.expiresAt, now) && !spent;
+}
+
 /**
  * The standing policy that would activate a grant for this item, if one is still live. Expired
  * or spent policies are deleted on read so they never re-grant.
@@ -568,8 +572,7 @@ export async function standingFor(
   const now = host.now();
   const live = async (p: PolicyRecord | undefined): Promise<PolicyRecord | undefined> => {
     if (!p) return undefined;
-    const spent = p.maxCalls !== null && p.callsUsed >= p.maxCalls;
-    if (!isPast(p.expiresAt, now) && !spent) return p;
+    if (policyIsLive(p, now)) return p;
     await host.store.deletePolicy(p.id);
     return undefined;
   };

@@ -1,4 +1,4 @@
-import { scopeFromPolicy, type GrantScope, type HostedGrantStatus, type VaultEnvName } from "../hosted-types.ts";
+import { scopeFromPolicy, type GrantScope, type HostedGrantStatus, type PolicyRecord, type VaultEnvName } from "../hosted-types.ts";
 import { normalizeSecretName } from "../ids.ts";
 import {
   clampTimeoutMs,
@@ -15,6 +15,7 @@ import {
 import { HttpError, isHttpError, isInjectDenied, isNeedItemError, isScopeDenied, type NeedItemPayload } from "./errors.ts";
 import type { HostedKernel, InjectOutcome } from "./kernel.ts";
 import { scopeDenialReason } from "./kernel-grant-scope.ts";
+import { policyIsLive } from "./kernel-grants.ts";
 import type { ModelPrincipal } from "./auth.ts";
 import { canonicalRequestPath } from "./ssrf.ts";
 import {
@@ -241,6 +242,19 @@ export function sendNeverLeft(err: unknown): boolean {
   return isHttpError(err) && (err.status === 400 || err.message === "inject_unsupported");
 }
 
+/**
+ * What the audit row says about a call that threw. `inject_denied`: the connector refused before
+ * dialing (a 400: host mismatch, blocked address, unusable mode). `inject_failed`: the origin was
+ * unreachable before the handshake. Anything else happened after the credential was on the wire
+ * (a token endpoint that answered 2xx with an unusable body, a close mid-response, a deadline after
+ * the handshake), so the truthful row is `inject`.
+ */
+export function failureOutcome(err: unknown): InjectOutcome {
+  if (isOriginUnreachable(err)) return err.credentialSent ? "inject" : "inject_failed";
+  if (sendNeverLeft(err)) return "inject_denied";
+  return "inject";
+}
+
 /** Host the request will go to when the caller named only the item: its first allowed host. */
 async function hostForItem(deps: ConnectorCallDeps, itemName: string, environment: VaultEnvName): Promise<string | undefined> {
   const stored = await deps.kernel.findStoredItem(deps.principal.orgId, environment, itemName);
@@ -295,9 +309,8 @@ export async function runHttpRequest(
   } catch (err) {
     // 400-class connector errors (host mismatch, blocked address, unusable mode) stop the send;
     // an unreachable origin may or may not have seen the credential (`credentialSent`).
-    const stopped = isHttpError(err) && (err.status === 400 || err.message === "inject_unsupported");
     if (sendNeverLeft(err)) await releaseUnsentGrant(deps.kernel, prepared);
-    await audit(stopped ? "inject_denied" : "inject_failed");
+    await audit(failureOutcome(err));
     throw err;
   }
 }
@@ -424,9 +437,10 @@ async function ensureAppToken(
  * one) for an access token and call with that. A cached access token is used without touching
  * the refresh item's approval. Without a cache hit the refresh item needs an active grant for
  * this client; when it has none, the result is the pending grant for `<ITEM>_REFRESH` so the
- * model asks the operator instead of silently falling back to the app token. Returns undefined
- * only when there is no refresh item or no client id, so the caller falls back to the app-token
- * path and its hint.
+ * model asks the operator instead of silently falling back to the app token. The exchange
+ * authenticates the app with `item` (the client secret the connect flow used, already granted
+ * for this call) placed per the provider's token auth. Returns undefined only when there is no
+ * refresh item or no client id, so the caller falls back to the app-token path and its hint.
  */
 async function tryUserToken(
   deps: ConnectorCallDeps,
@@ -473,12 +487,12 @@ async function tryUserToken(
   }
   let exchange: Awaited<ReturnType<typeof refreshAccessToken>>;
   try {
-    exchange = await refreshAccessToken(provider, refreshItem, clientId, connectorOpts(deps, target));
+    exchange = await refreshAccessToken(provider, refreshItem, item, clientId, connectorOpts(deps, target));
   } catch (err) {
     if (sendNeverLeft(err) && refreshItem.grantPolicy === "prompt") {
       await deps.kernel.reactivatePromptGrant(refreshItem.grantId);
     }
-    await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, sendNeverLeft(err) ? "inject_denied" : "inject_failed");
+    await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, failureOutcome(err));
     throw err;
   }
   const { minted, origin } = exchange;
@@ -649,7 +663,11 @@ async function dryRun(deps: ConnectorCallDeps, target: ConnectorTarget, environm
   };
 }
 
-/** The approval a real call would spend, with the scope it would be checked against. */
+/**
+ * The approval a real call would spend, with the scope it would be checked against. A standing
+ * policy counts only while it is live (`policyIsLive`, the same test `standingFor` applies); an
+ * expired or spent one is read past, not deleted, because a dry run writes nothing.
+ */
 async function grantStatusFor(
   deps: ConnectorCallDeps,
   itemId: string,
@@ -659,10 +677,12 @@ async function grantStatusFor(
   const { kernel, principal } = deps;
   const stored = await kernel.findStoredItem(principal.orgId, environment, itemName);
   if (stored) {
-    const itemPolicy = await kernel.store.findItemPolicy(principal.orgId, principal.clientId, stored.id);
+    const now = kernel.now();
+    const live = (p: PolicyRecord | undefined): PolicyRecord | undefined => (p && policyIsLive(p, now) ? p : undefined);
+    const itemPolicy = live(await kernel.store.findItemPolicy(principal.orgId, principal.clientId, stored.id));
     const folderPolicy = itemPolicy
       ? undefined
-      : await kernel.store.findFolderPolicy(principal.orgId, principal.clientId, stored.folderId, stored.environmentId);
+      : live(await kernel.store.findFolderPolicy(principal.orgId, principal.clientId, stored.folderId, stored.environmentId));
     const standing = itemPolicy ?? folderPolicy;
     if (standing) return { status: "standing", scope: scopeFromPolicy(standing) };
   }

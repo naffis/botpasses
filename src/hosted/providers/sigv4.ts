@@ -3,7 +3,8 @@
  * Access key id is the item username, the secret access key is the item value. Region and
  * service are read from the host, never from the model.
  */
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { sha256Hex } from "../../ids.ts";
 import { HttpError } from "../errors.ts";
 
 export type AwsTarget = { service: string; region: string };
@@ -28,10 +29,6 @@ export function parseAwsHost(host: string): AwsTarget | undefined {
 /** Code-point order, as SigV4 requires (localeCompare would apply locale rules). */
 function byCodePoint(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function sha256Hex(data: string): string {
-  return createHash("sha256").update(data, "utf8").digest("hex");
 }
 
 function hmac(key: Buffer | string, data: string): Buffer {

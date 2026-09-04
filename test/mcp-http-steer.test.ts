@@ -94,6 +94,23 @@ test("origin 4xx says fix the request, 5xx says retry once; neither asks for a n
   }
 });
 
+test("body_too_large is not a transient 5xx: the model is told to narrow the call, not to retry it (R3-8)", () => {
+  const retry = { method: "GET", path: "/v1/items", host: "api.example.com", item_name: "X" };
+  const body = JSON.stringify({ error: "body_too_large", hint: "The origin response exceeded 1048576 bytes and was discarded." });
+  const cut = nextForPayload({ origin_status: 502, status: 502, body, origin_headers: {}, retry });
+  assert.equal(cut?.tool, "http_request");
+  assert.match(cut?.for_model ?? "", /larger than 1 MiB/);
+  assert.match(cut?.for_model ?? "", /Do not retry the same call/);
+  assert.match(cut?.for_model ?? "", /pagination|page size|fields/);
+  assert.doesNotMatch(cut?.for_model ?? "", /retry once|Transient/i);
+  assert.equal(cut?.arguments?.item_name, "X", "the narrowed retry keeps the item and target");
+  // A 502 whose body is the origin's own (JSON with another error, or not JSON) still reads as transient.
+  const origin502 = nextForPayload({ origin_status: 502, status: 502, body: JSON.stringify({ error: "upstream_timeout" }), retry });
+  assert.match(origin502?.for_model ?? "", /Transient origin error; retry once/);
+  const html502 = nextForPayload({ origin_status: 502, status: 502, body: "<html>Bad Gateway</html>", retry });
+  assert.match(html502?.for_model ?? "", /retry once/);
+});
+
 test("dry_run reports steer to a real call or to fixing the target, and never to pasting a key", () => {
   const go = nextForPayload({ dry_run: true, would_send: true, reason: "ok", retry: { method: "GET", path: "/v1/me", item_name: "X" } });
   assert.match(go?.for_model ?? "", /nothing was sent/i);
