@@ -218,9 +218,10 @@ test("AC-18 session without TOTP is 403 mfa_required; AC-23 TOTP replay rejected
     assert.equal(consentMfa.headers.get("location"), "/enroll-totp");
     const start = await fetch(`${ctx.base}/api/auth/totp/start`, {
       method: "POST",
-      headers: { cookie: jar.cookie, "content-type": "application/json" },
+      headers: { cookie: jar.cookie, "content-type": "application/json", "x-csrf-token": jar.csrf },
       body: "{}",
     });
+    assert.equal(start.status, 200);
     const started = (await start.json()) as { otpauth_url: string; qr_svg?: string };
     const secret = new URL(started.otpauth_url).searchParams.get("secret");
     assert.ok(secret);
@@ -236,17 +237,20 @@ test("AC-18 session without TOTP is 403 mfa_required; AC-23 TOTP replay rejected
     const code = totp.generate();
     const confirm = await fetch(`${ctx.base}/api/auth/totp/confirm`, {
       method: "POST",
-      headers: { cookie: jar.cookie, "content-type": "application/json" },
+      headers: { cookie: jar.cookie, "content-type": "application/json", "x-csrf-token": jar.csrf },
       body: JSON.stringify({ code }),
     });
     assert.equal(confirm.status, 200);
-    const replay = await fetch(`${ctx.base}/api/auth/totp/confirm`, {
+    const confirmed = (await confirm.json()) as { backup_codes?: string[] };
+    assert.equal(confirmed.backup_codes?.length, 10);
+    const ready = cookieJar(confirm);
+    // AC-23: the step consumed at confirm cannot be replayed at the sign-in authenticator step.
+    const replay = await fetch(`${ctx.base}/api/auth/totp/verify`, {
       method: "POST",
-      headers: { cookie: jar.cookie, "content-type": "application/json" },
+      headers: { cookie: ready.cookie, "content-type": "application/json", "x-csrf-token": ready.csrf },
       body: JSON.stringify({ code }),
     });
     assert.equal(replay.status, 401);
-    const ready = cookieJar(confirm);
     const noCsrf = await fetch(`${ctx.base}/api/items`, {
       method: "POST",
       headers: { cookie: ready.cookie, "content-type": "application/json" },

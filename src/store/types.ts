@@ -24,6 +24,35 @@ export type AuditListFilter = {
   action?: string;
 };
 
+/**
+ * Identity columns added after `UserRecord` froze (see `HOSTED_SCHEMA_IDENTITY_ALTER2_*`).
+ * The TOTP failure counter and lockout, plus the in-flight enrollment secret, wrapped under
+ * the identity DEK like the confirmed secret so enrollment survives a restart or second machine.
+ */
+export type UserSecurityState = {
+  totpFailures: number;
+  totpLockedUntil: string | null;
+  totpPendingWrappedIv: string | null;
+  totpPendingWrappedCiphertext: string | null;
+  totpPendingWrappedTag: string | null;
+  totpPendingAt: string | null;
+};
+
+/** A `users` row as read from the store: the frozen record plus the security columns. */
+export type UserRow = UserRecord & UserSecurityState;
+
+/** `operator_sessions` row. `mfaAt` is null until the session passed the authenticator step. */
+export type OperatorSessionRow = OperatorSessionRecord & { mfaAt: string | null };
+
+/** Single-row table holding the identity DEK wrapped under the KEK (AAD = id). */
+export type IdentityKeyRecord = {
+  id: string;
+  wrappedIv: string;
+  wrappedCiphertext: string;
+  wrappedTag: string;
+  createdAt: string;
+};
+
 export type VaultStore = {
   ping(): Promise<void>;
   close(): Promise<void>;
@@ -159,8 +188,9 @@ export type VaultStore = {
   updateAgentPassStatus(id: string, status: string): Promise<void>;
   consumeAgentPass(id: string, consumedAt: string): Promise<boolean>;
   insertUser(row: UserRecord): Promise<void>;
-  getUser(id: string): Promise<UserRecord | undefined>;
-  getUserByEmail(email: string): Promise<UserRecord | undefined>;
+  getUser(id: string): Promise<UserRow | undefined>;
+  getUserByEmail(email: string): Promise<UserRow | undefined>;
+  /** Writes the frozen `UserRecord` columns only; security columns go through `updateUserSecurity`. */
   updateUser(row: UserRecord): Promise<void>;
   insertEmailOtp(row: EmailOtpRecord): Promise<void>;
   latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined>;
@@ -169,12 +199,25 @@ export type VaultStore = {
   insertBackupCode(userId: string, codeScrypt: string): Promise<void>;
   listBackupCodes(userId: string): Promise<{ codeScrypt: string; usedAt: string | null }[]>;
   markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void>;
-  insertSession(row: OperatorSessionRecord): Promise<void>;
-  getSession(idHash: string): Promise<OperatorSessionRecord | undefined>;
+  insertSession(row: OperatorSessionRow): Promise<void>;
+  getSession(idHash: string): Promise<OperatorSessionRow | undefined>;
   deleteSession(idHash: string): Promise<void>;
   deleteOtherSessions(userId: string, keepHash: string): Promise<void>;
-  listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]>;
+  listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]>;
   touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void>;
+  updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void>;
+  /** Users with a confirmed or pending authenticator secret (for KEK rotation re-wraps). */
+  listUsersWithTotp(): Promise<UserRow[]>;
+  deleteUnusedBackupCodes(userId: string): Promise<void>;
+  /** Deletes the user's sessions that never passed the authenticator step, except `keepHash`. */
+  deletePendingSessions(userId: string, keepHash: string): Promise<void>;
+  getIdentityKey(id: string): Promise<IdentityKeyRecord | undefined>;
+  /** Idempotent: a concurrent insert of the same id is ignored, callers re-read. */
+  insertIdentityKey(row: IdentityKeyRecord): Promise<void>;
+  updateIdentityKey(
+    id: string,
+    patch: Pick<IdentityKeyRecord, "wrappedIv" | "wrappedCiphertext" | "wrappedTag">,
+  ): Promise<void>;
   insertAccessEvent(row: AccessEventRecord): Promise<void>;
   listAccessEvents(orgId: string, limit?: number): Promise<AccessEventRecord[]>;
   getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined>;

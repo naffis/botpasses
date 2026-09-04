@@ -13,7 +13,6 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
-  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
@@ -24,11 +23,19 @@ import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
 import {
   HOSTED_SCHEMA_IDENTITY,
   HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
+  HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import type {
+  AuditListFilter,
+  IdentityKeyRecord,
+  OperatorSessionRow,
+  UserRow,
+  UserSecurityState,
+  VaultStore,
+} from "./types.ts";
 
 function mapOrg(r: Record<string, unknown>): OrgRecord {
   return {
@@ -87,6 +94,16 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   db.exec(HOSTED_SCHEMA_SQLITE);
   db.exec(HOSTED_SCHEMA_IDENTITY);
   for (const stmt of HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE.trim().split(";")) {
+    const sql = stmt.trim();
+    if (!sql) continue;
+    try {
+      db.exec(sql);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("duplicate column")) throw err;
+    }
+  }
+  for (const stmt of HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE.trim().split(";")) {
     const sql = stmt.trim();
     if (!sql) continue;
     try {
@@ -1020,14 +1037,14 @@ export class SqliteHostedStore implements VaultStore {
       );
   }
 
-  async getUser(id: string): Promise<UserRecord | undefined> {
+  async getUser(id: string): Promise<UserRow | undefined> {
     const r = this.#db.prepare("SELECT * FROM users WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
     return r ? mapUser(r) : undefined;
   }
 
-  async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+  async getUserByEmail(email: string): Promise<UserRow | undefined> {
     const r = this.#db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase()) as
       | Record<string, unknown>
       | undefined;
@@ -1102,15 +1119,15 @@ export class SqliteHostedStore implements VaultStore {
       .run(usedAt, userId, codeScrypt);
   }
 
-  async insertSession(row: OperatorSessionRecord): Promise<void> {
+  async insertSession(row: OperatorSessionRow): Promise<void> {
     this.#db
       .prepare(
-        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at) VALUES (?, ?, ?, ?, ?, ?)",
       )
-      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt);
+      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt);
   }
 
-  async getSession(idHash: string): Promise<OperatorSessionRecord | undefined> {
+  async getSession(idHash: string): Promise<OperatorSessionRow | undefined> {
     const r = this.#db.prepare("SELECT * FROM operator_sessions WHERE id_hash = ?").get(idHash) as
       | Record<string, unknown>
       | undefined;
@@ -1125,7 +1142,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("DELETE FROM operator_sessions WHERE user_id = ? AND id_hash != ?").run(userId, keepHash);
   }
 
-  async listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]> {
+  async listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]> {
     const rows = this.#db
       .prepare(
         `SELECT s.* FROM operator_sessions s
@@ -1140,6 +1157,64 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare("UPDATE operator_sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?")
       .run(lastSeenAt, expiresAt, idHash);
+  }
+
+  async updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE users SET totp_failures = ?, totp_locked_until = ?, totp_pending_wrapped_iv = ?,
+         totp_pending_wrapped_ciphertext = ?, totp_pending_wrapped_tag = ?, totp_pending_at = ? WHERE id = ?`,
+      )
+      .run(
+        patch.totpFailures,
+        patch.totpLockedUntil,
+        patch.totpPendingWrappedIv,
+        patch.totpPendingWrappedCiphertext,
+        patch.totpPendingWrappedTag,
+        patch.totpPendingAt,
+        userId,
+      );
+  }
+
+  async listUsersWithTotp(): Promise<UserRow[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM users WHERE totp_wrapped_iv IS NOT NULL OR totp_pending_wrapped_iv IS NOT NULL")
+      .all() as Record<string, unknown>[];
+    return rows.map(mapUser);
+  }
+
+  async deleteUnusedBackupCodes(userId: string): Promise<void> {
+    this.#db.prepare("DELETE FROM backup_codes WHERE user_id = ? AND used_at IS NULL").run(userId);
+  }
+
+  async deletePendingSessions(userId: string, keepHash: string): Promise<void> {
+    this.#db
+      .prepare("DELETE FROM operator_sessions WHERE user_id = ? AND mfa_at IS NULL AND id_hash != ?")
+      .run(userId, keepHash);
+  }
+
+  async getIdentityKey(id: string): Promise<IdentityKeyRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM identity_keys WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapIdentityKey(r) : undefined;
+  }
+
+  async insertIdentityKey(row: IdentityKeyRecord): Promise<void> {
+    this.#db
+      .prepare(
+        "INSERT OR IGNORE INTO identity_keys (id, wrapped_iv, wrapped_ciphertext, wrapped_tag, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(row.id, row.wrappedIv, row.wrappedCiphertext, row.wrappedTag, row.createdAt);
+  }
+
+  async updateIdentityKey(
+    id: string,
+    patch: Pick<IdentityKeyRecord, "wrappedIv" | "wrappedCiphertext" | "wrappedTag">,
+  ): Promise<void> {
+    this.#db
+      .prepare("UPDATE identity_keys SET wrapped_iv = ?, wrapped_ciphertext = ?, wrapped_tag = ? WHERE id = ?")
+      .run(patch.wrappedIv, patch.wrappedCiphertext, patch.wrappedTag, id);
   }
 
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
@@ -1226,7 +1301,7 @@ function mapChallenge(r: Record<string, unknown>): ApprovalChallengeRecord {
   };
 }
 
-function mapUser(r: Record<string, unknown>): UserRecord {
+function mapUser(r: Record<string, unknown>): UserRow {
   return {
     id: String(r.id),
     email: String(r.email),
@@ -1235,6 +1310,23 @@ function mapUser(r: Record<string, unknown>): UserRecord {
     totpWrappedCiphertext: r.totp_wrapped_ciphertext == null ? null : String(r.totp_wrapped_ciphertext),
     totpWrappedTag: r.totp_wrapped_tag == null ? null : String(r.totp_wrapped_tag),
     totpLastStep: r.totp_last_step == null ? null : Number(r.totp_last_step),
+    createdAt: String(r.created_at),
+    totpFailures: r.totp_failures == null ? 0 : Number(r.totp_failures),
+    totpLockedUntil: r.totp_locked_until == null ? null : String(r.totp_locked_until),
+    totpPendingWrappedIv: r.totp_pending_wrapped_iv == null ? null : String(r.totp_pending_wrapped_iv),
+    totpPendingWrappedCiphertext:
+      r.totp_pending_wrapped_ciphertext == null ? null : String(r.totp_pending_wrapped_ciphertext),
+    totpPendingWrappedTag: r.totp_pending_wrapped_tag == null ? null : String(r.totp_pending_wrapped_tag),
+    totpPendingAt: r.totp_pending_at == null ? null : String(r.totp_pending_at),
+  };
+}
+
+function mapIdentityKey(r: Record<string, unknown>): IdentityKeyRecord {
+  return {
+    id: String(r.id),
+    wrappedIv: String(r.wrapped_iv),
+    wrappedCiphertext: String(r.wrapped_ciphertext),
+    wrappedTag: String(r.wrapped_tag),
     createdAt: String(r.created_at),
   };
 }
@@ -1250,13 +1342,14 @@ function mapOtp(r: Record<string, unknown>): EmailOtpRecord {
   };
 }
 
-function mapSess(r: Record<string, unknown>): OperatorSessionRecord {
+function mapSess(r: Record<string, unknown>): OperatorSessionRow {
   return {
     idHash: String(r.id_hash),
     userId: String(r.user_id),
     createdAt: String(r.created_at),
     lastSeenAt: String(r.last_seen_at),
     expiresAt: String(r.expires_at),
+    mfaAt: r.mfa_at == null ? null : String(r.mfa_at),
   };
 }
 

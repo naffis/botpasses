@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { HostedKernel } from "./kernel.ts";
 import { HttpError } from "./errors.ts";
-import { readBearer, resolveMachineToken, type AuthResolver } from "./auth.ts";
+import { readBearer, resolveMachineToken, type AuthResolver, type OperatorPrincipal, type Principal } from "./auth.ts";
 import { OperatorIdentity, totpEnabled } from "./operator-identity.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
 import { logVaultEvent } from "./observe.ts";
@@ -16,6 +16,19 @@ export type IdentityResolverOpts = {
   oidcJwk?: OidcPrivateJwk;
   issuer?: string;
 };
+
+/**
+ * An operator session that has not passed the authenticator step yet.
+ * `needs_totp` is true when the user is enrolled (route to `/verify-totp`), false when the
+ * user still has to enroll (route to `/enroll-totp`).
+ */
+export type PendingOperatorPrincipal = OperatorPrincipal & { ready: false; needs_totp: boolean };
+
+/** True for a pre-MFA session whose user is already enrolled and must verify, not enroll. */
+export function needsTotpVerify(p: Principal | undefined): boolean {
+  if (!p || p.channel !== "operator" || p.ready !== false) return false;
+  return "needs_totp" in p && p.needs_totp === true;
+}
 
 function requestSecure(req: IncomingMessage): boolean {
   const xf = req.headers["x-forwarded-proto"];
@@ -41,16 +54,20 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
     const secure = opts.secureCookies || requestSecure(req);
     const loaded = await opts.identity.loadSession(req.headers.cookie, secure);
     if (!loaded) return undefined;
-    const ready = totpEnabled(loaded.user);
+    const enrolled = totpEnabled(loaded.user);
+    // Ready means this session passed the authenticator step, not merely that the user has one.
+    const ready = enrolled && loaded.session.mfaAt !== null;
     if (!ready) {
-      return {
+      const pending: PendingOperatorPrincipal = {
         channel: "operator",
         userId: loaded.user.id,
         orgId: "",
         role: "owner",
         ready: false,
         sessionHash: loaded.session.idHash,
+        needs_totp: enrolled,
       };
+      return pending;
     }
     const membership = await kernel.ensureVaultOrgForUser(loaded.user.id);
     const prior = await kernel.store.getAccessEventByJti(loaded.session.idHash);

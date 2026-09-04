@@ -11,7 +11,6 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
-  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
@@ -22,11 +21,19 @@ import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
 import {
   HOSTED_SCHEMA_IDENTITY,
   HOSTED_SCHEMA_IDENTITY_ALTER_PG,
+  HOSTED_SCHEMA_IDENTITY_ALTER2_PG,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import type {
+  AuditListFilter,
+  IdentityKeyRecord,
+  OperatorSessionRow,
+  UserRow,
+  UserSecurityState,
+  VaultStore,
+} from "./types.ts";
 
 function asRecord(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
@@ -49,6 +56,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_SQLITE);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER2_PG);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
   }
 
@@ -875,12 +883,12 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async getUser(id: string): Promise<UserRecord | undefined> {
+  async getUser(id: string): Promise<UserRow | undefined> {
     const r = await this.#pool.query("SELECT * FROM users WHERE id = $1", [id]);
     return r.rows[0] ? mapUserPg(asRecord(r.rows[0])) : undefined;
   }
 
-  async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+  async getUserByEmail(email: string): Promise<UserRow | undefined> {
     const r = await this.#pool.query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
     return r.rows[0] ? mapUserPg(asRecord(r.rows[0])) : undefined;
   }
@@ -946,14 +954,14 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async insertSession(row: OperatorSessionRecord): Promise<void> {
+  async insertSession(row: OperatorSessionRow): Promise<void> {
     await this.#pool.query(
-      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ($1,$2,$3,$4,$5)",
-      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt],
+      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at) VALUES ($1,$2,$3,$4,$5,$6)",
+      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt],
     );
   }
 
-  async getSession(idHash: string): Promise<OperatorSessionRecord | undefined> {
+  async getSession(idHash: string): Promise<OperatorSessionRow | undefined> {
     const r = await this.#pool.query("SELECT * FROM operator_sessions WHERE id_hash = $1", [idHash]);
     return r.rows[0] ? mapSessPg(asRecord(r.rows[0])) : undefined;
   }
@@ -966,7 +974,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query("DELETE FROM operator_sessions WHERE user_id = $1 AND id_hash != $2", [userId, keepHash]);
   }
 
-  async listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]> {
+  async listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]> {
     const r = await this.#pool.query(
       `SELECT s.* FROM operator_sessions s JOIN org_members m ON m.user_id = s.user_id WHERE m.org_id = $1`,
       [orgId],
@@ -980,6 +988,63 @@ export class PostgresStore implements VaultStore {
       expiresAt,
       idHash,
     ]);
+  }
+
+  async updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void> {
+    await this.#pool.query(
+      `UPDATE users SET totp_failures=$1, totp_locked_until=$2, totp_pending_wrapped_iv=$3,
+       totp_pending_wrapped_ciphertext=$4, totp_pending_wrapped_tag=$5, totp_pending_at=$6 WHERE id=$7`,
+      [
+        patch.totpFailures,
+        patch.totpLockedUntil,
+        patch.totpPendingWrappedIv,
+        patch.totpPendingWrappedCiphertext,
+        patch.totpPendingWrappedTag,
+        patch.totpPendingAt,
+        userId,
+      ],
+    );
+  }
+
+  async listUsersWithTotp(): Promise<UserRow[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM users WHERE totp_wrapped_iv IS NOT NULL OR totp_pending_wrapped_iv IS NOT NULL",
+    );
+    return r.rows.map((row) => mapUserPg(asRecord(row)));
+  }
+
+  async deleteUnusedBackupCodes(userId: string): Promise<void> {
+    await this.#pool.query("DELETE FROM backup_codes WHERE user_id = $1 AND used_at IS NULL", [userId]);
+  }
+
+  async deletePendingSessions(userId: string, keepHash: string): Promise<void> {
+    await this.#pool.query(
+      "DELETE FROM operator_sessions WHERE user_id = $1 AND mfa_at IS NULL AND id_hash != $2",
+      [userId, keepHash],
+    );
+  }
+
+  async getIdentityKey(id: string): Promise<IdentityKeyRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM identity_keys WHERE id = $1", [id]);
+    return r.rows[0] ? mapIdentityKeyPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async insertIdentityKey(row: IdentityKeyRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO identity_keys (id, wrapped_iv, wrapped_ciphertext, wrapped_tag, created_at)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
+      [row.id, row.wrappedIv, row.wrappedCiphertext, row.wrappedTag, row.createdAt],
+    );
+  }
+
+  async updateIdentityKey(
+    id: string,
+    patch: Pick<IdentityKeyRecord, "wrappedIv" | "wrappedCiphertext" | "wrappedTag">,
+  ): Promise<void> {
+    await this.#pool.query(
+      "UPDATE identity_keys SET wrapped_iv=$1, wrapped_ciphertext=$2, wrapped_tag=$3 WHERE id=$4",
+      [patch.wrappedIv, patch.wrappedCiphertext, patch.wrappedTag, id],
+    );
   }
 
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
@@ -1124,7 +1189,7 @@ function mapChallenge(row: unknown): ApprovalChallengeRecord | undefined {
   };
 }
 
-function mapUserPg(rec: Record<string, unknown>): UserRecord {
+function mapUserPg(rec: Record<string, unknown>): UserRow {
   return {
     id: String(rec.id),
     email: String(rec.email),
@@ -1133,6 +1198,23 @@ function mapUserPg(rec: Record<string, unknown>): UserRecord {
     totpWrappedCiphertext: rec.totp_wrapped_ciphertext == null ? null : String(rec.totp_wrapped_ciphertext),
     totpWrappedTag: rec.totp_wrapped_tag == null ? null : String(rec.totp_wrapped_tag),
     totpLastStep: rec.totp_last_step == null ? null : Number(rec.totp_last_step),
+    createdAt: String(rec.created_at),
+    totpFailures: rec.totp_failures == null ? 0 : Number(rec.totp_failures),
+    totpLockedUntil: rec.totp_locked_until == null ? null : String(rec.totp_locked_until),
+    totpPendingWrappedIv: rec.totp_pending_wrapped_iv == null ? null : String(rec.totp_pending_wrapped_iv),
+    totpPendingWrappedCiphertext:
+      rec.totp_pending_wrapped_ciphertext == null ? null : String(rec.totp_pending_wrapped_ciphertext),
+    totpPendingWrappedTag: rec.totp_pending_wrapped_tag == null ? null : String(rec.totp_pending_wrapped_tag),
+    totpPendingAt: rec.totp_pending_at == null ? null : String(rec.totp_pending_at),
+  };
+}
+
+function mapIdentityKeyPg(rec: Record<string, unknown>): IdentityKeyRecord {
+  return {
+    id: String(rec.id),
+    wrappedIv: String(rec.wrapped_iv),
+    wrappedCiphertext: String(rec.wrapped_ciphertext),
+    wrappedTag: String(rec.wrapped_tag),
     createdAt: String(rec.created_at),
   };
 }
@@ -1148,13 +1230,14 @@ function mapOtpPg(rec: Record<string, unknown>): EmailOtpRecord {
   };
 }
 
-function mapSessPg(rec: Record<string, unknown>): OperatorSessionRecord {
+function mapSessPg(rec: Record<string, unknown>): OperatorSessionRow {
   return {
     idHash: String(rec.id_hash),
     userId: String(rec.user_id),
     createdAt: String(rec.created_at),
     lastSeenAt: String(rec.last_seen_at),
     expiresAt: String(rec.expires_at),
+    mfaAt: rec.mfa_at == null ? null : String(rec.mfa_at),
   };
 }
 
