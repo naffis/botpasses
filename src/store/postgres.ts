@@ -19,7 +19,12 @@ import type {
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
-import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_PG, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import {
+  HOSTED_SCHEMA_IDENTITY,
+  HOSTED_SCHEMA_IDENTITY_ALTER_PG,
+  HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_SQLITE,
+} from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import type { AuditListFilter, VaultStore } from "./types.ts";
 
@@ -44,6 +49,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_SQLITE);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
   }
 
   async ping(): Promise<void> {

@@ -1002,6 +1002,7 @@ function robotsTxt(plane: "staging" | "production"): string {
     return "User-agent: *\nAllow: /\n";
   }
   return [
+    "Sitemap: https://botpasses.com/sitemap-index.xml",
     "User-agent: *",
     "Allow: /",
     "Allow: /docs",

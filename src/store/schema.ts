@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE INDEX IF NOT EXISTS grants_org_status ON grants (org_id, status);
 CREATE INDEX IF NOT EXISTS audit_org_at ON audit (org_id, at);
 CREATE INDEX IF NOT EXISTS items_env ON items (environment_id);
+CREATE INDEX IF NOT EXISTS grants_client_item_status ON grants (client_id, item_id, status);
+CREATE INDEX IF NOT EXISTS approval_challenges_grant ON approval_challenges (grant_id);
 
 CREATE TABLE IF NOT EXISTS agentpass_passes (
   id TEXT PRIMARY KEY,
@@ -151,6 +153,7 @@ CREATE TABLE IF NOT EXISTS need_items (
 CREATE UNIQUE INDEX IF NOT EXISTS need_items_pending
   ON need_items (org_id, client_id, environment_id, suggested_name, host)
   WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS need_items_org_status ON need_items (org_id, status);
 
 CREATE TABLE IF NOT EXISTS rate_hits (
   org_id TEXT NOT NULL,
@@ -218,6 +221,15 @@ CREATE TABLE IF NOT EXISTS access_events (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS access_events_jti ON access_events (jti_hash);
 CREATE INDEX IF NOT EXISTS access_events_org_issued ON access_events (org_id, issued_at);
+CREATE INDEX IF NOT EXISTS operator_sessions_user ON operator_sessions (user_id);
+CREATE INDEX IF NOT EXISTS email_otp_challenges_email ON email_otp_challenges (email, sent_at);
+CREATE INDEX IF NOT EXISTS backup_codes_user ON backup_codes (user_id);
+`;
+
+/** Indexes on columns added by the identity ALTERs. Run after those ALTERs on both stores. */
+export const HOSTED_SCHEMA_IDENTITY_INDEXES = `
+CREATE UNIQUE INDEX IF NOT EXISTS clients_hashed_secret ON clients (hashed_secret) WHERE hashed_secret IS NOT NULL;
+CREATE INDEX IF NOT EXISTS clients_org_oauth ON clients (org_id, oauth_client_id);
 `;
 
 export const HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE = `

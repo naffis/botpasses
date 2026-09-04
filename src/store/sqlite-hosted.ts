@@ -21,7 +21,12 @@ import type {
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
-import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import {
+  HOSTED_SCHEMA_IDENTITY,
+  HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
+  HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_SQLITE,
+} from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import type { AuditListFilter, VaultStore } from "./types.ts";
 
@@ -91,6 +96,7 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
       if (!msg.includes("duplicate column")) throw err;
     }
   }
+  db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
   return new SqliteHostedStore(db);
 }
 

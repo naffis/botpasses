@@ -4,6 +4,10 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
+# One Machine per app. In-process TOTP enrollment state and per-IP limiters are not shared;
+# do not `fly scale count` above 1 until they are store-backed.
+kill_timeout = "30s"
+
 [env]
   VAULT_MODE = "hosted"
   VAULT_DEPLOY_PLANE = "production"
@@ -20,6 +24,13 @@ primary_region = "iad"
 
   [http_service.http_options]
     idle_timeout = 600
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/ready"
 
 [[vm]]
   size = "shared-cpu-1x"
