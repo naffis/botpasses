@@ -6,6 +6,7 @@ import type { HostedKernel } from "./kernel.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
 import { createStoreAdapter } from "./oidc-adapter.ts";
 import { IpWindowLimiter } from "./operator-identity.ts";
+import { requestClientIp } from "./identity-limiter.ts";
 import { HttpError } from "./errors.ts";
 import { createPinnedFetch, type PinnedFetch } from "./cimd-fetch.ts";
 import { deviceConfirmHtml, deviceHtml, deviceSuccessHtml, oauthErrorHtml } from "./oauth-pages.ts";
@@ -336,7 +337,7 @@ export function isOauthPath(path: string): boolean {
 }
 
 export function assertDcrIp(req: IncomingMessage): void {
-  const ip = (req.headers["x-forwarded-for"]?.toString().split(",")[0] ?? req.socket.remoteAddress ?? "0.0.0.0").trim();
+  const ip = requestClientIp(req);
   if (!dcrLimiter.allow(`dcr:${ip}`, 20, 60 * 60 * 1000, Date.now())) {
     throw new HttpError(429, "Too many registrations");
   }

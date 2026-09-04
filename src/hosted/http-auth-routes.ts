@@ -11,6 +11,8 @@ import { totpEnabled } from "./operator-identity.ts";
 import { requestClientIp } from "./identity-limiter.ts";
 import { needsTotpVerify } from "./identity.ts";
 import { HttpError } from "./errors.ts";
+import type Provider from "oidc-provider";
+import { endOidcSession } from "./oauth-as.ts";
 import { requireOperator, type OperatorPrincipal, type Principal } from "./auth.ts";
 
 export type AuthRouteOpts = {
@@ -25,6 +27,8 @@ export type AuthRouteOpts = {
    * `http.ts` keeps compiling; drop it there and here together.
    */
   clientIp?: (req: IncomingMessage) => string;
+  /** When set, logout also ends the OAuth server's own session (S12). */
+  oidcProvider?: Provider;
 };
 
 export function sendHtml(res: ServerResponse, html: string, extra: Record<string, string>, noStore = true): void {
@@ -170,7 +174,8 @@ export async function handleAuthApi(
       assertCsrf();
       await opts.identity.store.deleteSession(hash);
     }
-    opts.setCookies(res, opts.identity.logoutCookies(opts.secure), 200, { ok: true });
+    const opCookies = opts.oidcProvider ? await endOidcSession(opts.oidcProvider, req, res) : [];
+    opts.setCookies(res, [...opts.identity.logoutCookies(opts.secure), ...opCookies], 200, { ok: true });
     return true;
   }
   return false;

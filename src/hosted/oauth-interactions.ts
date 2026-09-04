@@ -7,6 +7,7 @@ import { HttpError } from "./errors.ts";
 import { kernelForProvider, redirectHosts } from "./oauth-as.ts";
 import { consentExpiredHtml, consentHtml, type ConsentView } from "./oauth-pages.ts";
 import { sendHtml } from "./http-auth-routes.ts";
+import { needsTotpVerify } from "./identity.ts";
 import { bindSecurityHeaders } from "./security-headers.ts";
 
 /** Scopes this AS issues; mirrors `scopes` in createOauthProvider. */
@@ -49,7 +50,7 @@ export async function handleConsentGet(
     return true;
   }
   if (principal.ready === false) {
-    res.writeHead(302, { location: "/enroll-totp" });
+    res.writeHead(302, { location: needsTotpVerify(principal) ? "/verify-totp" : "/enroll-totp" });
     res.end();
     return true;
   }

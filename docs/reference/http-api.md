@@ -8,7 +8,7 @@ JSON bodies are capped at 128 KiB. Hosted operator mutations need a session cook
 
 | Channel | How | May call |
 | --- | --- | --- |
-| `operator` | HttpOnly session (`__Host-bp_session` on HTTPS, `bp_session` on loopback) or `VAULT_BOOTSTRAP_TOKEN` | `/api/*` operator routes, Access, inbox, approve/revoke. `ready === false` → 403 `{ error: "mfa_required", enroll_url: "/enroll-totp" }` |
+| `operator` | HttpOnly session (`__Host-bp_session` on HTTPS, `bp_session` on loopback) or `VAULT_BOOTSTRAP_TOKEN` | `/api/*` operator routes, Access, inbox, approve/revoke. `ready === false` → 403 `{ error: "mfa_required", enroll_url: "/enroll-totp" }` (not enrolled) or `{ error: "mfa_required", verify_url: "/verify-totp" }` (enrolled, authenticator step pending) |
 | `model` | OAuth JWT (`aud` exactly `${origin}/mcp`, `jti` required and not revoked) or `avm_…` | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
 | `trusted` | `avt_…` | `POST /runtime/resolve` only |
 
@@ -33,18 +33,22 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/sign-in` `/sign-up` | Our HTML. Ready session → 302 `/console`. Email verified, no TOTP → 302 `/enroll-totp` |
-| GET | `/enroll-totp` | Session required. Ready → 302 `/console` |
+| GET | `/sign-in` `/sign-up` | One HTML template (heading chosen by route). Ready session → 302 `/console`. Email verified, no authenticator → 302 `/enroll-totp`. Enrolled but this session has not passed the authenticator step → 302 `/verify-totp` |
+| GET | `/enroll-totp` | Session required. Ready → 302 `/console`. Enrolled pending session → 302 `/verify-totp`. Shows backup codes in a dedicated step after confirm (Copy, Download, Continue) |
+| GET | `/verify-totp` | Sign-in authenticator step. One field (authenticator code or backup code). Anonymous → 302 `/sign-in`; not enrolled → 302 `/enroll-totp`; ready → 302 `/console` |
 | GET | `/consent` | Ready operator + oidc interaction. Else 302 `/sign-in` or `/enroll-totp` |
 | GET | `/device` | RFC 8628 user-code page (oidc when the provider is mounted) |
-| POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true }` (same for unknown emails). A still-valid unused code is not emailed again. |
-| POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session. `{ ok, enroll }` |
-| POST | `/api/auth/totp/start` | Session. Returns `{ otpauth_url, qr_svg }`. QR is local SVG. No secret in HTML |
-| POST | `/api/auth/totp/confirm` | `{ code }` → ready session + `backup_codes` once |
-| POST | `/api/auth/logout` | Clears session cookies |
+| POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true, message }` (identical for unknown emails). A still-valid unused code is not emailed again. Per-IP limit reads `Fly-Client-IP`, then the last `X-Forwarded-For` hop |
+| POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session with `mfa_at` null. `{ ok, enroll, verify }`. 401 carries `attempts_remaining` |
+| POST | `/api/auth/totp/start` | Session + CSRF. Returns `{ otpauth_url, qr_svg }`. QR is local SVG. Re-enroll (already enrolled) needs a ready session and `{ current_code }` (403 `current_code_required`). Pending secret is stored wrapped, so enrollment survives a restart |
+| POST | `/api/auth/totp/confirm` | `{ code }` + CSRF. Enrollment only. Rotates the session (`mfa_at` set), deletes other pre-MFA sessions and unused backup codes, returns `backup_codes` once. 429 `{ retry_after }` while locked |
+| POST | `/api/auth/totp/verify` | `{ code }` + CSRF. Sign-in authenticator step: authenticator or backup code. Rotates the session with `mfa_at` set. 10 failures lock for 15 minutes (429 `{ retry_after }`) |
+| GET | `/api/auth/me` | Ready session. `{ email, totp_enabled, backup_codes_remaining, created_at }` |
+| POST | `/api/auth/backup-codes/regenerate` | `{ code }` + CSRF. Replaces every unused backup code. `{ backup_codes }` once |
+| POST | `/api/auth/logout` | CSRF for cookie sessions. Clears session cookies and ends the OAuth server's own session |
 | POST | `/consent` | JSON `{ uid, decision }`. CSRF required |
 
-OTP: 8 digits, 10 minutes, 5 verify failures kill the challenge, 5 sends / email / 15 min. TOTP: RFC 6238 SHA-1, 6 digits, no replay.
+OTP: 8 digits, 10 minutes, 5 verify failures kill the challenge, 5 sends / email / 15 min, 10 sends / IP / 15 min. TOTP: RFC 6238 SHA-1, 6 digits, no replay, 10 failures lock 15 minutes. TOTP secrets are wrapped under an identity DEK (itself wrapped by the KEK, re-wrapped on `vault kek-rotate`). Sessions issued by the email step are not `ready` until `totp/verify` or `totp/confirm` sets `mfa_at`.
 
 ## Operator vault
 

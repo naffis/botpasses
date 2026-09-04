@@ -197,9 +197,9 @@ AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
 
 Public (this origin after `site` build):
 
-- [MCP tools](site/src/pages/docs/reference/mcp-tools.astro)
-- [HTTP API](site/src/pages/docs/reference/http-api.astro)
-- [CLI](site/src/pages/docs/reference/cli.astro)
+- [MCP tools](site/src/content/docs/reference/mcp-tools.md)
+- [HTTP API](site/src/content/docs/reference/http-api.md)
+- [CLI](site/src/content/docs/reference/cli.md)
 
 Internal (engineers, file pointers, local vs hosted):
 

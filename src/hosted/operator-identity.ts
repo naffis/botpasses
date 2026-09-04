@@ -14,6 +14,7 @@ import type { EmailSender } from "./email.ts";
 import { buildOtpEmail } from "./otp-email.ts";
 import { otpauthQrSvg } from "./totp-qr.ts";
 import { IdentityKeyring } from "./identity-keys.ts";
+import { logAuthEvent } from "./observe.ts";
 import { IpWindowLimiter, clientIpFrom } from "./identity-limiter.ts";
 import {
   BACKUP_CODE_COUNT,
@@ -258,9 +259,11 @@ export class OperatorIdentity {
       const attempts = ch.attempts + 1;
       const expiresAt = attempts >= OTP_MAX_ATTEMPTS ? now.toISOString() : ch.expiresAt;
       await this.store.updateEmailOtp({ ...ch, attempts, expiresAt });
+      logAuthEvent("otp_failed", { email, attempts });
       throw new HttpError(401, "Invalid code", { attempts_remaining: Math.max(0, OTP_MAX_ATTEMPTS - attempts) });
     }
     await this.store.updateEmailOtp({ ...ch, expiresAt: now.toISOString(), attempts: ch.attempts });
+    logAuthEvent("otp_verified", { email });
     let user = await this.store.getUserByEmail(email);
     if (!user) {
       const fresh: UserRecord = {
@@ -484,6 +487,7 @@ export class OperatorIdentity {
     if (await this.#useBackup(user.id, normalizeBackupCode(code))) {
       const next: UserRow = { ...user, ...afterTotpSuccess(securityOf(user)) };
       await this.store.updateUserSecurity(next.id, securityOf(next));
+      logAuthEvent("backup_code_used", { user_id: user.id });
       return next;
     }
     throw await this.#recordFailure(user, nowMs);
@@ -493,7 +497,11 @@ export class OperatorIdentity {
     const next = afterTotpFailure(securityOf(user), nowMs);
     await this.store.updateUserSecurity(user.id, next);
     const locked = lockRemainingMs(next, nowMs);
-    if (locked > 0) return lockedError(locked);
+    if (locked > 0) {
+      logAuthEvent("totp_locked", { user_id: user.id, retry_after_ms: locked });
+      return lockedError(locked);
+    }
+    logAuthEvent("totp_failed", { user_id: user.id, attempts_remaining: attemptsRemaining(next) });
     return new HttpError(401, "Invalid code", { attempts_remaining: attemptsRemaining(next) });
   }
 
