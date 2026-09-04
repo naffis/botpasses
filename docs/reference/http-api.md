@@ -1,6 +1,6 @@
 # HTTP API reference (internal)
 
-Canonical hosted and local HTTP routes. Public copy: [site HTTP API](../../site/src/pages/docs/reference/http-api.astro). Router: [src/hosted/http.ts](../../src/hosted/http.ts). Access: [src/hosted/http-access-routes.ts](../../src/hosted/http-access-routes.ts). Auth pages/API: [src/hosted/http-auth-routes.ts](../../src/hosted/http-auth-routes.ts). Local loopback: [src/server.ts](../../src/server.ts).
+Canonical hosted and local HTTP routes. Public copy: [site HTTP API](../../site/src/content/docs/reference/http-api.md). Router: [src/hosted/http.ts](../../src/hosted/http.ts). Access: [src/hosted/http-access-routes.ts](../../src/hosted/http-access-routes.ts). Auth pages/API: [src/hosted/http-auth-routes.ts](../../src/hosted/http-auth-routes.ts). Local loopback: [src/server.ts](../../src/server.ts).
 
 JSON bodies are capped at 128 KiB. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api` and `POST /mcp` `tools/call` is 401. Handshake methods (`initialize`, `ping`, `tools/list`) succeed without a Bearer so Grok does not show a connect card. A valid `avm_…` is sufficient for all MCP methods.
 
@@ -22,9 +22,10 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/ready` | none | 200 `{ ok: true }` or 503 |
 | GET | `/.well-known/oauth-protected-resource` | none | `{ resource, authorization_servers, scopes_supported, bearer_methods_supported: ["header"] }`. Same JSON at `/mcp` suffix and `/mcp/.well-known/…` |
 | GET | `/.well-known/oauth-authorization-server` | none | RFC 8414. Required `response_types_supported: ["code"]`. PKCE `S256` only. Same JSON at `/mcp` suffix, `/mcp/.well-known/…`, and `/.well-known/openid-configuration` |
-| GET | `/robots.txt` | none | Staging allows `/`. Prod disallows `/console`, auth, collect, api, mcp, oauth |
+| GET | `/robots.txt` | none | Staging allows `/`. Prod disallows `/console`, auth, collect, api, mcp, oauth. Prod lists `Sitemap: https://botpasses.com/sitemap-index.xml` |
+| GET | `/llms.txt`, `/.well-known/security.txt` | none | Static from `site/dist` |
 | GET | `/mcp/tools` | none (or model/operator) | `{ tools }` same as MCP `tools/list` |
-| POST | `/api/items/:id/meta` | operator | `{ name?, kind?, environment?, username?, inject?, allowed_hosts?, value? }` public item. Blank `value` keeps the current secret. |
+| POST | `/api/items/:id/meta` | operator | Same as `POST /api/items/:id` (below). Blank `value` keeps the current secret. |
 | POST | `/api/integrations/spotify/start` | operator | `{ item_name, environment?, client_id? }` → `{ authorize_url, redirect_uri }` |
 | GET | `/integrations/spotify/callback` | operator cookie | Exchanges the code, stores a refresh token, redirects to `/console#vault` |
 
@@ -74,11 +75,11 @@ Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
 | POST | `/api/clients/trusted` | operator | Issues `avt_…` once |
 | POST | `/api/clients/:id/rotate` | operator | New plaintext once. Old hash dies |
 | POST | `/api/clients/:id/revoke` | operator | `revoked_at`, grants revoked, JWT `jti` denylist. Later Bearer is 401 |
-| POST | `/api/grants/request` | model or operator | `{ item_name, environment?, task_description?, client_id? }`. Rate limit 30 / org / hour. Returns grant + `approval_code` |
+| POST | `/api/grants/request` | model or operator | `{ item_name, task_description?, client_id? }`. Rate limit 30 / org / hour (shared with new needs). Returns grant + `approval_code` |
 | POST | `/api/grants/:id/approve` | operator | `{ policy, confirm_name? }`. `folder_standing` is owner + confirm |
 | POST | `/api/grants/:id/revoke` | operator | Status `revoked`. Row stays listed |
 | POST | `/api/grants/approve-by-code` | operator | `{ code }` 8-digit. Reuse is 409 |
-| GET/POST | `/approve?token=` | operator | Magic-link approve |
+| GET/POST | `/approve?token=` | operator | Magic-link approve. Token is single use |
 
 Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reactivates so the agent can retry), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). DCR `redirect_uris` may be https, loopback http, or a desktop app scheme (`cursor://`, `grok://`).
 
@@ -97,9 +98,9 @@ Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reac
 
 ## MCP HTTP
 
-`POST /mcp` JSON-RPC (`http.request`, `find_items`, `list_items`, `request_grant`, `list_grants`). See [mcp.md](./mcp.md). `GET /mcp` SSE keepalive. There is no `get_secret`.
+`POST /mcp` JSON-RPC (`http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`; `http.request` is an alias for one release). See [mcp.md](./mcp.md). `GET /mcp` is an SSE keepalive stream (auth optional for the stream). `GET /mcp/tools` returns the tool list. There is no `get_secret`.
 
-## OAuth (this origin is the AS)
+## OAuth (botpasses.com is the AS)
 
 Mounted when `VAULT_OIDC_PRIVATE_JWK` is set. Engine: `oidc-provider` 9. [src/hosted/oauth-as.ts](../../src/hosted/oauth-as.ts).
 
@@ -135,6 +136,10 @@ No `/api/items`, OAuth, or Access panel on the local plane.
 ## AgentPass (dark unless `VAULT_AGENTPASS=1`)
 
 `/agentpass/configuration`, `/agentpass/jwks`, request/approve/validate. Not the product name. See README.
+
+## Static site
+
+`site/dist` (Astro) is served by [src/hosted/static-site.ts](../../src/hosted/static-site.ts) for `/`, `/design`, `/security`, `/privacy`, `/terms`, `/changelog`, `/docs/**`, `/_astro/**`, `/pagefind/**`, `/sitemap-*.xml`, `/favicon.svg`, `/og.png`, `/llms.txt`, and `/.well-known/security.txt`. `*.html` and trailing-slash forms 308 to the canonical URL (`/console/` is handled by the router, not here). Unknown paths under those prefixes return the Astro `404.html` with status 404. HTML is `no-cache` from the static layer (the router's `no-store` wins today), `_astro/*` is `public, max-age=31536000, immutable`, other assets `public, max-age=3600`.
 
 ## Errors operators see
 
