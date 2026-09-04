@@ -20,7 +20,7 @@ Botpasses is a **grant-vault**. The model never sees secret values. The hosted p
 
 ## Assets
 
-- Item payloads (API keys, login passwords).
+- Item payloads (API keys, login passwords). Each envelope is bound with AAD `orgId|itemId|allowed_hosts_json|inject`, so a writer with database access cannot move a ciphertext to another item or change the hosts or inject mode a value may be sent with. Rows written before that binding (AAD `orgId` alone) are re-encrypted once at boot (`aad_rebind`); `items.aad_version` records it and the inject path accepts only the bound form.
 - Per-org DEKs (wrapped under the platform KEK, AAD `orgId`).
 - Platform KEK (32 bytes). After cutover: ciphertext in `VAULT_KEK_WRAPPED`.
 - Machine tokens (`avm_`, `avt_`) stored as SHA-256 hashes.
@@ -28,9 +28,9 @@ Botpasses is a **grant-vault**. The model never sees secret values. The hosted p
 
 ## Key hierarchy (hosted, after cutover)
 
-1. AWS CMK (non-exportable) unwraps `VAULT_KEK_WRAPPED` once at boot.
-2. Platform KEK in process memory wraps per-org DEKs.
-3. Org DEK encrypts item payloads (AAD `orgId`).
+1. AWS CMK (non-exportable) unwraps `VAULT_KEK_WRAPPED` once at boot. During a rotation the previous KEK (`VAULT_KEK_PREVIOUS_WRAPPED`) is unwrapped as well; a DEK still under it is re-wrapped under the current KEK on first use (`dek_rewrapped` audit row).
+2. Platform KEK in process memory wraps per-org DEKs (AAD `orgId`).
+3. Org DEK encrypts item payloads (AAD `orgId|itemId|allowed_hosts_json|inject`).
 
 Local: `VAULT_MASTER_KEY` / `master.key` encrypts sqlite rows. AAD is the secret name after this change.
 

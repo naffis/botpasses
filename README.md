@@ -173,7 +173,7 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 
 ## Encryption
 
-Local: AES-256-GCM envelope with `VAULT_MASTER_KEY` (AAD is the secret name). Hosted: AWS KMS unwraps the platform KEK at boot (`VAULT_KEK_WRAPPED`); that KEK wraps a per-org DEK; item encrypt uses the org DEK with AAD `org_id`. Before cutover, raw `VAULT_KEK` still boots (`VAULT_KEK_REQUIRE_KMS` unset). After cutover, set `VAULT_KEK_REQUIRE_KMS=1` and unset the raw key. Runbook: [docs/ops/kek-rotation.md](docs/ops/kek-rotation.md).
+Local: AES-256-GCM envelope with `VAULT_MASTER_KEY` (AAD is the secret name). Hosted: AWS KMS unwraps the platform KEK at boot (`VAULT_KEK_WRAPPED`); that KEK wraps a per-org DEK (AAD `org_id`); each item is encrypted under the org DEK with AAD `org_id|item_id|allowed_hosts_json|inject`, so a database writer cannot swap ciphertexts between items or edit an item's hosts or inject mode without breaking the envelope. Rows written before that binding are re-encrypted once at boot (`aad_rebind`, tracked by `items.aad_version`); the inject path never accepts the old `org_id`-only binding. Before cutover, raw `VAULT_KEK` still boots (`VAULT_KEK_REQUIRE_KMS` unset). After cutover, set `VAULT_KEK_REQUIRE_KMS=1` and unset the raw key. Rotation runs without a maintenance window: the process accepts `VAULT_KEK_PREVIOUS` (or `VAULT_KEK_PREVIOUS_WRAPPED`) next to the new KEK and re-wraps each org DEK on first use. Runbook: [docs/ops/kek-rotation.md](docs/ops/kek-rotation.md).
 
 ## Hosted deploy (Fly + Neon + Cloudflare)
 
