@@ -62,11 +62,11 @@ Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end 
 | POST | `/api/items/:id/rotate` | `{ "value" }`. Replaces the value only |
 | DELETE | `/api/items/:id` | Removes the credential and its approvals |
 | POST | `/api/folders` | `{ "environment", "name" }` |
-| GET | `/api/need-items/:id` | Operator only. Metadata of a pending collect request. Unauthenticated is 404 |
+| GET | `/api/need-items/:id` | Operator only. Metadata of a pending collect request. Unauthenticated, or a request from another organization, is 404 |
 | POST | `/api/need-items/:id/fulfill` | `{ "value", "name?", "allowed_hosts?", "inject?", "kind?", "username?" }`. Stores the value from the collect page and activates the requesting agent's approval |
 | GET | `/collect/:id` | HTML shell for the collect page. Details load only for a signed-in operator |
 | POST | `/api/integrations/:provider/start` | `:provider` is `spotify`, `github`, `google`, `slack`, or `stripe` (unknown is 404). `{ "item_name", "environment?", "client_id?", "redirect_uri?", "agent_client_id?" }`. Returns `authorize_url`, `redirect_uri`, and `provider` for a user connect. `agent_client_id` names one agent that gets a standing approval on the refresh credential after connect |
-| GET | `/integrations/:provider/callback` | Operator cookie, authenticator step passed. Exchanges the code, stores the refresh token as `<ITEM>_REFRESH`, redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>`. `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `spotify` as the provider |
+| GET | `/integrations/:provider/callback` | Operator cookie, authenticator step passed. Exchanges the code, stores the refresh token as `<ITEM>_REFRESH`, redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>&reason=<code>` (`state_expired`, `provider_denied`, `exchange_failed`, or `no_refresh_token`). `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `spotify` as the provider |
 
 Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 400.
 

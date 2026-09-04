@@ -37,7 +37,7 @@ When an agent hits one of those with an app token, the tool result says so inste
 
 ## Retry after a failed call
 
-A `prompt` approval is not consumed by a failed API call. If Spotify returns 401 or 410, the agent retries `http_request` with the same arguments and the same approval. It does not need a new 8-digit code.
+A `prompt` approval is spent by any answer from Spotify, including a 401 or 410, because the client secret was already sent. If the agent retries and gets a pending grant, approve it again, or approve with limits (a call quota or a duration) so a token mint that fails once can be retried without a new code. If Spotify rotates the refresh token on a user-token call, Botpasses stores the new one in place.
 
 ## Related
 

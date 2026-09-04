@@ -66,7 +66,7 @@ test("origin results are keyed on origin_status, so a numeric legacy status alon
   assert.match(nextForPayload({ origin_status: 200, body: "{}" })?.for_model ?? "", /origin_headers/);
 });
 
-test("origin 401 next tells the model to retry the same grant", () => {
+test("origin 401 next tells the model to retry and that a one-call approval was spent", () => {
   const next = nextForPayload({
     origin_status: 401,
     status: 401,
@@ -75,7 +75,8 @@ test("origin 401 next tells the model to retry the same grant", () => {
     retry: { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET" },
   });
   assert.equal(next?.tool, "http_request");
-  assert.match(next?.for_model ?? "", /same Botpasses approval|new 8-digit code/i);
+  assert.match(next?.for_model ?? "", /one-call approval was spent/);
+  assert.doesNotMatch(next?.for_model ?? "", /same .*approval is still valid/i, "no promise that a prompt grant survives an origin answer");
   assert.equal(next?.arguments?.item_name, "SPOTIFY_SECRET");
 });
 

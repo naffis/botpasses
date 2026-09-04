@@ -98,26 +98,71 @@ export async function resolvePublicAddresses(hostname: string): Promise<string[]
 
 export const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
-export function assertSafePath(path: string): void {
+export const PATH_MAX_CHARS = 2048;
+
+/** Percent-encoded separators and dots a segment may not carry: an origin may decode them again. */
+const ENCODED_SEPARATOR_RE = /%(?:2f|5c|2e)/i;
+
+/**
+ * The one request path every layer agrees on: validation here, the scope check, the inbox card,
+ * `requested_scope`, and the wire. Refuses anything whose meaning could change between the check
+ * and the origin: backslashes, percent-encoded `/` `\` `.` inside a segment, `.` and `..` segments
+ * (raw, encoded, or with a `;param` suffix), whitespace, malformed escapes, and a scheme. Returns
+ * the WHATWG-normalised pathname plus query, which is exactly what the connector sends.
+ */
+export function canonicalRequestPath(raw: string): string {
+  const path = raw.trim();
   if (!path.startsWith("/") || path.startsWith("//") || path.includes("://")) {
     throw new HttpError(400, "path must start with /");
   }
-  if (hasDotSegments(path)) {
-    throw new HttpError(400, "path must not contain . or .. segments");
-  }
-}
-
-/** True when any path segment is `.` or `..`, raw or percent-encoded (URL parsing would collapse it). */
-export function hasDotSegments(path: string): boolean {
+  if (path.length > PATH_MAX_CHARS) throw new HttpError(400, `path must be at most ${PATH_MAX_CHARS} characters`);
+  if (/[\s\\]/.test(path)) throw new HttpError(400, "path must not contain whitespace or backslashes");
   const q = path.indexOf("?");
   const pathname = q === -1 ? path : path.slice(0, q);
-  return pathname.split("/").some((seg) => {
+  const query = q === -1 ? "" : path.slice(q);
+  if (pathname.includes("#") || query.includes("#")) throw new HttpError(400, "path must not contain a fragment");
+  for (const seg of pathname.split("/")) {
+    if (ENCODED_SEPARATOR_RE.test(seg)) {
+      throw new HttpError(400, "path segments must not contain percent-encoded separators or dots");
+    }
     let decoded: string;
     try {
       decoded = decodeURIComponent(seg);
     } catch {
-      return true;
+      throw new HttpError(400, "path contains a malformed percent-encoding");
     }
-    return decoded === "." || decoded === "..";
-  });
+    if (decoded.includes("/") || decoded.includes("\\")) {
+      throw new HttpError(400, "path segments must not contain percent-encoded separators or dots");
+    }
+    const bare = decoded.split(";")[0] ?? "";
+    if (bare === "." || bare === "..") throw new HttpError(400, "path must not contain . or .. segments");
+  }
+  let url: URL;
+  try {
+    url = new URL(path, "https://x.invalid");
+  } catch {
+    throw new HttpError(400, "path must start with /");
+  }
+  if (url.pathname.split("/").some((seg) => seg === "." || seg === "..")) {
+    throw new HttpError(400, "path must not contain . or .. segments");
+  }
+  return `${url.pathname || "/"}${url.search}`;
+}
+
+/** Validates without returning; kept for callers that only need the check. */
+export function assertSafePath(path: string): void {
+  canonicalRequestPath(path);
+}
+
+/**
+ * True when the path would not survive canonicalisation: a `.` or `..` segment (raw or encoded),
+ * a percent-encoded separator, a backslash, or a malformed escape.
+ */
+export function hasDotSegments(path: string): boolean {
+  try {
+    canonicalRequestPath(path);
+    return false;
+  } catch {
+    return true;
+  }
 }

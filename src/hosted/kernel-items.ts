@@ -129,11 +129,16 @@ export function parseHosts(json: string): string[] {
   return v as string[];
 }
 
-export function assertHosts(hosts: string[]): void {
+/** Validates and returns the hosts as stored: trimmed, lowercase, deduplicated, in order. */
+export function assertHosts(hosts: string[]): string[] {
   if (hosts.length === 0) throw new HttpError(400, "allowed_hosts is required");
-  for (const h of hosts) {
+  const out: string[] = [];
+  for (const raw of hosts) {
+    const h = raw.trim().toLowerCase();
     assertAllowedHostname(h, [h]);
+    if (!out.includes(h)) out.push(h);
   }
+  return out;
 }
 
 export function publicItem(environment: VaultEnvName, item: PublicItemSource): ItemPublic {
@@ -178,7 +183,7 @@ function assertValueSize(value: string): void {
 }
 
 export async function createItem(host: ItemHost, input: CreateItemInput): Promise<ItemPublic> {
-  assertHosts(input.allowedHosts);
+  const allowedHosts = assertHosts(input.allowedHosts);
   const name = normalizeItemName(input.name);
   if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
   assertValueSize(input.value);
@@ -209,7 +214,7 @@ export async function createItem(host: ItemHost, input: CreateItemInput): Promis
       : input.value;
   const at = nowIso(host.now());
   const itemId = `itm_${randomUUID()}`;
-  const allowedHostsJson = JSON.stringify(input.allowedHosts);
+  const allowedHostsJson = JSON.stringify(allowedHosts);
   const envelope = encrypt(
     payload,
     dek,
@@ -239,7 +244,7 @@ export async function createItem(host: ItemHost, input: CreateItemInput): Promis
     last4: last4(input.value),
     username,
     inject: input.inject,
-    allowedHostsJson: JSON.stringify(input.allowedHosts),
+    allowedHostsJson,
     folderId,
     createdAt: at,
     updatedAt: at,
@@ -308,7 +313,7 @@ export async function updateItem(host: ItemHost, input: UpdateItemInput): Promis
   const nextKind = input.kind ?? item.kind;
   const inject = input.inject ?? item.inject;
   const nextUsernameRaw = input.username !== undefined ? input.username : item.username;
-  if (input.allowedHosts) assertHosts(input.allowedHosts);
+  const allowedHosts = input.allowedHosts ? assertHosts(input.allowedHosts) : undefined;
   if (nextKind === "login" && !storedItemUsername(nextKind, inject, nextUsernameRaw)) {
     throw new HttpError(400, "login items require username");
   }
@@ -336,7 +341,7 @@ export async function updateItem(host: ItemHost, input: UpdateItemInput): Promis
     environmentId: nextEnv.id,
     inject,
     username: storedItemUsername(nextKind, inject, nextUsernameRaw),
-    allowedHostsJson: input.allowedHosts ? JSON.stringify(input.allowedHosts) : item.allowedHostsJson,
+    allowedHostsJson: allowedHosts ? JSON.stringify(allowedHosts) : item.allowedHostsJson,
     updatedAt: nowIso(host.now()),
   };
   const newValue = input.value !== undefined && input.value.length > 0 ? input.value : undefined;

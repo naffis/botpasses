@@ -117,6 +117,15 @@ function nowIso(d: Date): string {
   return d.toISOString();
 }
 
+/** Inbox and email copy: the agent's reason is cut to what a card can show (same cap as needs). */
+export const TASK_DESCRIPTION_MAX = 500;
+
+function truncateTask(raw: string | undefined): string | undefined {
+  const t = raw?.trim();
+  if (!t) return undefined;
+  return t.length > TASK_DESCRIPTION_MAX ? t.slice(0, TASK_DESCRIPTION_MAX) : t;
+}
+
 export type RequestGrantInput = {
   orgId: string;
   clientId: string;
@@ -139,7 +148,8 @@ export type RequestGrantResult = { grant: HostedGrantRecord; code?: string; noti
  * `operatorEmail` (must be a member) or to every member; it is sent for a new grant or when the
  * previous magic link expired, never on every retry.
  */
-export async function requestGrant(host: GrantHost, input: RequestGrantInput): Promise<RequestGrantResult> {
+export async function requestGrant(host: GrantHost, raw: RequestGrantInput): Promise<RequestGrantResult> {
+  const input: RequestGrantInput = { ...raw, taskDescription: truncateTask(raw.taskDescription) };
   if (!(await host.limiter.allow(input.orgId, host.now().getTime(), "grant"))) {
     throw new HttpError(429, "request_grant rate limit");
   }

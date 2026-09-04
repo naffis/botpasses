@@ -59,24 +59,50 @@ export function redactOauthJson(body: string, extraKeys: readonly string[] = [])
 /** Shortest derived encoding still worth matching; shorter forms mangle dates and ids. */
 const MIN_DERIVED_LEN = 8;
 
+function lowercasePercent(encoded: string): string {
+  return encoded.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+}
+
+/** `application/x-www-form-urlencoded` form: spaces become `+`, a different reserved set. */
+function formEncode(value: string): string {
+  return new URLSearchParams({ v: value }).toString().slice(2);
+}
+
+function htmlEntities(value: string, apostrophe: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, apostrophe);
+}
+
 /**
  * Every encoding of a credential an origin could echo back: raw, HTTP Basic base64 of
- * `user:secret`, base64 of the secret, URL-encoded, JSON-escaped, and hex. The raw secret is
- * always included; derived forms only when they are long enough to be unambiguous.
+ * `user:secret`, base64 of the secret, URL-encoded (upper and lowercase hex, and the `+` form
+ * body variant), HTML-escaped, JSON-escaped, and hex. The raw secret is always included; derived
+ * forms only when they are long enough to be unambiguous.
  */
 export function secretEncodings(secret: string, username?: string | null): string[] {
   if (secret.length === 0) return [];
   const forms = new Set<string>([secret]);
+  const percent = encodeURIComponent(secret);
+  const form = formEncode(secret);
   const derived = [
     Buffer.from(`${username ?? ""}:${secret}`).toString("base64"),
     Buffer.from(secret).toString("base64"),
     Buffer.from(secret).toString("base64url"),
-    encodeURIComponent(secret),
+    percent,
+    lowercasePercent(percent),
+    form,
+    lowercasePercent(form),
+    htmlEntities(secret, "&#39;"),
+    htmlEntities(secret, "&#x27;"),
     JSON.stringify(secret).slice(1, -1),
     Buffer.from(secret, "utf8").toString("hex"),
   ];
-  for (const form of derived) {
-    if (form.length >= MIN_DERIVED_LEN) forms.add(form);
+  for (const candidate of derived) {
+    if (candidate.length >= MIN_DERIVED_LEN) forms.add(candidate);
   }
   return [...forms].sort((a, b) => b.length - a.length);
 }

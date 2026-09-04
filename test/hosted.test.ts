@@ -930,51 +930,56 @@ test("missing Resend still returns a code and audits notify_failed", async () =>
   cleanup(home);
 });
 
-test("prompt grant reactivates when origin fetch fails", async () => {
+test("a prompt grant comes back only when the send never left the process (DNS, connect, TLS); any other failure or origin answer spends it", async () => {
   const ctx = await setup();
-  try {
-    const asked = await ctx.kernel.requestGrant({
-      orgId: ctx.orgId,
-      clientId: ctx.model.id,
-      itemName: "STRIPE_KEY",
-      environment: "staging",
-    });
-    await ctx.kernel.approveGrant({
-      orgId: ctx.orgId,
-      grantId: asked.grant.id,
-      policy: "prompt",
-      role: "owner",
-      actor: "user_owner",
-    });
-    const http = createHostedServer({
-    authResolver: testAuthResolver,
-      kernel: ctx.kernel,
-      host: "127.0.0.1",
-      port: 0,
-      fetchImpl: async () => {
-        throw new Error("timeout");
-      },
-      resolveAddresses: async () => ["8.8.8.8"],
-    });
+  const approvePrompt = async () => {
+    const asked = await ctx.kernel.requestGrant({ orgId: ctx.orgId, clientId: ctx.model.id, itemName: "STRIPE_KEY", environment: "staging" });
+    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: asked.grant.id, policy: "prompt", role: "owner", actor: "user_owner" });
+    return asked.grant.id;
+  };
+  const callWith = async (fetchImpl: typeof fetch) => {
+    const http = createHostedServer({ authResolver: testAuthResolver, kernel: ctx.kernel, host: "127.0.0.1", port: 0, fetchImpl, resolveAddresses: async () => ["8.8.8.8"] });
     const addr = await http.listen();
-    const res = await fetch(`http://${addr.host}:${addr.port}/mcp`, {
-      method: "POST",
-      headers: ctx.modelH,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: "http_request",
-          arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
-        },
-      }),
+    try {
+      const res = await fetch(`http://${addr.host}:${addr.port}/mcp`, {
+        method: "POST",
+        headers: ctx.modelH,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "http_request", arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" } },
+        }),
+      });
+      const body = (await res.json()) as { result?: { content?: { text?: string }[] } };
+      assert.ok(!JSON.stringify(body).includes(CANARY));
+      return JSON.parse(body.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+    } finally {
+      await http.close();
+    }
+  };
+  const statusOf = async (id: string) => (await ctx.kernel.store.getGrant(id))?.status;
+  try {
+    for (const code of ["ENOTFOUND", "ECONNREFUSED", "DEPTH_ZERO_SELF_SIGNED_CERT"]) {
+      const id = await approvePrompt();
+      const out = await callWith(async () => {
+        throw Object.assign(new Error(`fetch failed (${code})`), { code });
+      });
+      assert.equal(await statusOf(id), "active", `${code}: the credential never left, so the approval is handed back`);
+      assert.match(String(out.error), /Origin request failed/);
+      await ctx.kernel.revokeGrant(ctx.orgId, "user_owner", id);
+    }
+    const unknown = await approvePrompt();
+    await callWith(async () => {
+      throw new Error("socket hang up");
     });
-    const body = await res.json();
-    assert.ok(!JSON.stringify(body).includes(CANARY));
-    const grant = await ctx.kernel.store.getGrant(asked.grant.id);
-    assert.equal(grant?.status, "active");
-    await http.close();
+    assert.equal(await statusOf(unknown), "consumed", "an unclassified transport failure counts as sent");
+    const answered = await approvePrompt();
+    const out = await callWith(async () => new Response("boom", { status: 503 }));
+    assert.equal(out.origin_status, 503);
+    assert.equal(await statusOf(answered), "consumed", "any origin status spends a one-call approval");
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 4, "unreachable origins are audited inject_failed");
   } finally {
     await ctx.http.close();
     await ctx.store.close();

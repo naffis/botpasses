@@ -17,7 +17,7 @@ export const MCP_INSTRUCTIONS_HOSTED = [
   "There is no get_secret. Never put a secret in a tool argument.",
   "Botpasses mints and refreshes OAuth tokens for known providers (Spotify, GitHub, Google, Slack, Stripe); pass client_id when the credential is an OAuth client secret.",
   "Results carry origin_status (the API's HTTP status), a redacted body, and origin_headers (content-type, link, retry-after, rate-limit headers). Pass dry_run true to learn which item and approval a call would use without sending it.",
-  "Prompt grants survive a failed origin call. On 4xx, fix the path, query, or body and retry http_request with next.arguments; on 5xx retry once. Do not ask for a new 8-digit code.",
+  "On 4xx, fix the path, query, or body and retry http_request with next.arguments; on 5xx retry once. A one-call approval is spent by any answer from the API; if the retry returns a pending grant, tell the user to approve it. A one-call approval comes back only when the request never left Botpasses (DNS, connect, or TLS failure).",
 ].join(" ");
 
 export const HOSTED_TOOL_DESCRIPTIONS = {

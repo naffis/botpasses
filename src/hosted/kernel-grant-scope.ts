@@ -5,7 +5,7 @@
  */
 import { unscopedFields, type GrantPolicy, type GrantScope, type ItemRecord, type RequestedScope } from "../hosted-types.ts";
 import { HttpError } from "./errors.ts";
-import { ALLOWED_METHODS, assertAllowedHostname, hasDotSegments } from "./ssrf.ts";
+import { ALLOWED_METHODS, assertAllowedHostname, canonicalRequestPath } from "./ssrf.ts";
 
 export const SESSION_TTL_MS = 8 * 3600 * 1000;
 /** `ttl_seconds` bounds: one minute up to a day for `session`, up to a year for standing policies. */
@@ -13,7 +13,6 @@ export const TTL_MIN_SECONDS = 60;
 export const SESSION_TTL_MAX_SECONDS = 86_400;
 export const STANDING_TTL_MAX_SECONDS = 365 * 86_400;
 export const MAX_CALLS_CAP = 1_000_000;
-const PATH_MAX_CHARS = 2048;
 
 /** The call an agent says it will make. Any field may be omitted. */
 export type GrantRequest = { host?: string; method?: string; path?: string };
@@ -51,21 +50,25 @@ function normalizeMethod(raw: string, field: string): string {
   return method;
 }
 
+/**
+ * The canonical request path (`canonicalRequestPath`): what `requested_scope` stores, the inbox
+ * card shows, and the connector sends. Its 400 names the field the caller passed.
+ */
 function normalizePath(raw: string, field: string): string {
-  const path = raw.trim();
-  if (!path.startsWith("/") || path.startsWith("//") || /\s/.test(path) || path.length > PATH_MAX_CHARS) {
-    throw new HttpError(400, `${field} must be a path starting with /`);
+  try {
+    return canonicalRequestPath(raw);
+  } catch (err) {
+    const why = err instanceof HttpError ? err.message.replace(/^path /, "") : "must be a path starting with /";
+    throw new HttpError(400, `${field} ${why}`);
   }
-  if (hasDotSegments(path)) throw new HttpError(400, `${field} must not contain . or .. segments`);
-  return path;
 }
 
-/** Path as the origin will see it: URL-normalised, no query. */
-function canonicalPath(path: string): string {
+/** Path as the origin will see it, without its query; undefined when it cannot be canonicalised. */
+function canonicalPrefix(path: string): string | undefined {
   try {
-    return new URL(pathPrefixOf(path), "https://x.invalid").pathname || "/";
+    return pathPrefixOf(canonicalRequestPath(path));
   } catch {
-    return pathPrefixOf(path);
+    return undefined;
   }
 }
 
@@ -193,9 +196,13 @@ export function scopeDenialReason(scope: GrantScope, call: ConnectorCall): Scope
   if (scope.methods && !scope.methods.includes(call.method.toUpperCase())) return "method";
   if (scope.hosts && !scope.hosts.includes(call.host.toLowerCase())) return "host";
   if (scope.pathPrefixes) {
-    if (hasDotSegments(call.path)) return "path";
-    const path = canonicalPath(call.path);
-    if (!scope.pathPrefixes.some((prefix) => pathWithinPrefix(path, canonicalPath(prefix)))) return "path";
+    const path = canonicalPrefix(call.path);
+    if (path === undefined) return "path";
+    const admitted = scope.pathPrefixes.some((prefix) => {
+      const canonical = canonicalPrefix(prefix);
+      return canonical !== undefined && pathWithinPrefix(path, canonical);
+    });
+    if (!admitted) return "path";
   }
   return undefined;
 }

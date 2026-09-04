@@ -161,7 +161,7 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 | Command | Purpose |
 | --- | --- |
 | `vault init` | Create `$VAULT_HOME` + SQLite schema; generate key if needed |
-| `vault set NAME` | Encrypt and store. Reads the value from stdin, or prompts without echo on a terminal; there is no `--value` (argv is visible in `ps`). Prints name + last-4 |
+| `vault set NAME [--host H]... [--inject MODE] [--username USER]` | Encrypt and store. Reads the value from stdin, or prompts without echo on a terminal; there is no `--value` (argv is visible in `ps`). Hosts, inject mode (hosted vocabulary), and username drive `http_request`. Prints name + last-4 |
 | `vault list` | Names + last-4 |
 | `vault grant --secret NAME --agent A --tool T [--once\|--session] [--ttl 8h]` | Human approval |
 | `vault revoke --id GRANT_ID` | Stop future injects |
