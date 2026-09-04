@@ -1,6 +1,6 @@
 {
   "name": "botpasses",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Botpasses: named secrets injected into tools, never into the model or transcript.",
   "type": "module",
   "engines": {
@@ -14,7 +14,15 @@
     "botpasses": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
     "vault": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
     "hosted": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/hosted/main.ts",
+    "dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning --watch src/cli.ts serve",
+    "site:build": "npm --prefix site run build",
+    "migrate": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/migrate.ts",
+    "pretest": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/pretest.ts",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=spec test/*.test.ts",
+    "test:smoke": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/console-smoke.test.ts",
+    "test:coverage": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --experimental-test-coverage --test-coverage-lines=80 test/*.test.ts",
+    "test:pg": "DATABASE_URL=${DATABASE_URL:-postgres://vault:vault@localhost:5432/vault} npm test",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -32,9 +40,12 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.13.10",
     "@types/pg": "^8.23.1",
-    "typescript": "^5.8.2"
+    "eslint": "^10.9.1",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.69.0"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1123.0",

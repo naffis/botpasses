@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import type {
   AccessEventRecord,
   ApprovalChallengeRecord,
@@ -11,21 +11,88 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
-  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
   UserRecord,
+  VaultEnvName,
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
-import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_PG, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import {
+  HOSTED_SCHEMA_IDENTITY,
+  HOSTED_SCHEMA_IDENTITY_ALTER_PG,
+  HOSTED_SCHEMA_IDENTITY_ALTER2_PG,
+  HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_OAUTH_ALTER_PG,
+  HOSTED_SCHEMA_SCOPE_ALTER_PG,
+  HOSTED_SCHEMA_SQLITE,
+  HOSTED_SCHEMA_TEAM,
+  HOSTED_SCHEMA_TEAM_ALTER_PG,
+} from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import {
+  GRANT_INSERT_COLUMNS,
+  grantValues,
+  ITEM_INSERT_COLUMNS,
+  itemValues,
+  mapAccess,
+  mapChallenge,
+  mapEnv,
+  mapFolder,
+  mapGrant,
+  mapIdentityKey,
+  mapInvite,
+  mapItem,
+  mapMember,
+  mapMemberRecord,
+  mapNeed,
+  mapOidcRow,
+  mapOrg,
+  mapOtp,
+  mapPolicy,
+  mapSess,
+  mapUser,
+  mapVault,
+  NEED_INSERT_COLUMNS,
+  needValues,
+  placeholders,
+} from "./rows.ts";
+import {
+  oidcPayloadIndex,
+  requestedScopeJson,
+  scopeListJson,
+  type AuditListFilter,
+  type IdentityKeyRecord,
+  type InviteRecord,
+  type MemberRow,
+  type OidcPayloadRow,
+  type OperatorSessionRow,
+  type SweepCounts,
+  type UserRow,
+  type UserSecurityState,
+  type VaultStore,
+} from "./types.ts";
 
 function asRecord(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
 }
+
+/** `rows[0]` may be absent; map it when present. */
+function opt<T>(row: unknown, map: (r: Record<string, unknown>) => T): T | undefined {
+  return row ? map(asRecord(row)) : undefined;
+}
+
+const GRANT_INSERT_SQL = `INSERT INTO grants (${GRANT_INSERT_COLUMNS}) VALUES (${placeholders(20, "pg")})`;
+
+export type PostgresOpenOptions = {
+  /** Suffix for application_name (`botpasses-<plane>`), visible in pg_stat_activity. */
+  plane?: string;
+  /** Override the pool size (default 10). */
+  max?: number;
+  /** Per-statement timeout in ms (default 15 s). */
+  statementTimeoutMs?: number;
+};
 
 export class PostgresStore implements VaultStore {
   readonly #pool: Pool;
@@ -33,21 +100,90 @@ export class PostgresStore implements VaultStore {
     this.#pool = pool;
   }
 
-  static async open(connectionString: string): Promise<PostgresStore> {
-    const pool = new Pool({ connectionString, max: 10 });
+  static poolOptions(connectionString: string, opts: PostgresOpenOptions = {}): PoolConfig {
+    const statementTimeout = opts.statementTimeoutMs ?? 15_000;
+    return {
+      connectionString,
+      max: opts.max ?? 10,
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+      keepAlive: true,
+      application_name: `botpasses-${opts.plane ?? "hosted"}`,
+      statement_timeout: statementTimeout,
+      options: `-c statement_timeout=${statementTimeout}`,
+    };
+  }
+
+  /**
+   * Connect and make sure the schema is present. Throws (does not exit) on a bad URL or an
+   * unreachable database; the caller decides the exit code.
+   */
+  static async open(connectionString: string, opts: PostgresOpenOptions = {}): Promise<PostgresStore> {
+    const pool = new Pool(PostgresStore.poolOptions(connectionString, opts));
+    // Without this a lost connection in the idle pool becomes an uncaught 'error' event.
+    pool.on("error", (err) => {
+      console.error(JSON.stringify({ event: "pg_pool_error", message: err.message, at: new Date().toISOString() }));
+    });
     const store = new PostgresStore(pool);
-    await store.migrate();
+    try {
+      await store.migrate();
+    } catch (err) {
+      await pool.end().catch(() => undefined);
+      throw err;
+    }
     return store;
   }
 
+  /**
+   * If `schema_migrations` exists, scripts/migrate.ts (the Fly release_command) owns DDL and
+   * this is a no-op. Otherwise this is a dev/test database: bootstrap from the schema.ts
+   * constants, as before, and say so.
+   */
   async migrate(): Promise<void> {
+    const r = await this.#pool.query<{ ok: boolean }>(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ok",
+    );
+    if (r.rows[0]?.ok) return;
     await this.#pool.query(HOSTED_SCHEMA_SQLITE);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER2_PG);
+    await this.#pool.query(HOSTED_SCHEMA_OAUTH_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_SCOPE_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
+    await this.#pool.query(HOSTED_SCHEMA_TEAM);
+    await this.#pool.query(HOSTED_SCHEMA_TEAM_ALTER_PG);
+    console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
   async ping(): Promise<void> {
     await this.#pool.query("SELECT 1");
+  }
+
+  async sweepExpired(nowIso: string): Promise<SweepCounts> {
+    const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
+    const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
+    const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const count = async (sql: string, params: string[]): Promise<number> => {
+      const res = await this.#pool.query(sql, params);
+      return res.rowCount ?? 0;
+    };
+    return {
+      emailOtpChallenges: await count("DELETE FROM email_otp_challenges WHERE expires_at < $1", [nowIso]),
+      operatorSessions: await count("DELETE FROM operator_sessions WHERE expires_at < $1", [nowIso]),
+      approvalChallenges: await count("DELETE FROM approval_challenges WHERE expires_at < $1", [nowIso]),
+      needItems: await count(
+        `DELETE FROM need_items
+         WHERE (status = 'cancelled' AND created_at < $1)
+            OR (status = 'pending' AND expires_at < $1)`,
+        [dayAgo],
+      ),
+      rateHits: await count("DELETE FROM rate_hits WHERE window_start < $1", [twoHoursAgo]),
+      oidcPayloads: await count("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < $1", [
+        nowIso,
+      ]),
+      orgInvites: await count("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < $1", [weekAgo]),
+    };
   }
 
   async close(): Promise<void> {
@@ -64,17 +200,7 @@ export class PostgresStore implements VaultStore {
 
   async listOrgs(): Promise<OrgRecord[]> {
     const r = await this.#pool.query("SELECT * FROM orgs");
-    return r.rows.map((row) => {
-      const rec = asRecord(row);
-      return {
-        id: String(rec.id),
-        name: String(rec.name),
-        wrappedDekIv: String(rec.wrapped_dek_iv),
-        wrappedDekCiphertext: String(rec.wrapped_dek_ciphertext),
-        wrappedDekTag: String(rec.wrapped_dek_tag),
-        createdAt: String(rec.created_at),
-      };
-    });
+    return r.rows.map((row) => mapOrg(asRecord(row)));
   }
 
   async updateOrgWrappedDek(
@@ -89,23 +215,26 @@ export class PostgresStore implements VaultStore {
 
   async getOrg(id: string): Promise<OrgRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM orgs WHERE id = $1", [id]);
-    const row = r.rows[0];
-    if (!row) return undefined;
-    const rec = asRecord(row);
-    return {
-      id: String(rec.id),
-      name: String(rec.name),
-      wrappedDekIv: String(rec.wrapped_dek_iv),
-      wrappedDekCiphertext: String(rec.wrapped_dek_ciphertext),
-      wrappedDekTag: String(rec.wrapped_dek_tag),
-      createdAt: String(rec.created_at),
-    };
+    return opt(r.rows[0], mapOrg);
   }
 
   async deleteOrg(orgId: string): Promise<void> {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM oidc_payloads WHERE account_id IN (
+           SELECT user_id FROM org_members WHERE org_id = $1
+         ) AND (
+           client_id IN (SELECT id FROM clients WHERE org_id = $1)
+           OR (client_id IS NULL AND NOT EXISTS (
+             SELECT 1 FROM org_members m2 WHERE m2.user_id = oidc_payloads.account_id AND m2.org_id <> $1
+           ))
+         )`,
+        [orgId],
+      );
+      await client.query("DELETE FROM access_events WHERE org_id = $1", [orgId]);
+      await client.query("DELETE FROM rate_hits WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM need_items WHERE org_id = $1", [orgId]);
       await client.query(
         "DELETE FROM approval_challenges WHERE grant_id IN (SELECT id FROM grants WHERE org_id = $1)",
@@ -133,6 +262,7 @@ export class PostgresStore implements VaultStore {
         [orgId],
       );
       await client.query("DELETE FROM vaults WHERE org_id = $1", [orgId]);
+      await client.query("DELETE FROM org_invites WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM org_members WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM orgs WHERE id = $1", [orgId]);
       await client.query("COMMIT");
@@ -144,11 +274,12 @@ export class PostgresStore implements VaultStore {
     }
   }
 
-  async insertMember(row: MemberRecord): Promise<void> {
-    await this.#pool.query("INSERT INTO org_members (org_id, user_id, role) VALUES ($1,$2,$3)", [
+  async insertMember(row: MemberRecord & { joinedAt?: string }): Promise<void> {
+    await this.#pool.query("INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES ($1,$2,$3,$4)", [
       row.orgId,
       row.userId,
       row.role,
+      row.joinedAt ?? null,
     ]);
   }
 
@@ -157,9 +288,7 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM org_members WHERE org_id = $1 AND user_id = $2",
       [orgId, userId],
     );
-    const rec = r.rows[0] ? asRecord(r.rows[0]) : undefined;
-    if (!rec) return undefined;
-    return { orgId: String(rec.org_id), userId: String(rec.user_id), role: rec.role as MemberRecord["role"] };
+    return opt(r.rows[0], mapMemberRecord);
   }
 
   async insertVault(row: VaultRecord): Promise<void> {
@@ -172,10 +301,7 @@ export class PostgresStore implements VaultStore {
 
   async listVaults(orgId: string): Promise<VaultRecord[]> {
     const r = await this.#pool.query("SELECT * FROM vaults WHERE org_id = $1", [orgId]);
-    return r.rows.map((row) => {
-      const rec = asRecord(row);
-      return { id: String(rec.id), orgId: String(rec.org_id), name: String(rec.name) };
-    });
+    return r.rows.map((row) => mapVault(asRecord(row)));
   }
 
   async insertEnvironment(row: EnvironmentRecord): Promise<void> {
@@ -188,7 +314,7 @@ export class PostgresStore implements VaultStore {
 
   async getEnvironment(id: string): Promise<EnvironmentRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM environments WHERE id = $1", [id]);
-    return mapEnv(r.rows[0]);
+    return opt(r.rows[0], mapEnv);
   }
 
   async getEnvironmentByName(vaultId: string, name: string): Promise<EnvironmentRecord | undefined> {
@@ -196,12 +322,12 @@ export class PostgresStore implements VaultStore {
       vaultId,
       name,
     ]);
-    return mapEnv(r.rows[0]);
+    return opt(r.rows[0], mapEnv);
   }
 
   async listEnvironments(vaultId: string): Promise<EnvironmentRecord[]> {
     const r = await this.#pool.query("SELECT * FROM environments WHERE vault_id = $1", [vaultId]);
-    return r.rows.map((row) => mapEnv(row)!);
+    return r.rows.map((row) => mapEnv(asRecord(row)));
   }
 
   async insertFolder(row: FolderRecord): Promise<void> {
@@ -214,7 +340,7 @@ export class PostgresStore implements VaultStore {
 
   async getFolder(id: string): Promise<FolderRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM folders WHERE id = $1", [id]);
-    return mapFolder(r.rows[0]);
+    return opt(r.rows[0], mapFolder);
   }
 
   async getFolderByName(environmentId: string, name: string): Promise<FolderRecord | undefined> {
@@ -222,31 +348,13 @@ export class PostgresStore implements VaultStore {
       environmentId,
       name,
     ]);
-    return mapFolder(r.rows[0]);
+    return opt(r.rows[0], mapFolder);
   }
 
   async insertItem(row: ItemRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO items (
-        id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
-        inject, iv, ciphertext, tag, created_at, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [
-        row.id,
-        row.environmentId,
-        row.folderId,
-        row.kind,
-        row.name,
-        row.last4,
-        row.username,
-        row.allowedHostsJson,
-        row.inject,
-        row.iv,
-        row.ciphertext,
-        row.tag,
-        row.createdAt,
-        row.updatedAt,
-      ],
+      `INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "pg")})`,
+      itemValues(row),
     );
   }
 
@@ -288,7 +396,7 @@ export class PostgresStore implements VaultStore {
 
   async getItem(id: string): Promise<ItemRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM items WHERE id = $1", [id]);
-    return mapItem(r.rows[0]);
+    return opt(r.rows[0], mapItem);
   }
 
   async getItemByName(environmentId: string, name: string): Promise<ItemRecord | undefined> {
@@ -296,14 +404,14 @@ export class PostgresStore implements VaultStore {
       environmentId,
       name,
     ]);
-    return mapItem(r.rows[0]);
+    return opt(r.rows[0], mapItem);
   }
 
   async listItems(environmentId: string): Promise<ItemRecord[]> {
     const r = await this.#pool.query("SELECT * FROM items WHERE environment_id = $1 ORDER BY name", [
       environmentId,
     ]);
-    return r.rows.map((row) => mapItem(row)!);
+    return r.rows.map((row) => mapItem(asRecord(row)));
   }
 
   async countProductionItems(orgId: string): Promise<number> {
@@ -348,6 +456,10 @@ export class PostgresStore implements VaultStore {
     ]);
   }
 
+  async updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void> {
+    await this.#pool.query("UPDATE clients SET environment = $1 WHERE id = $2", [environment, id]);
+  }
+
   async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
     const r = await this.#pool.query(
       `INSERT INTO rate_hits (org_id, kind, window_start, count) VALUES ($1,$2,$3,1)
@@ -369,25 +481,17 @@ export class PostgresStore implements VaultStore {
 
   async getClient(id: string): Promise<ClientRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM clients WHERE id = $1", [id]);
-    return mapClient(r.rows[0]);
-  }
-
-  async getClientByHashedSecret(orgId: string, hashedSecret: string): Promise<ClientRecord | undefined> {
-    const r = await this.#pool.query(
-      "SELECT * FROM clients WHERE org_id = $1 AND hashed_secret = $2",
-      [orgId, hashedSecret],
-    );
-    return mapClient(r.rows[0]);
+    return opt(r.rows[0], mapClientRow);
   }
 
   async findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM clients WHERE hashed_secret = $1", [hashedSecret]);
-    return mapClient(r.rows[0]);
+    return opt(r.rows[0], mapClientRow);
   }
 
   async listClients(orgId: string): Promise<ClientRecord[]> {
     const r = await this.#pool.query("SELECT * FROM clients WHERE org_id = $1", [orgId]);
-    return r.rows.map((row) => mapClient(row)!);
+    return r.rows.map((row) => mapClientRow(asRecord(row)));
   }
 
   async findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined> {
@@ -395,13 +499,15 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM clients WHERE oauth_client_id = $1 OR clerk_oauth_user_id = $1 LIMIT 1",
       [oauthClientId],
     );
-    return r.rows[0] ? mapClient(r.rows[0]) : undefined;
+    return opt(r.rows[0], mapClientRow);
   }
 
   async insertPolicy(row: PolicyRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO policies (id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO policies (
+        id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at,
+        methods, path_prefixes, hosts, max_calls, calls_used, expires_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         row.id,
         row.orgId,
@@ -411,8 +517,22 @@ export class PostgresStore implements VaultStore {
         row.environmentId,
         row.kind,
         row.createdAt,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        row.callsUsed,
+        row.expiresAt,
       ],
     );
+  }
+
+  async recordPolicyCall(id: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      "UPDATE policies SET calls_used = calls_used + 1 WHERE id=$1 AND (max_calls IS NULL OR calls_used < max_calls)",
+      [id],
+    );
+    return r.rowCount === 1;
   }
 
   async deletePolicy(id: string): Promise<void> {
@@ -424,7 +544,7 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM policies WHERE org_id=$1 AND client_id=$2 AND item_id=$3 AND kind='item_standing'",
       [orgId, clientId, itemId],
     );
-    return mapPolicy(r.rows[0]);
+    return opt(r.rows[0], mapPolicy);
   }
 
   async findFolderPolicy(
@@ -438,7 +558,7 @@ export class PostgresStore implements VaultStore {
        AND kind='folder_standing' AND ((folder_id IS NULL AND $4::text IS NULL) OR folder_id=$4)`,
       [orgId, clientId, environmentId, folderId],
     );
-    return mapPolicy(r.rows[0]);
+    return opt(r.rows[0], mapPolicy);
   }
 
   async listPoliciesForClient(orgId: string, clientId: string): Promise<PolicyRecord[]> {
@@ -446,44 +566,23 @@ export class PostgresStore implements VaultStore {
       orgId,
       clientId,
     ]);
-    return r.rows.map((row) => mapPolicy(row)!);
+    return r.rows.map((row) => mapPolicy(asRecord(row)));
   }
 
   async insertGrant(row: HostedGrantRecord): Promise<void> {
-    await this.#pool.query(
-      `INSERT INTO grants (
-        id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-        expires_at, created_at, approved_at, consumed_at, task_id, task_description
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [
-        row.id,
-        row.orgId,
-        row.clientId,
-        row.itemId,
-        row.folderId,
-        row.environmentId,
-        row.policy,
-        row.status,
-        row.expiresAt,
-        row.createdAt,
-        row.approvedAt,
-        row.consumedAt,
-        row.taskId,
-        row.taskDescription,
-      ],
-    );
+    await this.#pool.query(GRANT_INSERT_SQL, grantValues(row));
   }
 
   async getGrant(id: string): Promise<HostedGrantRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM grants WHERE id = $1", [id]);
-    return mapGrant(r.rows[0]);
+    return opt(r.rows[0], mapGrant);
   }
 
   async listGrants(orgId: string): Promise<HostedGrantRecord[]> {
     const r = await this.#pool.query("SELECT * FROM grants WHERE org_id=$1 ORDER BY created_at DESC", [
       orgId,
     ]);
-    return r.rows.map((row) => mapGrant(row)!);
+    return r.rows.map((row) => mapGrant(asRecord(row)));
   }
 
   async listPendingGrants(orgId: string): Promise<HostedGrantRecord[]> {
@@ -491,13 +590,14 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM grants WHERE org_id=$1 AND status='pending' ORDER BY created_at DESC",
       [orgId],
     );
-    return r.rows.map((row) => mapGrant(row)!);
+    return r.rows.map((row) => mapGrant(asRecord(row)));
   }
 
   async updateGrant(row: HostedGrantRecord): Promise<void> {
     await this.#pool.query(
       `UPDATE grants SET status=$1, policy=$2, expires_at=$3, approved_at=$4, consumed_at=$5,
-       item_id=$6, folder_id=$7, task_id=$8, task_description=$9 WHERE id=$10`,
+       item_id=$6, folder_id=$7, task_id=$8, task_description=$9,
+       methods=$10, path_prefixes=$11, hosts=$12, max_calls=$13, requested_scope_json=$14 WHERE id=$15`,
       [
         row.status,
         row.policy,
@@ -508,9 +608,26 @@ export class PostgresStore implements VaultStore {
         row.folderId,
         row.taskId,
         row.taskDescription,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        requestedScopeJson(row.requestedScope),
         row.id,
       ],
     );
+  }
+
+  async recordGrantCall(id: string, at: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      `UPDATE grants SET
+         calls_used = calls_used + 1,
+         status = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN 'consumed' ELSE status END,
+         consumed_at = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN $1 ELSE consumed_at END
+       WHERE id=$2 AND status='active' AND (max_calls IS NULL OR calls_used < max_calls)`,
+      [at, id],
+    );
+    return r.rowCount === 1;
   }
 
   async consumeGrant(id: string, consumedAt: string): Promise<boolean> {
@@ -539,7 +656,7 @@ export class PostgresStore implements VaultStore {
 
   async getChallenge(id: string): Promise<ApprovalChallengeRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM approval_challenges WHERE id=$1", [id]);
-    return mapChallenge(r.rows[0]);
+    return opt(r.rows[0], mapChallenge);
   }
 
   async getChallengeByGrant(grantId: string): Promise<ApprovalChallengeRecord | undefined> {
@@ -547,7 +664,7 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM approval_challenges WHERE grant_id=$1 ORDER BY expires_at DESC LIMIT 1",
       [grantId],
     );
-    return mapChallenge(r.rows[0]);
+    return opt(r.rows[0], mapChallenge);
   }
 
   async getChallengeByGrantKind(
@@ -558,7 +675,7 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM approval_challenges WHERE grant_id=$1 AND kind=$2 ORDER BY expires_at DESC LIMIT 1",
       [grantId, kind],
     );
-    return mapChallenge(r.rows[0]);
+    return opt(r.rows[0], mapChallenge);
   }
 
   async updateChallenge(row: ApprovalChallengeRecord): Promise<void> {
@@ -616,10 +733,7 @@ export class PostgresStore implements VaultStore {
   async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
     try {
       await this.#pool.query(
-        `INSERT INTO need_items (
-          id, org_id, client_id, environment_id, suggested_name, host, task_description,
-          status, item_id, grant_id, expires_at, created_at, fulfilled_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        `INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(13, "pg")})`,
         needValues(row),
       );
       return row;
@@ -639,7 +753,7 @@ export class PostgresStore implements VaultStore {
 
   async getNeed(id: string): Promise<NeedItemRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM need_items WHERE id = $1", [id]);
-    return mapNeed(r.rows[0]);
+    return opt(r.rows[0], mapNeed);
   }
 
   async getPendingNeed(input: {
@@ -654,7 +768,7 @@ export class PostgresStore implements VaultStore {
        AND suggested_name=$4 AND host=$5 AND status='pending'`,
       [input.orgId, input.clientId, input.environmentId, input.suggestedName, input.host],
     );
-    return mapNeed(r.rows[0]);
+    return opt(r.rows[0], mapNeed);
   }
 
   async listPendingNeeds(orgId: string): Promise<NeedItemRecord[]> {
@@ -662,7 +776,7 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM need_items WHERE org_id=$1 AND status='pending' ORDER BY created_at DESC",
       [orgId],
     );
-    return r.rows.map((row) => mapNeed(row)!);
+    return r.rows.map((row) => mapNeed(asRecord(row)));
   }
 
   async cancelNeed(id: string): Promise<void> {
@@ -684,19 +798,10 @@ export class PostgresStore implements VaultStore {
     try {
       await client.query("BEGIN");
       await client.query(
-        `INSERT INTO items (
-          id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
-          inject, iv, ciphertext, tag, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        `INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "pg")})`,
         itemValues(input.item),
       );
-      await client.query(
-        `INSERT INTO grants (
-          id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-          expires_at, created_at, approved_at, consumed_at, task_id, task_description
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-        grantValues(input.grant),
-      );
+      await client.query(GRANT_INSERT_SQL, grantValues(input.grant));
       const claimed = await client.query(
         `UPDATE need_items SET status='fulfilled', item_id=$1, grant_id=$2, fulfilled_at=$3
          WHERE id=$4 AND status='pending'`,
@@ -804,16 +909,9 @@ export class PostgresStore implements VaultStore {
     });
   }
 
-  async listMembers(orgId: string): Promise<MemberRecord[]> {
-    const r = await this.#pool.query("SELECT * FROM org_members WHERE org_id = $1", [orgId]);
-    return r.rows.map((row) => {
-      const rec = asRecord(row);
-      return {
-        orgId: String(rec.org_id),
-        userId: String(rec.user_id),
-        role: rec.role as MemberRecord["role"],
-      };
-    });
+  async listMembers(orgId: string): Promise<MemberRow[]> {
+    const r = await this.#pool.query("SELECT * FROM org_members WHERE org_id = $1 ORDER BY joined_at, user_id", [orgId]);
+    return r.rows.map((row) => mapMember(asRecord(row)));
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
@@ -828,11 +926,24 @@ export class PostgresStore implements VaultStore {
     });
   }
 
+  async listMemberEmails(orgId: string): Promise<string[]> {
+    const r = await this.#pool.query(
+      `SELECT u.email AS email FROM org_members m JOIN users u ON u.id = m.user_id
+       WHERE m.org_id = $1 AND u.email_verified_at IS NOT NULL ORDER BY u.email`,
+      [orgId],
+    );
+    return r.rows.map((row) => String(asRecord(row).email));
+  }
+
   async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
+    const idx = oidcPayloadIndex(row.payload);
     await this.#pool.query(
-      `INSERT INTO oidc_payloads (id, kind, payload, expires_at) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
-      [row.id, row.kind, row.payload, row.expiresAt],
+      `INSERT INTO oidc_payloads (id, kind, payload, expires_at, uid, user_code, grant_id, client_id, account_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at,
+         uid = excluded.uid, user_code = excluded.user_code, grant_id = excluded.grant_id,
+         client_id = excluded.client_id, account_id = excluded.account_id`,
+      [row.id, row.kind, row.payload, row.expiresAt, idx.uid, idx.userCode, idx.grantId, idx.clientId, idx.accountId],
     );
   }
 
@@ -869,14 +980,14 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async getUser(id: string): Promise<UserRecord | undefined> {
+  async getUser(id: string): Promise<UserRow | undefined> {
     const r = await this.#pool.query("SELECT * FROM users WHERE id = $1", [id]);
-    return r.rows[0] ? mapUserPg(asRecord(r.rows[0])) : undefined;
+    return r.rows[0] ? mapUser(asRecord(r.rows[0])) : undefined;
   }
 
-  async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+  async getUserByEmail(email: string): Promise<UserRow | undefined> {
     const r = await this.#pool.query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
-    return r.rows[0] ? mapUserPg(asRecord(r.rows[0])) : undefined;
+    return r.rows[0] ? mapUser(asRecord(r.rows[0])) : undefined;
   }
 
   async updateUser(row: UserRecord): Promise<void> {
@@ -899,7 +1010,7 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM email_otp_challenges WHERE email = $1 ORDER BY sent_at DESC LIMIT 1",
       [email.toLowerCase()],
     );
-    return r.rows[0] ? mapOtpPg(asRecord(r.rows[0])) : undefined;
+    return r.rows[0] ? mapOtp(asRecord(r.rows[0])) : undefined;
   }
 
   async updateEmailOtp(row: EmailOtpRecord): Promise<void> {
@@ -940,16 +1051,16 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async insertSession(row: OperatorSessionRecord): Promise<void> {
+  async insertSession(row: OperatorSessionRow): Promise<void> {
     await this.#pool.query(
-      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ($1,$2,$3,$4,$5)",
-      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt],
+      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at, active_org_id) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt, row.activeOrgId ?? null],
     );
   }
 
-  async getSession(idHash: string): Promise<OperatorSessionRecord | undefined> {
+  async getSession(idHash: string): Promise<OperatorSessionRow | undefined> {
     const r = await this.#pool.query("SELECT * FROM operator_sessions WHERE id_hash = $1", [idHash]);
-    return r.rows[0] ? mapSessPg(asRecord(r.rows[0])) : undefined;
+    return r.rows[0] ? mapSess(asRecord(r.rows[0])) : undefined;
   }
 
   async deleteSession(idHash: string): Promise<void> {
@@ -960,12 +1071,12 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query("DELETE FROM operator_sessions WHERE user_id = $1 AND id_hash != $2", [userId, keepHash]);
   }
 
-  async listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]> {
+  async listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]> {
     const r = await this.#pool.query(
       `SELECT s.* FROM operator_sessions s JOIN org_members m ON m.user_id = s.user_id WHERE m.org_id = $1`,
       [orgId],
     );
-    return r.rows.map((row) => mapSessPg(asRecord(row)));
+    return r.rows.map((row) => mapSess(asRecord(row)));
   }
 
   async touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void> {
@@ -974,6 +1085,63 @@ export class PostgresStore implements VaultStore {
       expiresAt,
       idHash,
     ]);
+  }
+
+  async updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void> {
+    await this.#pool.query(
+      `UPDATE users SET totp_failures=$1, totp_locked_until=$2, totp_pending_wrapped_iv=$3,
+       totp_pending_wrapped_ciphertext=$4, totp_pending_wrapped_tag=$5, totp_pending_at=$6 WHERE id=$7`,
+      [
+        patch.totpFailures,
+        patch.totpLockedUntil,
+        patch.totpPendingWrappedIv,
+        patch.totpPendingWrappedCiphertext,
+        patch.totpPendingWrappedTag,
+        patch.totpPendingAt,
+        userId,
+      ],
+    );
+  }
+
+  async listUsersWithTotp(): Promise<UserRow[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM users WHERE totp_wrapped_iv IS NOT NULL OR totp_pending_wrapped_iv IS NOT NULL",
+    );
+    return r.rows.map((row) => mapUser(asRecord(row)));
+  }
+
+  async deleteUnusedBackupCodes(userId: string): Promise<void> {
+    await this.#pool.query("DELETE FROM backup_codes WHERE user_id = $1 AND used_at IS NULL", [userId]);
+  }
+
+  async deletePendingSessions(userId: string, keepHash: string): Promise<void> {
+    await this.#pool.query(
+      "DELETE FROM operator_sessions WHERE user_id = $1 AND mfa_at IS NULL AND id_hash != $2",
+      [userId, keepHash],
+    );
+  }
+
+  async getIdentityKey(id: string): Promise<IdentityKeyRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM identity_keys WHERE id = $1", [id]);
+    return r.rows[0] ? mapIdentityKey(asRecord(r.rows[0])) : undefined;
+  }
+
+  async insertIdentityKey(row: IdentityKeyRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO identity_keys (id, wrapped_iv, wrapped_ciphertext, wrapped_tag, created_at)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
+      [row.id, row.wrappedIv, row.wrappedCiphertext, row.wrappedTag, row.createdAt],
+    );
+  }
+
+  async updateIdentityKey(
+    id: string,
+    patch: Pick<IdentityKeyRecord, "wrappedIv" | "wrappedCiphertext" | "wrappedTag">,
+  ): Promise<void> {
+    await this.#pool.query(
+      "UPDATE identity_keys SET wrapped_iv=$1, wrapped_ciphertext=$2, wrapped_tag=$3 WHERE id=$4",
+      [patch.wrappedIv, patch.wrappedCiphertext, patch.wrappedTag, id],
+    );
   }
 
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
@@ -992,12 +1160,12 @@ export class PostgresStore implements VaultStore {
       "SELECT * FROM access_events WHERE org_id = $1 ORDER BY issued_at DESC LIMIT $2",
       [orgId, limit],
     );
-    return r.rows.map((row) => mapAccessPg(asRecord(row)));
+    return r.rows.map((row) => mapAccess(asRecord(row)));
   }
 
   async getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM access_events WHERE jti_hash = $1", [jtiHash]);
-    return r.rows[0] ? mapAccessPg(asRecord(r.rows[0])) : undefined;
+    return r.rows[0] ? mapAccess(asRecord(r.rows[0])) : undefined;
   }
 
   async revokeAccessEventsForClient(clientId: string, at: string): Promise<void> {
@@ -1011,7 +1179,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query("UPDATE access_events SET revoked_at = $1 WHERE jti_hash = $2", [at, jtiHash]);
   }
 
-  async setClientRevoked(id: string, at: string): Promise<void> {
+  async setClientRevoked(id: string, at: string | null): Promise<void> {
     await this.#pool.query("UPDATE clients SET revoked_at = $1 WHERE id = $2", [at, id]);
   }
 
@@ -1025,219 +1193,131 @@ export class PostgresStore implements VaultStore {
   async setClientLastTokenAt(id: string, at: string): Promise<void> {
     await this.#pool.query("UPDATE clients SET last_token_at = $1 WHERE id = $2", [at, id]);
   }
-}
 
-function mapEnv(row: unknown): EnvironmentRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    vaultId: String(rec.vault_id),
-    name: rec.name as EnvironmentRecord["name"],
-  };
-}
+  async findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined> {
+    const r = await this.#pool.query(
+      `SELECT * FROM clients WHERE org_id = $1 AND (oauth_client_id = $2 OR clerk_oauth_user_id = $2)
+       ORDER BY (revoked_at IS NOT NULL), id LIMIT 1`,
+      [orgId, oauthClientId],
+    );
+    return opt(r.rows[0], mapClientRow);
+  }
 
-function mapFolder(row: unknown): FolderRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return { id: String(rec.id), environmentId: String(rec.environment_id), name: String(rec.name) };
-}
+  async setClientConsentedBy(id: string, userId: string): Promise<void> {
+    await this.#pool.query(
+      "UPDATE clients SET consented_by_user_id = $1 WHERE id = $2 AND consented_by_user_id IS NULL",
+      [userId, id],
+    );
+  }
 
-function mapItem(row: unknown): ItemRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    environmentId: String(rec.environment_id),
-    folderId: rec.folder_id == null ? null : String(rec.folder_id),
-    kind: rec.kind as ItemRecord["kind"],
-    name: String(rec.name),
-    last4: String(rec.last4),
-    username: rec.username == null ? null : String(rec.username),
-    allowedHostsJson: String(rec.allowed_hosts_json),
-    inject: String(rec.inject),
-    iv: String(rec.iv),
-    ciphertext: String(rec.ciphertext),
-    tag: String(rec.tag),
-    createdAt: String(rec.created_at),
-    updatedAt: String(rec.updated_at),
-  };
-}
+  async findOidcPayloadByUid(kind: string, uid: string): Promise<OidcPayloadRow | undefined> {
+    const r = await this.#pool.query(
+      "SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = $1 AND uid = $2 LIMIT 1",
+      [kind, uid],
+    );
+    return r.rows[0] ? mapOidcRow(asRecord(r.rows[0])) : undefined;
+  }
 
-function mapClient(row: unknown): ClientRecord | undefined {
-  if (!row) return undefined;
-  return mapClientRow(asRecord(row));
-}
+  async findOidcPayloadByUserCode(kind: string, userCode: string): Promise<OidcPayloadRow | undefined> {
+    const r = await this.#pool.query(
+      "SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = $1 AND user_code = $2 LIMIT 1",
+      [kind, userCode],
+    );
+    return r.rows[0] ? mapOidcRow(asRecord(r.rows[0])) : undefined;
+  }
 
-function mapPolicy(row: unknown): PolicyRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    orgId: String(rec.org_id),
-    clientId: String(rec.client_id),
-    itemId: rec.item_id == null ? null : String(rec.item_id),
-    folderId: rec.folder_id == null ? null : String(rec.folder_id),
-    environmentId: String(rec.environment_id),
-    kind: rec.kind as PolicyRecord["kind"],
-    createdAt: String(rec.created_at),
-  };
-}
+  async deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void> {
+    await this.#pool.query("DELETE FROM oidc_payloads WHERE kind = $1 AND grant_id = $2", [kind, grantId]);
+  }
 
-function mapGrant(row: unknown): HostedGrantRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    orgId: String(rec.org_id),
-    clientId: String(rec.client_id),
-    itemId: rec.item_id == null ? null : String(rec.item_id),
-    folderId: rec.folder_id == null ? null : String(rec.folder_id),
-    environmentId: String(rec.environment_id),
-    policy: rec.policy as HostedGrantRecord["policy"],
-    status: rec.status as HostedGrantRecord["status"],
-    expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
-    createdAt: String(rec.created_at),
-    approvedAt: rec.approved_at == null ? null : String(rec.approved_at),
-    consumedAt: rec.consumed_at == null ? null : String(rec.consumed_at),
-    taskId: rec.task_id == null ? null : String(rec.task_id),
-    taskDescription: rec.task_description == null ? null : String(rec.task_description),
-  };
-}
+  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+    if (clientIds.length === 0) return;
+    await this.#pool.query(
+      `DELETE FROM oidc_payloads WHERE kind = $1 AND client_id = ANY($2::text[])
+       AND (($3::text IS NULL AND account_id IS NULL) OR account_id = $3)`,
+      [kind, clientIds, accountId],
+    );
+  }
 
-function mapChallenge(row: unknown): ApprovalChallengeRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    grantId: String(rec.grant_id),
-    codeHash: String(rec.code_hash),
-    expiresAt: String(rec.expires_at),
-    attempts: Number(rec.attempts),
-    kind: rec.kind as ApprovalChallengeRecord["kind"],
-  };
-}
+  async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {
+    const r = await this.#pool.query(
+      "DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at <= $1",
+      [nowIso],
+    );
+    return r.rowCount ?? 0;
+  }
 
-function mapUserPg(rec: Record<string, unknown>): UserRecord {
-  return {
-    id: String(rec.id),
-    email: String(rec.email),
-    emailVerifiedAt: rec.email_verified_at == null ? null : String(rec.email_verified_at),
-    totpWrappedIv: rec.totp_wrapped_iv == null ? null : String(rec.totp_wrapped_iv),
-    totpWrappedCiphertext: rec.totp_wrapped_ciphertext == null ? null : String(rec.totp_wrapped_ciphertext),
-    totpWrappedTag: rec.totp_wrapped_tag == null ? null : String(rec.totp_wrapped_tag),
-    totpLastStep: rec.totp_last_step == null ? null : Number(rec.totp_last_step),
-    createdAt: String(rec.created_at),
-  };
-}
+  /* ---- team (3.7) and plan limits (3.9) ---- */
 
-function mapOtpPg(rec: Record<string, unknown>): EmailOtpRecord {
-  return {
-    id: String(rec.id),
-    email: String(rec.email),
-    codeScrypt: String(rec.code_scrypt),
-    expiresAt: String(rec.expires_at),
-    attempts: Number(rec.attempts),
-    sentAt: String(rec.sent_at),
-  };
-}
+  async removeMember(orgId: string, userId: string): Promise<void> {
+    await this.#pool.query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", [orgId, userId]);
+    await this.#pool.query(
+      "UPDATE operator_sessions SET active_org_id = NULL WHERE user_id = $1 AND active_org_id = $2",
+      [userId, orgId],
+    );
+  }
 
-function mapSessPg(rec: Record<string, unknown>): OperatorSessionRecord {
-  return {
-    idHash: String(rec.id_hash),
-    userId: String(rec.user_id),
-    createdAt: String(rec.created_at),
-    lastSeenAt: String(rec.last_seen_at),
-    expiresAt: String(rec.expires_at),
-  };
-}
+  async updateMemberRole(orgId: string, userId: string, role: MemberRow["role"]): Promise<void> {
+    await this.#pool.query("UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3", [role, orgId, userId]);
+  }
 
-function mapAccessPg(rec: Record<string, unknown>): AccessEventRecord {
-  return {
-    id: String(rec.id),
-    orgId: String(rec.org_id),
-    clientId: rec.client_id == null ? null : String(rec.client_id),
-    actorUserId: rec.actor_user_id == null ? null : String(rec.actor_user_id),
-    kind: rec.kind as AccessEventRecord["kind"],
-    jtiHash: String(rec.jti_hash),
-    issuedAt: String(rec.issued_at),
-    expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
-    revokedAt: rec.revoked_at == null ? null : String(rec.revoked_at),
-  };
-}
+  async insertInvite(row: InviteRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [row.id, row.orgId, row.email, row.role, row.tokenHash, row.invitedBy, row.createdAt, row.expiresAt, row.acceptedAt],
+    );
+  }
 
-function mapNeed(row: unknown): NeedItemRecord | undefined {
-  if (!row) return undefined;
-  const rec = asRecord(row);
-  return {
-    id: String(rec.id),
-    orgId: String(rec.org_id),
-    clientId: String(rec.client_id),
-    environmentId: String(rec.environment_id),
-    suggestedName: String(rec.suggested_name),
-    host: String(rec.host),
-    taskDescription: rec.task_description == null ? null : String(rec.task_description),
-    status: rec.status as NeedItemRecord["status"],
-    itemId: rec.item_id == null ? null : String(rec.item_id),
-    grantId: rec.grant_id == null ? null : String(rec.grant_id),
-    expiresAt: String(rec.expires_at),
-    createdAt: String(rec.created_at),
-    fulfilledAt: rec.fulfilled_at == null ? null : String(rec.fulfilled_at),
-  };
-}
+  async getInvite(id: string): Promise<InviteRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM org_invites WHERE id = $1", [id]);
+    return r.rows[0] ? mapInvite(asRecord(r.rows[0])) : undefined;
+  }
 
-function needValues(row: NeedItemRecord): unknown[] {
-  return [
-    row.id,
-    row.orgId,
-    row.clientId,
-    row.environmentId,
-    row.suggestedName,
-    row.host,
-    row.taskDescription,
-    row.status,
-    row.itemId,
-    row.grantId,
-    row.expiresAt,
-    row.createdAt,
-    row.fulfilledAt,
-  ];
-}
+  async getInviteByTokenHash(tokenHash: string): Promise<InviteRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM org_invites WHERE token_hash = $1", [tokenHash]);
+    return r.rows[0] ? mapInvite(asRecord(r.rows[0])) : undefined;
+  }
 
-function itemValues(row: ItemRecord): unknown[] {
-  return [
-    row.id,
-    row.environmentId,
-    row.folderId,
-    row.kind,
-    row.name,
-    row.last4,
-    row.username,
-    row.allowedHostsJson,
-    row.inject,
-    row.iv,
-    row.ciphertext,
-    row.tag,
-    row.createdAt,
-    row.updatedAt,
-  ];
-}
+  async listInvites(orgId: string): Promise<InviteRecord[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM org_invites WHERE org_id = $1 AND accepted_at IS NULL ORDER BY created_at DESC",
+      [orgId],
+    );
+    return r.rows.map((row) => mapInvite(asRecord(row)));
+  }
 
-function grantValues(row: HostedGrantRecord): unknown[] {
-  return [
-    row.id,
-    row.orgId,
-    row.clientId,
-    row.itemId,
-    row.folderId,
-    row.environmentId,
-    row.policy,
-    row.status,
-    row.expiresAt,
-    row.createdAt,
-    row.approvedAt,
-    row.consumedAt,
-    row.taskId,
-    row.taskDescription,
-  ];
+  async acceptInvite(id: string, acceptedAt: string): Promise<void> {
+    await this.#pool.query("UPDATE org_invites SET accepted_at = $1 WHERE id = $2 AND accepted_at IS NULL", [
+      acceptedAt,
+      id,
+    ]);
+  }
+
+  async deleteInvite(id: string): Promise<void> {
+    await this.#pool.query("DELETE FROM org_invites WHERE id = $1", [id]);
+  }
+
+  async setSessionActiveOrg(idHash: string, orgId: string | null): Promise<void> {
+    await this.#pool.query("UPDATE operator_sessions SET active_org_id = $1 WHERE id_hash = $2", [orgId, idHash]);
+  }
+
+  async countAuditSince(orgId: string, action: string, sinceIso: string): Promise<number> {
+    const r = await this.#pool.query(
+      "SELECT COUNT(*)::int AS n FROM audit WHERE org_id = $1 AND action = $2 AND at >= $3",
+      [orgId, action, sinceIso],
+    );
+    return Number(asRecord(r.rows[0] ?? { n: 0 }).n);
+  }
+
+  async countItemsForOrg(orgId: string): Promise<number> {
+    const r = await this.#pool.query(
+      `SELECT COUNT(*)::int AS n FROM items i
+       JOIN environments e ON e.id = i.environment_id
+       JOIN vaults v ON v.id = e.vault_id
+       WHERE v.org_id = $1`,
+      [orgId],
+    );
+    return Number(asRecord(r.rows[0] ?? { n: 0 }).n);
+  }
 }

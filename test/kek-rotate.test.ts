@@ -49,7 +49,7 @@ test("rotateKek re-wraps DEKs and resumes after a mid-org crash", async () => {
     const kernelB = new HostedKernel({ store, kek: kekB });
     const items = await kernelB.listItems(a.orgId, "staging");
     assert.equal(items[0]?.last4, CANARY.slice(-4));
-    const decrypted = await kernelB.decryptItem(a.orgId, items[0]!.id);
+    const decrypted = await kernelB.decryptItem(a.orgId, items[0].id);
     assert.equal(decrypted.secret, CANARY);
     assert.ok(b.orgId);
   } finally {

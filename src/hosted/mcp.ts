@@ -3,13 +3,19 @@
  * Never returns secret values. There is no get_secret.
  */
 import { MCP_SERVER_NAME } from "../brand.ts";
+import { packageVersion } from "./observe.ts";
 import {
   HOSTED_TOOL_DESCRIPTIONS,
   HOSTED_TOOL_PARAM_DESCRIPTIONS,
   MCP_INSTRUCTIONS_HOSTED,
 } from "../prompts/mcp-hosted.ts";
 import { assertSafePublicObject } from "../redact.ts";
-import type { HostedGrantRecord, ItemPublic, VaultEnvName } from "../hosted-types.ts";
+import {
+  publicGrantScope,
+  type HostedGrantRecord,
+  type ItemPublic,
+  type VaultEnvName,
+} from "../hosted-types.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
@@ -19,7 +25,7 @@ import { attachMcpNext } from "./mcp-steer.ts";
 
 export const HOSTED_MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
-  version: "0.3.4",
+  version: packageVersion(),
 } as const;
 
 export const HOSTED_MCP_PROTOCOL = "2024-11-05";
@@ -29,8 +35,16 @@ export const HOSTED_MCP_TOOL_NAMES = [
   "find_items",
   "request_grant",
   "list_grants",
-  "http.request",
+  "http_request",
 ] as const;
+
+/**
+ * Old name of `http_request`. Hosts with `^[a-zA-Z0-9_-]+$` tool-name grammars rejected the dot.
+ * Accepted on `tools/call` for one release; never advertised.
+ */
+export const HOSTED_MCP_TOOL_ALIASES: Record<string, (typeof HOSTED_MCP_TOOL_NAMES)[number]> = {
+  "http.request": "http_request",
+};
 
 const FORBIDDEN = ["get_secret", "read_value", "read_secret", "reveal_secret", "decrypt_secret", "revoke_grant"];
 
@@ -45,7 +59,12 @@ export type HostedMcpTool = {
   name: (typeof HOSTED_MCP_TOOL_NAMES)[number];
   description: string;
   inputSchema: JsonSchema;
-  annotations?: { title: string; readOnlyHint?: boolean; openWorldHint?: boolean };
+  annotations?: {
+    title: string;
+    readOnlyHint?: boolean;
+    openWorldHint?: boolean;
+    destructiveHint?: boolean;
+  };
 };
 
 export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
@@ -55,16 +74,16 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
     annotations: { title: "List stored credential names", readOnlyHint: true },
     inputSchema: {
       type: "object",
-      properties: {
-        environment: { type: "string", enum: ["staging", "production"] },
-      },
+      properties: {},
       additionalProperties: false,
     },
   },
   {
     name: "find_items",
-    description: HOSTED_TOOL_DESCRIPTIONS.find_items,
-    annotations: { title: "Find a credential by API host" },
+    // Optional: http_request finds the item itself. Kept for hosts that want to look before calling.
+    // Not readOnlyHint: a miss records a need row the operator sees in the inbox.
+    description: `Optional. ${HOSTED_TOOL_DESCRIPTIONS.find_items}`,
+    annotations: { title: "Find a credential by API host (optional)" },
     inputSchema: {
       type: "object",
       properties: {
@@ -74,7 +93,6 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
         },
-        environment: { type: "string", enum: ["staging", "production"] },
       },
       additionalProperties: false,
     },
@@ -87,11 +105,25 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
       type: "object",
       properties: {
         item_name: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.grant_item_name },
-        environment: { type: "string", enum: ["staging", "production"] },
         task_id: { type: "string" },
         task_description: {
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.grant_task_description,
+        },
+        host: {
+          type: "string",
+          description:
+            "API hostname the call will go to (api.stripe.com). Must be one of the item's allowed hosts. Shown to the operator; a one-click approval is limited to it.",
+        },
+        method: {
+          type: "string",
+          enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          description: "HTTPS method the call will use. Shown to the operator; a one-click approval is limited to it.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Path the call will use (/v1/balance). Shown to the operator; a one-click approval is limited to paths under it.",
         },
       },
       required: ["item_name"],
@@ -109,9 +141,13 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
     },
   },
   {
-    name: "http.request",
-    description: HOSTED_TOOL_DESCRIPTIONS["http.request"],
-    annotations: { title: "Call an API with a Botpasses credential", openWorldHint: true },
+    name: "http_request",
+    description: HOSTED_TOOL_DESCRIPTIONS.http_request,
+    annotations: {
+      title: "Call an API with a Botpasses credential",
+      openWorldHint: true,
+      destructiveHint: true,
+    },
     inputSchema: {
       type: "object",
       properties: {
@@ -134,7 +170,13 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
         },
-        environment: { type: "string", enum: ["staging", "production"] },
+        timeout_ms: {
+          type: "number",
+          minimum: 1000,
+          maximum: 30000,
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_timeout_ms,
+        },
+        dry_run: { type: "boolean", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_dry_run },
       },
       required: ["method", "path"],
       additionalProperties: false,
@@ -154,7 +196,8 @@ export type HostedMcpDeps = {
   resolveAddresses?: (hostname: string) => Promise<string[]>;
 };
 
-function publicGrant(g: HostedGrantRecord) {
+/** Public grant fields on MCP results. `grant_scope` is null when the grant is unrestricted. */
+export function publicGrant(g: HostedGrantRecord) {
   return {
     grant_id: g.id,
     policy: g.policy,
@@ -166,10 +209,13 @@ function publicGrant(g: HostedGrantRecord) {
     consumed_at: g.consumedAt,
     task_id: g.taskId,
     task_description: g.taskDescription,
+    requested_scope: g.requestedScope,
+    grant_scope: publicGrantScope(g),
   };
 }
 
-function envOf(principal: ModelPrincipal, _args: Record<string, unknown>): VaultEnvName {
+/** Environment is the client's binding. An `environment` argument is accepted and ignored. */
+function envOf(principal: ModelPrincipal): VaultEnvName {
   return principal.environment;
 }
 
@@ -188,8 +234,9 @@ export async function callHostedMcpTool(
   if (FORBIDDEN.includes(name) || name.includes("value") || name.includes("decrypt")) {
     return fail(`Tool ${name} is not available. Vault MCP never returns secret values.`);
   }
+  const canonical = HOSTED_MCP_TOOL_ALIASES[name] ?? name;
   try {
-    const payload = attachMcpNext(await dispatch(deps, name, args));
+    const payload = attachMcpNext(await dispatch(deps, canonical, args));
     assertSafePublicObject(`mcp:${name}`, payload);
     return mcpPayloadResult(payload);
   } catch (err) {
@@ -209,7 +256,7 @@ async function dispatch(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const { kernel, principal } = deps;
-  const environment = envOf(principal, args);
+  const environment = envOf(principal);
   switch (name) {
     case "list_items": {
       const items: ItemPublic[] = await kernel.listItems(principal.orgId, environment);
@@ -221,6 +268,7 @@ async function dispatch(
           username: i.username,
           environment: i.environment,
           inject: i.inject,
+          allowed_hosts: i.allowedHosts,
         })),
       };
     }
@@ -238,6 +286,9 @@ async function dispatch(
     }
     case "request_grant": {
       const itemName = str(args, "item_name");
+      const host = optional(args.host);
+      const method = optional(args.method);
+      const path = optional(args.path);
       const result = await kernel.requestGrant({
         orgId: principal.orgId,
         clientId: principal.clientId,
@@ -245,6 +296,7 @@ async function dispatch(
         environment,
         taskId: optional(args.task_id),
         taskDescription: optional(args.task_description),
+        request: host || method || path ? { host, method, path } : undefined,
       });
       return {
         ...publicGrant(result.grant),
@@ -257,7 +309,7 @@ async function dispatch(
       const grants = await kernel.listClientGrants(principal.orgId, principal.clientId);
       return { grants: grants.map(publicGrant) };
     }
-    case "http.request": {
+    case "http_request": {
       return runHttpRequest(deps, args, environment);
     }
     default:
@@ -283,7 +335,7 @@ function optional(value: unknown): string | undefined {
 function mcpPayloadResult(payload: unknown): McpCallResult {
   const status =
     payload && typeof payload === "object" && "status" in payload
-      ? (payload as { status: unknown }).status
+      ? payload.status
       : undefined;
   const blocking = status === "host_mismatch";
   return {

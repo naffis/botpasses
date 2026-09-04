@@ -1,4 +1,7 @@
--- Hosted grant vault schema (Neon Postgres). Applied by PostgresStore.migrate().
+-- Hosted grant vault schema (Neon Postgres).
+-- Applied in order by scripts/migrate.ts (Fly release_command, DATABASE_URL_DIRECT) and
+-- recorded in schema_migrations. src/store/schema.ts holds the same DDL as string constants
+-- for SQLite and for the dev/test bootstrap path; test/migrations.test.ts checks parity.
 CREATE TABLE IF NOT EXISTS orgs (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

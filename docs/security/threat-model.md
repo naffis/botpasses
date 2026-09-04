@@ -1,6 +1,6 @@
 # Botpasses threat model
 
-Living document. Trust decision: [ADR 0003](../adr/0003-grant-vault-trust-model.md). KEK wrap: [ADR 0004](../adr/0004-kms-wrapped-kek.md).
+Living document. Trust decision: [ADR 0006](../adr/0006-grant-vault-trust-model.md). KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md).
 
 Botpasses is a **grant-vault**. The model never sees secret values. The hosted process decrypts at approved inject. This is not a human password manager and it is not client-side encryption that the vendor cannot undo.
 
@@ -43,7 +43,7 @@ Local: `VAULT_MASTER_KEY` / `master.key` encrypts sqlite rows. AAD is the secret
 | CLI `list` / `grant` / `audit` | **No** |
 | Audit table / email / inbox | **No** |
 | Unauthenticated `GET /collect/:id` | **No** (shell only) |
-| `vault run` child env / `POST /runtime/resolve` / connector origin | **Yes** — inject |
+| `vault run` child env / `POST /runtime/resolve` / connector origin | **Yes**. That is the inject |
 | Model context / chat transcript | **Must not.** Tests fail if a canary appears |
 
 ## Expand/contract

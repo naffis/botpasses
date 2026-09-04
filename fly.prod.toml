@@ -4,6 +4,15 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
+# DDL runs once per release, before the new Machine starts, over DATABASE_URL_DIRECT
+# (falls back to DATABASE_URL). Boot itself no longer runs schema changes.
+[deploy]
+  release_command = "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/migrate.ts"
+
+# One Machine per app. In-process TOTP enrollment state and per-IP limiters are not shared;
+# do not `fly scale count` above 1 until they are store-backed.
+kill_timeout = "30s"
+
 [env]
   VAULT_MODE = "hosted"
   VAULT_DEPLOY_PLANE = "production"
@@ -20,6 +29,13 @@ primary_region = "iad"
 
   [http_service.http_options]
     idle_timeout = 600
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/ready"
 
 [[vm]]
   size = "shared-cpu-1x"

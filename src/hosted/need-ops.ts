@@ -2,20 +2,22 @@ import { randomUUID } from "node:crypto";
 import { encrypt } from "../crypto.ts";
 import { last4, normalizeSecretName, suggestedNameFromHost } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
-import type {
-  ClientRecord,
-  FindItemsResult,
-  HostedGrantRecord,
-  ItemKind,
-  ItemPublic,
-  ItemRecord,
-  NeedPublic,
-  PolicyRecord,
-  VaultEnvName,
+import {
+  scopeFromPolicy,
+  type ClientRecord,
+  type FindItemsResult,
+  type HostedGrantRecord,
+  type ItemKind,
+  type ItemPublic,
+  type ItemRecord,
+  type NeedPublic,
+  type PolicyRecord,
+  type VaultEnvName,
 } from "../hosted-types.ts";
 import type { VaultStore } from "../store/types.ts";
 import { StoreConflictError } from "../store/conflict.ts";
 import { HttpError, NeedItemError, type NeedItemPayload } from "./errors.ts";
+import { itemAad } from "./item-aad.ts";
 import { matchFindItems, NEED_ITEM_MESSAGE } from "./need-match.ts";
 import { storedItemUsername } from "./store-form-fields.ts";
 import type { OrgRateLimiter } from "./rate-limit.ts";
@@ -34,6 +36,7 @@ export type NeedHost = {
   dekForOrg: (orgId: string) => Promise<Buffer>;
   clientInOrg: (orgId: string, clientId: string) => Promise<ClientRecord>;
   assertHosts: (hosts: string[]) => void;
+  assertPlanLimit: (orgId: string, kind: "credentials") => Promise<void>;
   assertPlane: (name: VaultEnvName) => void;
   standingFor: (
     orgId: string,
@@ -287,6 +290,7 @@ export async function fulfillNeed(
   if (need.status !== "pending") throw new HttpError(409, "Need is not pending");
   if (need.expiresAt < nowIso(host.now())) throw new HttpError(410, "Need expired");
   host.assertHosts(input.allowedHosts);
+  await host.assertPlanLimit(input.orgId, "credentials");
   const kind = input.kind ?? "secret";
   const rawName = (input.name ?? need.suggestedName).trim();
   let name: string;
@@ -316,9 +320,14 @@ export async function fulfillNeed(
     kind === "login"
       ? JSON.stringify({ username: input.username, password: input.value })
       : input.value;
-  const envelope = encrypt(payload, dek, input.orgId);
   const at = nowIso(host.now());
   const itemId = `itm_${randomUUID()}`;
+  const allowedHostsJson = JSON.stringify(input.allowedHosts);
+  const envelope = encrypt(
+    payload,
+    dek,
+    itemAad({ orgId: input.orgId, itemId, allowedHostsJson, inject: input.inject }),
+  );
   const item: ItemRecord = {
     id: itemId,
     environmentId: env.id,
@@ -327,7 +336,7 @@ export async function fulfillNeed(
     name,
     last4: last4(input.value),
     username: storedItemUsername(kind, input.inject, input.username),
-    allowedHostsJson: JSON.stringify(input.allowedHosts),
+    allowedHostsJson,
     inject: input.inject,
     iv: envelope.iv,
     ciphertext: envelope.ciphertext,
@@ -345,12 +354,13 @@ export async function fulfillNeed(
     environmentId: env.id,
     policy: standing ? standing.kind : "prompt",
     status: "active",
-    expiresAt: null,
     createdAt: at,
     approvedAt: at,
     consumedAt: null,
     taskId: null,
     taskDescription: need.taskDescription,
+    requestedScope: null,
+    ...scopeFromPolicy(standing),
   };
   try {
     await host.store.persistFulfill({

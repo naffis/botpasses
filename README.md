@@ -25,7 +25,7 @@ Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault 
 
 ## Hosted path
 
-Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http.request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
+Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http_request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http_request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
 
 Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` is `botpasses`.
 
@@ -33,7 +33,7 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 
 | Client | How |
 | --- | --- |
-| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. After it is connected, ask in plain language (get my Spotify profile). Grok should call `http.request` in the same turn. You approve in the inbox if asked. You do not need to name Botpasses tools. |
+| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. After it is connected, ask in plain language (get my Spotify profile). Grok should call `http_request` in the same turn. You approve in the inbox if asked. You do not need to name Botpasses tools. |
 | Grok Build | `grok mcp add --transport http botpasses https://<origin>/mcp --header "Authorization: Bearer ${BOTPASSES_MODEL_TOKEN}"` |
 | Claude | Remote connector named `Botpasses` + OAuth |
 | ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration on this origin |
@@ -61,7 +61,7 @@ npx vault mcp --user-jwt
 | `item_standing` | Later `request_grant` for that client+item is already active |
 | `folder_standing` | Owner only. Requires `confirm_name`. Later requests in that folder/env auto-activate |
 
-Approve via web inbox, Resend magic link, or the 8-digit code returned by `request_grant`.
+Approve via the web inbox, the email sent to every org member (magic link), or the 8-digit code returned by `request_grant`. The MCP tool was named `http.request` before; that name is an alias for one release.
 
 ## What this is not
 
@@ -72,17 +72,17 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 
 ## Threat model
 
-Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0003](docs/adr/0003-grant-vault-trust-model.md), [0004](docs/adr/0004-kms-wrapped-kek.md).
+Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0006](docs/adr/0006-grant-vault-trust-model.md), [0007](docs/adr/0007-kms-wrapped-kek.md).
 
 | Surface | Sees secret value? |
 | --- | --- |
-| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `http.request`) | **No** — names, last-4, username, grant status, `collect_url`, redacted origin body |
+| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `http_request`) | **No** — names, last-4, username, grant status, `collect_url`, redacted origin body |
 | Operator console / HTTP JSON (except trusted resolve) | **No** after submit — name + last-4 |
 | CLI `list` / `grant` / `audit` | **No** |
 | Audit table | **No** — no value column |
 | Items table | Ciphertext only (AES-256-GCM) |
 | `vault run` child env / trusted `/runtime/resolve` / connector origin | **Yes** — that is the inject |
-| Hosted Fly process / KMS role (after unwrap) | **Yes** at inject. Required for `http.request`. |
+| Hosted Fly process / KMS role (after unwrap) | **Yes** at inject. Required for `http_request`. |
 | Botpasses staff without KMS + DB | **No** |
 | Neon dump without the platform KEK / KMS | **No** |
 | Model context / chat transcript | **Must not.** Tests fail if a canary appears |
@@ -90,7 +90,7 @@ Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Deci
 ## Hard rules
 
 - No MCP/API tool returns secret **values** to the model.
-- MCP may list **names**, find by name or host, request a grant, report grant status, call `http.request`. On a miss it returns a Botpasses `collect_url` (no HMAC). The operator types the secret on that origin.
+- MCP may list **names**, find by name or host, request a grant, report grant status, call `http_request`. On a miss it returns a Botpasses `collect_url` (no HMAC). The operator types the secret on that origin.
 - Revoke is operator-only (`POST /api/grants/:id/revoke` or `vault revoke`).
 - Values stay in the vault process until inject.
 - Tests prove a mocked conversation cannot contain the stored secret after store, grant, or use.
@@ -181,13 +181,15 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 
 **DNS:** orange-cloud `A`/`AAAA` for `botpasses.com` and `staging.botpasses.com`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.com` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host), `DATABASE_URL_DIRECT` (migrations), `VAULT_SESSION_SECRET` (≥32 bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`. Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, or if `site/dist/index.html` is missing.
+**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
+
+**Schema:** `migrations/NNN_*.sql` is applied by `scripts/migrate.ts` as the Fly `release_command` (advisory lock, one transaction per file, recorded in `schema_migrations`). Boot runs no DDL once that table exists. Runbook: [docs/ops/migrations.md](docs/ops/migrations.md).
 
 **GitHub Actions secrets for `backup-prod.yml`:** `DATABASE_URL_DIRECT`, `BACKUP_KEY` (32-byte hex, not the vault KEK), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. The workflow reads repo Actions secrets, not Fly secrets. Missing R2 fails the job.
 
-Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong.
+Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong. **One Machine per app.** TOTP enrollment state and per-IP limiters live in process memory; do not `fly scale count` above 1 until they are store-backed (plan task 1.5).
 
-Push to `dev` runs tests then `flyctl deploy -c fly.staging.toml`. Production is `workflow_dispatch` after a named staging SHA is green. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT`, encrypts with `BACKUP_KEY` (not the vault KEK), and uploads to R2. The job fails if R2 secrets are missing. GitHub only runs `schedule` and `workflow_dispatch` from the default branch. Point that at `dev` after Actions secrets exist (see [docs/ops/restore.md](docs/ops/restore.md)). Do not enable the cron while those secrets are missing.
+`ci.yml` runs lint, typecheck, gitleaks, `npm audit` (root and `site/`), migrations twice against Postgres 16, and the suite with an 80 percent line-coverage gate. `deploy-staging.yml` deploys the SHA that `ci` just passed on `dev`. `deploy-prod.yml` is `workflow_dispatch` behind the `production` environment (required reviewer) and refuses a `staging_sha` that is not on `dev`. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT` with PGDG `pg_dump` 16, encrypts with `BACKUP_KEY` (not the vault KEK), uploads to R2, then a `backup-verify` job downloads and decrypts the object. GitHub only runs `schedule` and `workflow_dispatch` from the default branch; that branch must be `dev`, and `ci` fails on `dev` pushes until it is ([docs/ops/default-branch.md](docs/ops/default-branch.md)). Alerts: [docs/ops/alerts.md](docs/ops/alerts.md).
 
 AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
 
@@ -195,9 +197,9 @@ AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
 
 Public (this origin after `site` build):
 
-- [MCP tools](site/src/pages/docs/reference/mcp-tools.astro)
-- [HTTP API](site/src/pages/docs/reference/http-api.astro)
-- [CLI](site/src/pages/docs/reference/cli.astro)
+- [MCP tools](site/src/content/docs/reference/mcp-tools.md)
+- [HTTP API](site/src/content/docs/reference/http-api.md)
+- [CLI](site/src/content/docs/reference/cli.md)
 
 Internal (engineers, file pointers, local vs hosted):
 
@@ -207,17 +209,34 @@ Internal (engineers, file pointers, local vs hosted):
 ## Tests
 
 ```bash
+npm ci
+npm --prefix site ci && npm run site:build   # once; hosted tests serve site/dist
 npm test
 npm run typecheck
+npm run lint
 ```
 
-Isolation tests store a canary value and fail if it appears in MCP, REST model payloads, audit JSON, email HTML, or connector tool results. Hosted AC-10/AC-11 run when `DATABASE_URL` points at Postgres 16 (CI service).
+`npm test` fails fast with "run npm run site:build first" when `site/dist/index.html` is missing. Isolation tests store a canary value and fail if it appears in MCP, REST model payloads, audit JSON, email HTML, or connector tool results. Postgres tests (store parity, migrations, sweeps, AC-10/AC-11) run when `DATABASE_URL` points at Postgres 16 and skip otherwise.
+
+| Script | Does |
+| --- | --- |
+| `npm test` | Node test runner over `test/*.test.ts` (after `pretest`) |
+| `npm run test:pg` | Same, with `DATABASE_URL` defaulting to `postgres://vault:vault@localhost:5432/vault` |
+| `npm run test:coverage` | Suite with `--experimental-test-coverage`, fails under 80 percent lines |
+| `npm run lint` | eslint (typescript-eslint type-checked; `no-explicit-any`, `no-floating-promises`, `switch-exhaustiveness-check`) |
+| `npm run typecheck` | `tsc --noEmit` over `src`, `test`, `scripts` |
+| `npm run site:build` | Astro build plus Pagefind into `site/dist` |
+| `npm run migrate` | Apply `migrations/` to `DATABASE_URL_DIRECT` or `DATABASE_URL` |
+| `npm run dev` | Local `vault serve` with `--watch` |
+| `npm run hosted` | Hosted process (`VAULT_MODE=hosted` env required) |
 
 ## Layout
 
 ```
 src/           local kernel, hosted kernel, stores, MCP, HTTP
-test/          isolation, MCP, CLI, HTTP, hosted ACs
-migrations/    hosted SQL
+test/          isolation, MCP, CLI, HTTP, hosted ACs, migrations
+migrations/    hosted Postgres DDL, applied by scripts/migrate.ts (release_command)
+scripts/       migrate.ts, hosted-backup.ts (dump envelope), pretest.ts
+docs/ops/      runbooks: cutover, KEK rotation, migrations, restore, default branch, alerts
 fly.staging.toml / fly.prod.toml
 ```

@@ -13,3 +13,7 @@ master.key
 coverage/
 .DS_Store
 npm-debug.log*
+
+# Claude Code agent worktrees
+.claude/worktrees/
+.claude/.cache/
