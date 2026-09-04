@@ -14,7 +14,8 @@ import { hostedDeployPlane } from "../src/brand.ts";
 import { main } from "../src/cli.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { testAuthResolver } from "../src/hosted/auth.ts";
-import { approvalHmacError, hostedBootError } from "../src/hosted/boot.ts";
+import { approvalHmacError, assertHostedBoot, hostedBootError } from "../src/hosted/boot.ts";
+import { startHosted } from "../src/hosted/main.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
 import {
   createHostedServer,
@@ -54,6 +55,40 @@ test("N1: VAULT_AUTH_MODE=test is refused in hosted mode with or without a plane
   const noPlane = bootEnv({ VAULT_AUTH_MODE: "test" });
   delete noPlane.VAULT_DEPLOY_PLANE;
   assert.match(hostedBootError(noPlane) ?? "", /VAULT_AUTH_MODE/, "no plane is not a loophole");
+});
+
+test("R2-1: the hosted entry point refuses an unset VAULT_MODE with exit 78 instead of skipping every guard", async () => {
+  // Deliberately the worst env the guards exist for: no plane, no session secret, a bootstrap
+  // token with no flag, test auth. Local mode has nothing to check, so hostedBootError is silent.
+  const env = bootEnv({ VAULT_AUTH_MODE: "test", VAULT_BOOTSTRAP_TOKEN: "x".repeat(40), VAULT_SESSION_SECRET: "" });
+  delete env.VAULT_MODE;
+  delete env.VAULT_DEPLOY_PLANE;
+  assert.equal(hostedBootError(env), undefined, "hostedBootError alone is the local-mode no-op cmdServe relies on");
+  assert.throws(() => assertHostedBoot(env), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /VAULT_MODE=hosted/);
+    assert.equal((err as Error & { exitCode?: number }).exitCode, 78);
+    return true;
+  });
+  // startHosted itself: exit 78 with the message on stderr, before any KEK or Postgres work.
+  const exits: number[] = [];
+  const lines: string[] = [];
+  const originalExit = process.exit.bind(process);
+  const originalError = console.error;
+  const fakeExit = (code?: number): never => {
+    exits.push(code ?? 0);
+    throw new Error("exit called");
+  };
+  process.exit = fakeExit;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    await assert.rejects(startHosted(env), /exit called/);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+  }
+  assert.deepEqual(exits, [78]);
+  assert.match(lines.join("\n"), /VAULT_MODE=hosted/);
 });
 
 test("N3: an unset VAULT_DEPLOY_PLANE is a boot error, never a silent production default", () => {
@@ -119,7 +154,7 @@ test("N2: the operator bearer opens /api only and the model bearer opens POST /m
     const apiWithOperator = await fetch(`${base}/api/items`, { headers: { authorization: `Bearer ${operator}` } });
     assert.equal(apiWithOperator.status, 200);
 
-    const rpc = { jsonrpc: "2.0", id: 1, method: "tools/list" };
+    const rpc = { jsonrpc: "2.0", id: 1, method: "initialize" };
     const mcpWithOperator = await fetch(`${base}/mcp`, {
       method: "POST",
       headers: { authorization: `Bearer ${operator}`, "content-type": "application/json" },
@@ -132,6 +167,13 @@ test("N2: the operator bearer opens /api only and the model bearer opens POST /m
       body: JSON.stringify(rpc),
     });
     assert.equal(mcpWithModel.status, 200);
+    const sessionId = mcpWithModel.headers.get("mcp-session-id") ?? "";
+    const toolsWithModel = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${model}`, "content-type": "application/json", "mcp-session-id": sessionId },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+    });
+    assert.equal(toolsWithModel.status, 200);
   } finally {
     await http.close();
     vault.close();
@@ -256,7 +298,7 @@ test("N12: a master.key readable by group or others is refused", (t) => {
 /* ---- N7: trusted proxy CIDRs ---- */
 
 test("N7: CF-Connecting-IP is read only when the peer Fly saw is inside the trusted proxy ranges", () => {
-  const trust = { trustProxyHeaders: true, trustedProxyCidrs: CLOUDFLARE_PROXY_CIDRS };
+  const trust = { trustFlyHeader: true, trustForwarded: true, trustedProxyCidrs: CLOUDFLARE_PROXY_CIDRS };
   // Behind Cloudflare: Fly saw a Cloudflare edge, the visitor is in CF-Connecting-IP.
   assert.equal(
     clientIpFromHeaders({ cfConnectingIp: "198.51.100.7", flyClientIp: "104.16.1.1", remote: "172.19.0.1" }, trust),
@@ -283,7 +325,7 @@ test("N7: CF-Connecting-IP is read only when the peer Fly saw is inside the trus
         forwarded: "10.0.0.1, 203.0.113.9",
         remote: "203.0.113.9",
       },
-      { ...trust, trustProxyHeaders: false },
+      { ...trust, trustFlyHeader: false, trustForwarded: false },
     ),
     "203.0.113.9",
   );
@@ -343,7 +385,7 @@ function storeOverride(overrides: Record<string, (...a: unknown[]) => unknown>) 
 
 /* ---- N5: one request id ---- */
 
-test("N5: the inbound x-request-id is the id in the 500 body and header, and the message is redacted", async () => {
+test("N5: on Fly the inbound Fly-Request-Id is the id in the 500 body and header, and the message is redacted", async () => {
   const ctx = await hostedSetup({
     authResolver: testAuthResolver,
     store: storeOverride({
@@ -355,9 +397,12 @@ test("N5: the inbound x-request-id is the id in the 500 body and header, and the
   const lines: string[] = [];
   const original = console.error;
   console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  const prevFly = process.env.FLY_APP_NAME;
+  process.env.FLY_APP_NAME = "botpasses-staging";
   try {
+    // A client-chosen x-request-id is ignored even on Fly; only the Fly proxy's id is reused.
     const res = await fetch(`${ctx.base}/api/items?environment=staging`, {
-      headers: { ...ctx.op, "x-request-id": "fly-req-w4-0001" },
+      headers: { ...ctx.op, "fly-request-id": "fly-req-w4-0001", "x-request-id": "chosen-by-client" },
     });
     assert.equal(res.status, 500);
     const body = (await res.json()) as { request_id: string };
@@ -371,7 +416,19 @@ test("N5: the inbound x-request-id is the id in the 500 body and header, and the
     assert.match(exceptionLine, /"request_id":"fly-req-w4-0001"/, "captureException got the same id");
     const requestLine = lines.find((l) => l.includes('"event":"request"')) ?? "";
     assert.match(requestLine, /"request_id":"fly-req-w4-0001"/);
+    assert.ok(!lines.some((l) => l.includes("chosen-by-client")), "the client's x-request-id reaches no log line");
+    // Off Fly the Fly header is client-chosen too: a fresh UUID is minted and echoed.
+    delete process.env.FLY_APP_NAME;
+    const offFly = await fetch(`${ctx.base}/api/items?environment=staging`, {
+      headers: { ...ctx.op, "fly-request-id": "fly-req-forged", "x-request-id": "chosen-by-client" },
+    });
+    assert.equal(offFly.status, 500);
+    const offFlyBody = (await offFly.json()) as { request_id: string };
+    assert.match(offFlyBody.request_id, /^[0-9a-f-]{36}$/);
+    assert.equal(offFly.headers.get("x-request-id"), offFlyBody.request_id);
   } finally {
+    if (prevFly === undefined) delete process.env.FLY_APP_NAME;
+    else process.env.FLY_APP_NAME = prevFly;
     console.error = original;
     await ctx.close();
   }

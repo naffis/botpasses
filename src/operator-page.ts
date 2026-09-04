@@ -79,6 +79,10 @@ export function operatorHtml(nonce = ""): string {
             <option value="header:X-API-Key">Header X-API-Key</option>
           </select>
         </div>
+        <div>
+          <label for="username">Username (HTTP Basic user; optional)</label>
+          <input id="username" name="username" placeholder="svc" autocomplete="off" />
+        </div>
       </div>
       <p><button class="primary" type="submit">Store encrypted</button></p>
     </form>
@@ -201,13 +205,15 @@ export function operatorHtml(nonce = ""): string {
       const value = document.getElementById("value").value;
       const hosts = document.getElementById("hosts").value.split(",").map((h) => h.trim()).filter(Boolean);
       const inject = document.getElementById("inject").value;
+      const username = document.getElementById("username").value.trim();
       if (!name || !value) { flash("Name and value are required", false); return; }
+      if (inject === "basic" && !username) { flash("HTTP Basic needs a username", false); return; }
       document.getElementById("value").value = "";
       try {
         const res = await j("/api/items", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, value, allowed_hosts: hosts, inject }),
+          body: JSON.stringify({ name, value, allowed_hosts: hosts, inject, ...(username ? { username } : {}) }),
         });
         flash("Stored " + res.item.name + " ending " + res.item.last4 + " (value not shown again)", true);
         await refresh();

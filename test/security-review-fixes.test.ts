@@ -55,10 +55,12 @@ test("a pending-MFA operator session cannot use the model channel", () => {
 });
 
 test("proxy headers are honoured only behind Fly or with an explicit opt-in; otherwise the socket peer counts", () => {
-  assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", false), "127.0.0.1");
-  assert.equal(clientIpFrom(undefined, "10.0.0.1, 198.51.100.7", "127.0.0.1", false), "127.0.0.1");
-  assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", true), "203.0.113.9");
-  assert.equal(clientIpFrom(undefined, "10.0.0.1, 198.51.100.7", "127.0.0.1", true), "198.51.100.7");
+  const none = { trustFlyHeader: false, trustForwarded: false };
+  const fly = { trustFlyHeader: true, trustForwarded: true };
+  assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", none), "127.0.0.1");
+  assert.equal(clientIpFrom(undefined, "10.0.0.1, 198.51.100.7", "127.0.0.1", none), "127.0.0.1");
+  assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", fly), "203.0.113.9");
+  assert.equal(clientIpFrom(undefined, "10.0.0.1, 198.51.100.7", "127.0.0.1", fly), "198.51.100.7");
   assert.equal(trustsProxyHeaders({}), false);
   assert.equal(trustsProxyHeaders({ FLY_APP_NAME: "botpasses-prod" }), true);
   assert.equal(trustsProxyHeaders({ VAULT_TRUST_PROXY: "1" }), true);

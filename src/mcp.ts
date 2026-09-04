@@ -5,6 +5,7 @@
  * `initialize` `clientInfo.name`; grants are keyed (item, agent, tool) with tool `http_request`.
  * Never returns secret values. There is no get_secret.
  */
+import { randomBytes } from "node:crypto";
 import { MCP_INSTRUCTIONS_LOCAL, MCP_SERVER_NAME } from "./brand.ts";
 import type { ConnectorFetch } from "./hosted/connector.ts";
 import { isHttpError } from "./hosted/errors.ts";
@@ -38,7 +39,7 @@ export const MCP_TOOL_ALIASES: Record<string, McpToolName> = {
   "http.request": "http_request",
 };
 
-/** Agent id used when a client never sent `initialize` (stateless HTTP callers). */
+/** Agent id when `initialize` named no client (no `clientInfo.name`), or a stdio client skipped it. */
 export const DEFAULT_AGENT_ID = "mcp";
 
 const FORBIDDEN_TOOL_NAMES = [
@@ -164,6 +165,73 @@ export type McpSession = { agentId: string | undefined };
 
 export function newMcpSession(): McpSession {
   return { agentId: undefined };
+}
+
+/** A session that saw no request for this long is forgotten; the client re-initializes (404). */
+export const MCP_SESSION_IDLE_MS = 8 * 60 * 60 * 1000;
+/** Upper bound on live HTTP sessions; past it the least recently used one is dropped. */
+export const MCP_SESSION_MAX = 1000;
+
+export type McpSessionRegistryOptions = {
+  idleMs?: number;
+  maxSessions?: number;
+  now?: () => number;
+};
+
+/**
+ * Per-client sessions for the HTTP transport. Every `initialize` mints a random `Mcp-Session-Id`
+ * bound to its own `McpSession`, so two clients on one server never share an agent id: grants
+ * keyed on (item, agent, tool) stay with the client that initialised, whoever initialises next.
+ * The stdio transport holds one `McpSession` per process and never uses this.
+ */
+export class McpSessionRegistry {
+  readonly #sessions = new Map<string, { session: McpSession; lastSeen: number }>();
+  readonly #idleMs: number;
+  readonly #max: number;
+  readonly #now: () => number;
+
+  constructor(opts: McpSessionRegistryOptions = {}) {
+    this.#idleMs = opts.idleMs ?? MCP_SESSION_IDLE_MS;
+    this.#max = Math.max(1, opts.maxSessions ?? MCP_SESSION_MAX);
+    this.#now = opts.now ?? Date.now;
+  }
+
+  get size(): number {
+    return this.#sessions.size;
+  }
+
+  /** A fresh session under an unguessable id (128 bits, base64url). */
+  create(): { id: string; session: McpSession } {
+    this.#sweep();
+    const id = randomBytes(16).toString("base64url");
+    const session = newMcpSession();
+    this.#sessions.set(id, { session, lastSeen: this.#now() });
+    while (this.#sessions.size > this.#max) {
+      const oldest = this.#sessions.keys().next();
+      if (oldest.done) break;
+      this.#sessions.delete(oldest.value);
+    }
+    return { id, session };
+  }
+
+  /** The live session for `id`, touched so it stays live; undefined when unknown or idle too long. */
+  get(id: string): McpSession | undefined {
+    this.#sweep();
+    const entry = this.#sessions.get(id);
+    if (!entry) return undefined;
+    // Re-insert so Map iteration order doubles as recency order.
+    this.#sessions.delete(id);
+    entry.lastSeen = this.#now();
+    this.#sessions.set(id, entry);
+    return entry.session;
+  }
+
+  #sweep(): void {
+    const cutoff = this.#now() - this.#idleMs;
+    for (const [id, entry] of this.#sessions) {
+      if (entry.lastSeen < cutoff) this.#sessions.delete(id);
+    }
+  }
 }
 
 export type McpCallContext = {
@@ -345,7 +413,7 @@ export type JsonRpcResponse = {
   error?: { code: number; message: string };
 };
 
-/** `session` is per connection; the stdio runner and the loopback server each hold one. */
+/** `session` is per connection: one per stdio process, one per `Mcp-Session-Id` on the loopback server. */
 export async function handleMcpRpc(
   vault: Vault,
   req: JsonRpcRequest,

@@ -21,6 +21,7 @@ import { identityAuthResolver } from "./identity.ts";
 import { createOauthProvider } from "./oauth-as.ts";
 
 export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  // Refuses an unset VAULT_MODE first: every other guard below is keyed on hosted mode.
   try {
     assertHostedBoot(env);
   } catch (err) {
@@ -96,11 +97,9 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   const host = env.VAULT_BIND_HOST ?? "0.0.0.0";
   const sessionSecret = env.VAULT_SESSION_SECRET ?? "";
   const identity = new OperatorIdentity({ store, sessionSecret, kek, previousKek, sendEmail });
+  // Both shapes were checked by hostedBootError before the KEK was unwrapped.
   const jwk = parseOidcPrivateJwk(env.VAULT_OIDC_PRIVATE_JWK);
   const previousJwk = parseOidcPrivateJwk(env.VAULT_OIDC_PREVIOUS_JWK);
-  if (env.VAULT_OIDC_PREVIOUS_JWK?.trim() && !previousJwk) {
-    throw new Error("VAULT_OIDC_PREVIOUS_JWK is set but is not a private RS256 JWK");
-  }
   const oidcProvider = jwk
     ? createOauthProvider({
         issuer: publicUrl.replace(/\/$/, ""),

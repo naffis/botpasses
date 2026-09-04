@@ -54,9 +54,11 @@ legacy items still verified against the old AAD (org id only) through a permanen
   accepts a previous signing key (`VAULT_OIDC_PREVIOUS_JWK`) for verification only and
   publishes both in the JWKS. Legacy AAD items are rewrapped once at boot and the fallback is
   gone; `items.aad_version` records the state.
-- **Proxy trust is explicit.** Client IPs come from `Fly-Client-IP` only when the process
-  runs on Fly, from `CF-Connecting-IP` only when the peer is inside
-  `VAULT_TRUSTED_PROXY_CIDRS`, and from the socket otherwise.
+- **Proxy trust is explicit, per header.** Client IPs come from `Fly-Client-IP` only when the
+  process runs on Fly (`FLY_APP_NAME`), from the last `X-Forwarded-For` hop only on Fly or
+  behind a proxy the deployer opted into (`VAULT_TRUST_PROXY=1`), from `CF-Connecting-IP` only
+  when that peer is inside `VAULT_TRUSTED_PROXY_CIDRS`, and from the socket otherwise. A Fly
+  header off Fly is client input and is ignored.
 - **Bounded connector.** Responses are capped at 1 MiB of raw bytes, premature close fails the
   call instead of hanging it, and only port 443 is dialled.
 - **Remove what is not finished.** The AgentPass stub is deleted rather than shipped

@@ -3,7 +3,7 @@ import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { HOSTED_CONFIG_EXIT, hostedBootError } from "../src/hosted/boot.ts";
+import { assertHostedBoot, HOSTED_CONFIG_EXIT, hostedBootError } from "../src/hosted/boot.ts";
 import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { identityAuthResolver } from "../src/hosted/identity.ts";
@@ -332,4 +332,28 @@ test("AC-10b boot without session or JWK exits 78", () => {
     }) ?? "",
     /VAULT_OIDC_PRIVATE_JWK/,
   );
+  // R2-4: the retiring key's shape is a boot error too, before the KEK is unwrapped (exit 78, not 1).
+  const withPrevious = {
+    VAULT_MODE: "hosted",
+    DATABASE_URL: "postgres://x",
+    VAULT_KEK: "aa".repeat(32),
+    VAULT_PUBLIC_URL: "https://staging.botpasses.com",
+    VAULT_DEPLOY_PLANE: "staging",
+    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
+    VAULT_SITE_ROOT: SITE,
+  };
+  assert.equal(hostedBootError(withPrevious), undefined, "control: the env boots");
+  assert.equal(hostedBootError({ ...withPrevious, VAULT_OIDC_PREVIOUS_JWK: testOidcPrivateJwk() }), undefined);
+  assert.equal(hostedBootError({ ...withPrevious, VAULT_OIDC_PREVIOUS_JWK: "  " }), undefined, "blank is unset");
+  assert.match(
+    hostedBootError({ ...withPrevious, VAULT_OIDC_PREVIOUS_JWK: '{"kty":"EC","alg":"ES256","d":"x"}' }) ?? "",
+    /VAULT_OIDC_PREVIOUS_JWK/,
+  );
+  assert.throws(() => assertHostedBoot({ ...withPrevious, VAULT_OIDC_PREVIOUS_JWK: "{" }), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /VAULT_OIDC_PREVIOUS_JWK/);
+    assert.equal((err as Error & { exitCode?: number }).exitCode, HOSTED_CONFIG_EXIT);
+    return true;
+  });
 });

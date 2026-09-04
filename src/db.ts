@@ -94,10 +94,6 @@ export function openDb(home: string): DatabaseSync {
   return db;
 }
 
-export function nowIso(date = new Date()): string {
-  return date.toISOString();
-}
-
 type SecretRow = {
   name: string;
   iv: string;

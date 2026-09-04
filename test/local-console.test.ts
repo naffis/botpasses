@@ -16,6 +16,10 @@ test("local console builds rows with textContent, never innerHTML, and uses the 
   assert.match(html, /id="loopback-token"/);
   assert.match(html, /id="hosts"/);
   assert.match(html, /id="inject"/);
+  // R2-7: the inject select offers HTTP Basic, so the form takes the username that mode needs.
+  assert.match(html, /<option value="basic">/);
+  assert.match(html, /id="username"/);
+  assert.match(html, /HTTP Basic needs a username/);
   assert.match(html, /allowed_hosts/);
   assert.match(html, /http_request/);
   assert.doesNotMatch(html, /—/);

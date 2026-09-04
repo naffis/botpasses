@@ -7,13 +7,70 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { generateMasterKey } from "../src/crypto.ts";
+import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { parseFrame } from "../src/mcp-stdio.ts";
+import { createVaultServer } from "../src/server.ts";
+import { Vault } from "../src/vault.ts";
 import { cleanup, tempHome } from "./helpers.ts";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 type Rpc = { id: string | number | null; result?: unknown; error?: { code: number; message: string } };
+
+function runCli(args: string[], env: NodeJS.ProcessEnv, input: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = spawn(
+    process.execPath,
+    ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", cli, ...args],
+    { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (c: string) => {
+    stdout += c;
+  });
+  child.stderr.on("data", (c: string) => {
+    stderr += c;
+  });
+  child.stdin.write(input);
+  child.stdin.end();
+  return new Promise((resolve) => child.on("close", (code) => resolve({ code, stdout, stderr })));
+}
+
+test("R2-3: vault mcp --remote carries the Mcp-Session-Id that vault serve issued on initialize", async () => {
+  const home = tempHome();
+  const masterKey = generateMasterKey();
+  const vault = new Vault({ home, masterKey: parseMasterKey(masterKey) });
+  const http = createVaultServer({ vault, host: "127.0.0.1", port: 0 });
+  const addr = await http.listen();
+  try {
+    vault.setSecret("STRIPE_KEY", "sk_live_shim_test_value_1234");
+    vault.approveGrant({ secretName: "STRIPE_KEY", agentId: "cursor", toolId: "http_request", scope: "session" });
+    const frames = [
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"cursor","version":"1"}}}',
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+      '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_grants","arguments":{}}}',
+    ];
+    const { code, stdout, stderr } = await runCli(
+      ["mcp", "--remote", `http://127.0.0.1:${addr.port}`],
+      { VAULT_HOME: home, VAULT_MASTER_KEY: masterKey },
+      `${frames.join("\n")}\n`,
+    );
+    assert.equal(code, 0, stderr);
+    const answers = stdout.trim().split("\n").map((l) => JSON.parse(l) as Rpc);
+    assert.equal(answers.length, 2, `initialize and the call answer; the notification is a bare 202:\n${stdout}`);
+    assert.equal(answers[0]?.id, 1);
+    assert.equal(answers[1]?.id, 2, `the call rode the issued session instead of a 400:\n${stdout}`);
+    const text = (answers[1]?.result as { content: { text: string }[] }).content[0]?.text ?? "";
+    assert.match(text, /"agent_id": "cursor"/, "the session's agent is the client initialize named");
+    assert.ok(!stdout.includes("sk_live_shim_test_value_1234"));
+  } finally {
+    await http.close();
+    vault.close();
+    cleanup(home);
+  }
+});
 
 test("parseFrame answers non-object frames with -32600 and bad JSON with -32700", () => {
   for (const line of ["null", "42", '"ping"', "[]", "true"]) {

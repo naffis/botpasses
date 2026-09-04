@@ -18,7 +18,7 @@ The hosted process writes one JSON object per line to stderr; Fly ships it to `f
 | `request_error_after_headers`, `static_stream_failed` | A handler or a site file stream failed after the status line went out; the response was cut. | Ticket if repeated; the `request_id` names the request. |
 | `schema_bootstrap` | `PostgresStore.migrate()` created the schema from `schema.ts` because `schema_migrations` did not exist. Expected only for dev and test databases. | On a plane this means the release_command did not run: check `fly releases` and `DATABASE_URL_DIRECT`. |
 
-Requests are logged as `event: "request"` with `method`, `path`, `status`, `ms`, `request_id`. A 5xx rate or p95 `ms` alert can be built from these. The same `request_id` (the inbound `x-request-id` when Fly set one) is on the `request_error` line, the `x-request-id` response header, the 500 body, and the Sentry event's `request_id` tag, so one value finds everything about a failed request.
+Requests are logged as `event: "request"` with `method`, `path`, `status`, `ms`, `request_id`. A 5xx rate or p95 `ms` alert can be built from these. The same `request_id` (the `Fly-Request-Id` the Fly proxy set, so it matches the Fly log line; a UUID off Fly; an inbound `x-request-id` is client-chosen and never reused) is on the `request_error` line, the `x-request-id` response header, the 500 body, and the Sentry event's `request_id` tag, so one value finds everything about a failed request.
 
 ### Fly
 
