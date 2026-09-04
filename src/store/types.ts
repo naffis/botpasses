@@ -9,6 +9,7 @@ import type {
   HostedGrantRecord,
   ItemRecord,
   MemberRecord,
+  MemberRole,
   NeedItemRecord,
   OperatorSessionRecord,
   OrgRecord,
@@ -52,8 +53,28 @@ export type UserSecurityState = {
 /** A `users` row as read from the store: the frozen record plus the security columns. */
 export type UserRow = UserRecord & UserSecurityState;
 
-/** `operator_sessions` row. `mfaAt` is null until the session passed the authenticator step. */
-export type OperatorSessionRow = OperatorSessionRecord & { mfaAt: string | null };
+/**
+ * `operator_sessions` row. `mfaAt` is null until the session passed the authenticator step.
+ * `activeOrgId` is the org chosen in the switcher (null: the user's first membership); optional
+ * on insert so identity code that predates the column keeps compiling.
+ */
+export type OperatorSessionRow = OperatorSessionRecord & { mfaAt: string | null; activeOrgId?: string | null };
+
+/** `org_members` row as read: `joinedAt` is null for rows written before the column existed. */
+export type MemberRow = MemberRecord & { joinedAt: string | null };
+
+/** `org_invites` row. The accept token is never stored, only its sha256. */
+export type InviteRecord = {
+  id: string;
+  orgId: string;
+  email: string;
+  role: MemberRole;
+  tokenHash: string;
+  invitedBy: string;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+};
 
 /** Single-row table holding the identity DEK wrapped under the KEK (AAD = id). */
 export type IdentityKeyRecord = {
@@ -83,9 +104,10 @@ export type VaultStore = {
   ): Promise<void>;
   deleteOrg(orgId: string): Promise<void>;
 
-  insertMember(row: MemberRecord): Promise<void>;
+  /** `joinedAt` is recorded when given; older callers leave it null. */
+  insertMember(row: MemberRecord & { joinedAt?: string }): Promise<void>;
   getMember(orgId: string, userId: string): Promise<MemberRecord | undefined>;
-  listMembers(orgId: string): Promise<MemberRecord[]>;
+  listMembers(orgId: string): Promise<MemberRow[]>;
   listMembershipsForUser(userId: string): Promise<MemberRecord[]>;
   /** Verified member emails for approval notifications. Members without a user row are skipped. */
   listMemberEmails(orgId: string): Promise<string[]>;
@@ -275,6 +297,24 @@ export type VaultStore = {
   deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void>;
   /** Removes rows whose expires_at is at or before `nowIso`. Returns the count. */
   purgeExpiredOidcPayloads(nowIso: string): Promise<number>;
+
+  /* ---- team (3.7) and plan limits (3.9) ---- */
+
+  removeMember(orgId: string, userId: string): Promise<void>;
+  updateMemberRole(orgId: string, userId: string, role: MemberRole): Promise<void>;
+  insertInvite(row: InviteRecord): Promise<void>;
+  getInvite(id: string): Promise<InviteRecord | undefined>;
+  getInviteByTokenHash(tokenHash: string): Promise<InviteRecord | undefined>;
+  /** Invites for the org that have not been accepted, newest first. Expired rows are included. */
+  listInvites(orgId: string): Promise<InviteRecord[]>;
+  acceptInvite(id: string, acceptedAt: string): Promise<void>;
+  deleteInvite(id: string): Promise<void>;
+  /** Org chosen in the switcher for this session; null clears it. */
+  setSessionActiveOrg(idHash: string, orgId: string | null): Promise<void>;
+  /** Audit rows for `action` in the org at or after `sinceIso` (monthly call budget). */
+  countAuditSince(orgId: string, action: string, sinceIso: string): Promise<number>;
+  /** Items across every environment of the org (credentials plan limit). */
+  countItemsForOrg(orgId: string): Promise<number>;
 };
 
 export type OidcPayloadRow = { id: string; payload: string; expiresAt: string | null };

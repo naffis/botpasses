@@ -28,12 +28,16 @@ import {
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SQLITE,
+  HOSTED_SCHEMA_TEAM,
+  HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
   oidcPayloadIndex,
   type AuditListFilter,
   type IdentityKeyRecord,
+  type InviteRecord,
+  type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
   type SweepCounts,
@@ -117,18 +121,44 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
       }
     }
   }
-  for (const stmt of HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE.trim().split(";")) {
-    const sql = stmt.trim();
-    if (!sql) continue;
-    try {
-      db.exec(sql);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("duplicate column")) throw err;
+  for (const alter of [HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE, HOSTED_SCHEMA_TEAM_ALTER_SQLITE]) {
+    for (const stmt of alter.trim().split(";")) {
+      const sql = stmt.trim();
+      if (!sql) continue;
+      try {
+        db.exec(sql);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("duplicate column")) throw err;
+      }
     }
   }
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
+  db.exec(HOSTED_SCHEMA_TEAM);
   return new SqliteHostedStore(db);
+}
+
+function mapInvite(r: Record<string, unknown>): InviteRecord {
+  return {
+    id: String(r.id),
+    orgId: String(r.org_id),
+    email: String(r.email),
+    role: r.role as InviteRecord["role"],
+    tokenHash: String(r.token_hash),
+    invitedBy: String(r.invited_by),
+    createdAt: String(r.created_at),
+    expiresAt: String(r.expires_at),
+    acceptedAt: r.accepted_at == null ? null : String(r.accepted_at),
+  };
+}
+
+function mapMember(r: Record<string, unknown>): MemberRow {
+  return {
+    orgId: String(r.org_id),
+    userId: String(r.user_id),
+    role: r.role as MemberRow["role"],
+    joinedAt: r.joined_at == null ? null : String(r.joined_at),
+  };
 }
 
 export class SqliteHostedStore implements VaultStore {
@@ -227,6 +257,7 @@ export class SqliteHostedStore implements VaultStore {
         )
         .run(orgId);
       this.#db.prepare("DELETE FROM vaults WHERE org_id = ?").run(orgId);
+      this.#db.prepare("DELETE FROM org_invites WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM org_members WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM orgs WHERE id = ?").run(orgId);
       this.#db.exec("COMMIT");
@@ -236,10 +267,10 @@ export class SqliteHostedStore implements VaultStore {
     }
   }
 
-  async insertMember(row: MemberRecord): Promise<void> {
+  async insertMember(row: MemberRecord & { joinedAt?: string }): Promise<void> {
     this.#db
-      .prepare("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)")
-      .run(row.orgId, row.userId, row.role);
+      .prepare("INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)")
+      .run(row.orgId, row.userId, row.role, row.joinedAt ?? null);
   }
 
   async getMember(orgId: string, userId: string): Promise<MemberRecord | undefined> {
@@ -990,16 +1021,11 @@ export class SqliteHostedStore implements VaultStore {
     }
   }
 
-  async listMembers(orgId: string): Promise<MemberRecord[]> {
-    const rows = this.#db.prepare("SELECT * FROM org_members WHERE org_id = ?").all(orgId) as Record<
-      string,
-      unknown
-    >[];
-    return rows.map((r) => ({
-      orgId: String(r.org_id),
-      userId: String(r.user_id),
-      role: r.role as MemberRecord["role"],
-    }));
+  async listMembers(orgId: string): Promise<MemberRow[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM org_members WHERE org_id = ? ORDER BY joined_at, user_id")
+      .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapMember);
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
@@ -1163,9 +1189,9 @@ export class SqliteHostedStore implements VaultStore {
   async insertSession(row: OperatorSessionRow): Promise<void> {
     this.#db
       .prepare(
-        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at, active_org_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt);
+      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt, row.activeOrgId ?? null);
   }
 
   async getSession(idHash: string): Promise<OperatorSessionRow | undefined> {
@@ -1389,6 +1415,90 @@ export class SqliteHostedStore implements VaultStore {
       .run(nowIso);
     return Number(r.changes);
   }
+
+  /* ---- team (3.7) and plan limits (3.9) ---- */
+
+  async removeMember(orgId: string, userId: string): Promise<void> {
+    this.#db.prepare("DELETE FROM org_members WHERE org_id = ? AND user_id = ?").run(orgId, userId);
+    this.#db
+      .prepare("UPDATE operator_sessions SET active_org_id = NULL WHERE user_id = ? AND active_org_id = ?")
+      .run(userId, orgId);
+  }
+
+  async updateMemberRole(orgId: string, userId: string, role: MemberRow["role"]): Promise<void> {
+    this.#db.prepare("UPDATE org_members SET role = ? WHERE org_id = ? AND user_id = ?").run(role, orgId, userId);
+  }
+
+  async insertInvite(row: InviteRecord): Promise<void> {
+    this.#db
+      .prepare(
+        `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.orgId,
+        row.email,
+        row.role,
+        row.tokenHash,
+        row.invitedBy,
+        row.createdAt,
+        row.expiresAt,
+        row.acceptedAt,
+      );
+  }
+
+  async getInvite(id: string): Promise<InviteRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM org_invites WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapInvite(r) : undefined;
+  }
+
+  async getInviteByTokenHash(tokenHash: string): Promise<InviteRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM org_invites WHERE token_hash = ?").get(tokenHash) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapInvite(r) : undefined;
+  }
+
+  async listInvites(orgId: string): Promise<InviteRecord[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM org_invites WHERE org_id = ? AND accepted_at IS NULL ORDER BY created_at DESC")
+      .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapInvite);
+  }
+
+  async acceptInvite(id: string, acceptedAt: string): Promise<void> {
+    this.#db.prepare("UPDATE org_invites SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL").run(acceptedAt, id);
+  }
+
+  async deleteInvite(id: string): Promise<void> {
+    this.#db.prepare("DELETE FROM org_invites WHERE id = ?").run(id);
+  }
+
+  async setSessionActiveOrg(idHash: string, orgId: string | null): Promise<void> {
+    this.#db.prepare("UPDATE operator_sessions SET active_org_id = ? WHERE id_hash = ?").run(orgId, idHash);
+  }
+
+  async countAuditSince(orgId: string, action: string, sinceIso: string): Promise<number> {
+    const r = this.#db
+      .prepare("SELECT COUNT(*) AS n FROM audit WHERE org_id = ? AND action = ? AND at >= ?")
+      .get(orgId, action, sinceIso) as { n: number };
+    return Number(r.n);
+  }
+
+  async countItemsForOrg(orgId: string): Promise<number> {
+    const r = this.#db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM items i
+         JOIN environments e ON e.id = i.environment_id
+         JOIN vaults v ON v.id = e.vault_id
+         WHERE v.org_id = ?`,
+      )
+      .get(orgId) as { n: number };
+    return Number(r.n);
+  }
 }
 
 function mapOidcRow(r: Record<string, unknown>): OidcPayloadRow {
@@ -1472,6 +1582,7 @@ function mapSess(r: Record<string, unknown>): OperatorSessionRow {
     lastSeenAt: String(r.last_seen_at),
     expiresAt: String(r.expires_at),
     mfaAt: r.mfa_at == null ? null : String(r.mfa_at),
+    activeOrgId: r.active_org_id == null ? null : String(r.active_org_id),
   };
 }
 
