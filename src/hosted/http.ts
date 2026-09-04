@@ -24,11 +24,22 @@ import { hostedFont } from "./console-fonts.ts";
 import { handleAuthApi, tryAuthPage } from "./http-auth-routes.ts";
 import { handleAccessApi } from "./http-access-routes.ts";
 import { handleClientRoutes } from "./http-client-routes.ts";
+import { handleConnectCallback } from "./http-connect-routes.ts";
 import { handleGrantRoutes } from "./http-grant-routes.ts";
 import { handleItemRoutes } from "./http-item-routes.ts";
 import { handleMemberRoutes } from "./http-member-routes.ts";
 import { handleMcpPost, KEEPALIVE_MS, sseKeepalive } from "./http-mcp-routes.ts";
-import { asEnv, isLoopbackHost, json, optional, originIsLoopback, readJson, sendError } from "./http-util.ts";
+import {
+  asEnv,
+  isLoopbackHost,
+  isPublicHtmlPath,
+  json,
+  optional,
+  originIsLoopback,
+  readJson,
+  robotsTxt,
+  sendError,
+} from "./http-util.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
@@ -46,9 +57,6 @@ export function hostAllowed(hostHeader: string, allowed: string[], allowLoopback
   if (isLoopbackHost(host)) return allowLoopback;
   return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
 }
-
-/** `GET /integrations/:provider/callback`; `spotify` is one value of `:provider`. */
-const CONNECT_CALLBACK_RE = /^\/integrations\/([a-z0-9_-]+)\/callback$/;
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;
@@ -271,39 +279,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
-    const connectCallback = CONNECT_CALLBACK_RE.exec(path);
-    if (method === "GET" && connectCallback) {
-      const providerId = connectCallback[1] ?? "";
-      if (!principal || principal.channel !== "operator") {
-        res.writeHead(302, { location: "/sign-in" });
-        res.end();
-        return;
-      }
-      const code = url.searchParams.get("code") ?? "";
-      const state = url.searchParams.get("state") ?? "";
-      const err = url.searchParams.get("error");
-      if (err || !code || !state) {
-        res.writeHead(302, { location: "/console#vault" });
-        res.end();
-        return;
-      }
-      try {
-        await opts.kernel.finishProviderUserOauth({
-          providerId,
-          orgId: principal.orgId,
-          userId: principal.userId,
-          state,
-          code,
-          fetchImpl: opts.fetchImpl,
-        });
-        res.writeHead(302, { location: `/console#vault?connected=${encodeURIComponent(providerId)}` });
-        res.end();
-      } catch {
-        res.writeHead(302, { location: `/console#vault?connect_error=${encodeURIComponent(providerId)}` });
-        res.end();
-      }
-      return;
-    }
+    if (await handleConnectCallback(req, res, url, method, path, principal, opts.kernel, opts.fetchImpl)) return;
 
     if (method === "GET" && path === "/console/") {
       res.writeHead(308, { location: "/console" });
@@ -571,37 +547,3 @@ function cookieCsrfApplies(path: string, principal: Principal | undefined): bool
 }
 
 export { KEEPALIVE_MS };
-
-function isPublicHtmlPath(path: string, hosted: boolean): boolean {
-  if (!hosted) return path === "/" || path === "/index.html" || path.startsWith("/collect/");
-  return isPublicSitePath(path) || path === "/console" || path.startsWith("/collect/") ||
-    path === "/sign-in" || path === "/sign-up" || path === "/enroll-totp" || path === "/verify-totp" || path === "/consent" ||
-    path === "/device";
-}
-
-function robotsTxt(plane: "staging" | "production"): string {
-  if (plane === "staging") {
-    return "User-agent: *\nAllow: /\n";
-  }
-  return [
-    "Sitemap: https://botpasses.com/sitemap-index.xml",
-    "User-agent: *",
-    "Allow: /",
-    "Allow: /docs",
-    "Disallow: /console",
-    "Disallow: /sign-in",
-    "Disallow: /sign-up",
-    "Disallow: /enroll-totp",
-    "Disallow: /verify-totp",
-    "Disallow: /consent",
-    "Disallow: /device",
-    "Disallow: /collect",
-    "Disallow: /api",
-    "Disallow: /mcp",
-    "Disallow: /approve",
-    "Disallow: /runtime",
-    "Disallow: /oauth",
-    "Disallow: /agentpass",
-    "",
-  ].join("\n");
-}

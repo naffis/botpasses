@@ -8,6 +8,7 @@ import { corsHeaders, corsPath, corsPublicUrl } from "./http-cors.ts";
 import { mcpWwwAuthenticate } from "./oauth-metadata.ts";
 import { captureException, logVaultEvent } from "./observe.ts";
 import { securityHeaders } from "./security-headers.ts";
+import { isPublicSitePath } from "./static-site.ts";
 
 export const BODY_CAP = 128 * 1024;
 
@@ -155,4 +156,39 @@ export function asPolicy(value: unknown): GrantPolicy {
 
 export function optional(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Pages an anonymous GET may load (a bad Bearer is ignored there instead of a 401). */
+export function isPublicHtmlPath(path: string, hosted: boolean): boolean {
+  if (!hosted) return path === "/" || path === "/index.html" || path.startsWith("/collect/");
+  return isPublicSitePath(path) || path === "/console" || path.startsWith("/collect/") ||
+    path === "/sign-in" || path === "/sign-up" || path === "/enroll-totp" || path === "/verify-totp" || path === "/consent" ||
+    path === "/device";
+}
+
+export function robotsTxt(plane: "staging" | "production"): string {
+  if (plane === "staging") {
+    return "User-agent: *\nAllow: /\n";
+  }
+  return [
+    "Sitemap: https://botpasses.com/sitemap-index.xml",
+    "User-agent: *",
+    "Allow: /",
+    "Allow: /docs",
+    "Disallow: /console",
+    "Disallow: /sign-in",
+    "Disallow: /sign-up",
+    "Disallow: /enroll-totp",
+    "Disallow: /verify-totp",
+    "Disallow: /consent",
+    "Disallow: /device",
+    "Disallow: /collect",
+    "Disallow: /api",
+    "Disallow: /mcp",
+    "Disallow: /approve",
+    "Disallow: /runtime",
+    "Disallow: /oauth",
+    "Disallow: /agentpass",
+    "",
+  ].join("\n");
 }
