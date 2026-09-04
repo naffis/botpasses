@@ -196,4 +196,50 @@ export type VaultStore = {
       consumedAt: string | null;
     }[]
   >;
+
+  /** Tenant-scoped OAuth client lookup: the DCR id is shared across orgs, the pair is unique. */
+  findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined>;
+  /** Records which operator account first consented for this vault client. No-op when already set. */
+  setClientConsentedBy(id: string, userId: string): Promise<void>;
+  findOidcPayloadByUid(kind: string, uid: string): Promise<OidcPayloadRow | undefined>;
+  findOidcPayloadByUserCode(kind: string, userCode: string): Promise<OidcPayloadRow | undefined>;
+  deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void>;
+  /**
+   * Deletes rows of `kind` whose payload clientId is one of `clientIds` and whose
+   * accountId is `accountId` (or absent). Rows bound to another account survive.
+   */
+  deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void>;
+  /** Removes rows whose expires_at is at or before `nowIso`. Returns the count. */
+  purgeExpiredOidcPayloads(nowIso: string): Promise<number>;
 };
+
+export type OidcPayloadRow = { id: string; payload: string; expiresAt: string | null };
+
+export type OidcPayloadIndex = {
+  uid: string | null;
+  userCode: string | null;
+  grantId: string | null;
+  clientId: string | null;
+  accountId: string | null;
+};
+
+/** Pulls the indexed fields out of an oidc-provider payload. Malformed JSON yields all nulls. */
+export function oidcPayloadIndex(payload: string): OidcPayloadIndex {
+  const empty: OidcPayloadIndex = { uid: null, userCode: null, grantId: null, clientId: null, accountId: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return empty;
+  }
+  if (!parsed || typeof parsed !== "object") return empty;
+  const rec = parsed as Record<string, unknown>;
+  const str = (key: string): string | null => (typeof rec[key] === "string" && rec[key] ? (rec[key] as string) : null);
+  return {
+    uid: str("uid"),
+    userCode: str("userCode"),
+    grantId: str("grantId"),
+    clientId: str("clientId"),
+    accountId: str("accountId"),
+  };
+}

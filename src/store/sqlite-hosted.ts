@@ -25,10 +25,11 @@ import {
   HOSTED_SCHEMA_IDENTITY,
   HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import { oidcPayloadIndex, type AuditListFilter, type OidcPayloadRow, type VaultStore } from "./types.ts";
 
 function mapOrg(r: Record<string, unknown>): OrgRecord {
   return {
@@ -86,14 +87,23 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(HOSTED_SCHEMA_SQLITE);
   db.exec(HOSTED_SCHEMA_IDENTITY);
-  for (const stmt of HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE.trim().split(";")) {
-    const sql = stmt.trim();
-    if (!sql) continue;
-    try {
-      db.exec(sql);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("duplicate column")) throw err;
+  // clients_org_oauth shipped once as a plain index; CREATE UNIQUE ... IF NOT EXISTS would keep it.
+  const orgOauthIndex = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'clients_org_oauth'")
+    .get() as { sql: string | null } | undefined;
+  if (orgOauthIndex && !/UNIQUE/i.test(orgOauthIndex.sql ?? "")) {
+    db.exec("DROP INDEX clients_org_oauth");
+  }
+  for (const alter of [HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE, HOSTED_SCHEMA_OAUTH_ALTER_SQLITE]) {
+    for (const stmt of alter.trim().split(";")) {
+      const sql = stmt.trim();
+      if (!sql) continue;
+      try {
+        db.exec(sql);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("duplicate column")) throw err;
+      }
     }
   }
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
@@ -971,12 +981,16 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
+    const idx = oidcPayloadIndex(row.payload);
     this.#db
       .prepare(
-        `INSERT INTO oidc_payloads (id, kind, payload, expires_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
+        `INSERT INTO oidc_payloads (id, kind, payload, expires_at, uid, user_code, grant_id, client_id, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at,
+           uid = excluded.uid, user_code = excluded.user_code, grant_id = excluded.grant_id,
+           client_id = excluded.client_id, account_id = excluded.account_id`,
       )
-      .run(row.id, row.kind, row.payload, row.expiresAt);
+      .run(row.id, row.kind, row.payload, row.expiresAt, idx.uid, idx.userCode, idx.grantId, idx.clientId, idx.accountId);
   }
 
   async getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined> {
@@ -1200,6 +1214,66 @@ export class SqliteHostedStore implements VaultStore {
   async setClientLastTokenAt(id: string, at: string): Promise<void> {
     this.#db.prepare("UPDATE clients SET last_token_at = ? WHERE id = ?").run(at, id);
   }
+
+  async findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined> {
+    const r = this.#db
+      .prepare(
+        `SELECT id FROM clients WHERE org_id = ? AND (oauth_client_id = ? OR clerk_oauth_user_id = ?)
+         ORDER BY revoked_at IS NOT NULL, id LIMIT 1`,
+      )
+      .get(orgId, oauthClientId, oauthClientId) as { id: string } | undefined;
+    return r ? this.getClient(r.id) : undefined;
+  }
+
+  async setClientConsentedBy(id: string, userId: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE clients SET consented_by_user_id = ? WHERE id = ? AND consented_by_user_id IS NULL")
+      .run(userId, id);
+  }
+
+  async findOidcPayloadByUid(kind: string, uid: string): Promise<OidcPayloadRow | undefined> {
+    const r = this.#db
+      .prepare("SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = ? AND uid = ? LIMIT 1")
+      .get(kind, uid) as Record<string, unknown> | undefined;
+    return r ? mapOidcRow(r) : undefined;
+  }
+
+  async findOidcPayloadByUserCode(kind: string, userCode: string): Promise<OidcPayloadRow | undefined> {
+    const r = this.#db
+      .prepare("SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = ? AND user_code = ? LIMIT 1")
+      .get(kind, userCode) as Record<string, unknown> | undefined;
+    return r ? mapOidcRow(r) : undefined;
+  }
+
+  async deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void> {
+    this.#db.prepare("DELETE FROM oidc_payloads WHERE kind = ? AND grant_id = ?").run(kind, grantId);
+  }
+
+  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+    if (clientIds.length === 0) return;
+    const marks = clientIds.map(() => "?").join(", ");
+    this.#db
+      .prepare(
+        `DELETE FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})
+         AND (account_id IS NULL OR account_id = ?)`,
+      )
+      .run(kind, ...clientIds, accountId);
+  }
+
+  async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {
+    const r = this.#db
+      .prepare("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at <= ?")
+      .run(nowIso);
+    return Number(r.changes);
+  }
+}
+
+function mapOidcRow(r: Record<string, unknown>): OidcPayloadRow {
+  return {
+    id: String(r.id),
+    payload: String(r.payload),
+    expiresAt: r.expires_at == null ? null : String(r.expires_at),
+  };
 }
 
 function mapPolicy(r: Record<string, unknown>): PolicyRecord {

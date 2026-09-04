@@ -1,16 +1,11 @@
-import type { VaultStore } from "../store/types.ts";
+import type { OidcPayloadRow, VaultStore } from "../store/types.ts";
 
 type Payload = Record<string, unknown>;
 
-export function oidcPayloadClientId(raw: string): string | undefined {
-  try {
-    const payload = parsePayload(raw);
-    return typeof payload.clientId === "string" ? payload.clientId : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
+/**
+ * Adapter kinds that belong to a (client, account) consent. JWT access tokens are
+ * never stored, so revoking a vault client means dropping these rows.
+ */
 const CLIENT_OWNED_OIDC_KINDS = [
   "RefreshToken",
   "AuthorizationCode",
@@ -19,32 +14,32 @@ const CLIENT_OWNED_OIDC_KINDS = [
   "Grant",
 ] as const;
 
-export function oidcPayloadOwnedByClient(
-  raw: string,
-  client: { id: string; oauthClientId: string | null; clerkOauthUserId: string | null },
-): boolean {
-  const payloadClientId = oidcPayloadClientId(raw);
-  if (!payloadClientId) return false;
-  return (
-    payloadClientId === client.id ||
-    payloadClientId === client.oauthClientId ||
-    payloadClientId === client.clerkOauthUserId
-  );
-}
-
-/** Destroy adapter rows owned by this vault client. JWT access tokens are not stored here. */
+/**
+ * Destroy adapter rows owned by this vault client for the account that consented to it.
+ * Two orgs can share one DCR client id, so the account scope is what keeps org A's
+ * revoke from killing org B's refresh tokens. A client with no recorded consenting
+ * account only loses rows that carry no account either.
+ */
 export async function destroyOidcPayloadsForClient(
   store: VaultStore,
-  client: { id: string; oauthClientId: string | null; clerkOauthUserId: string | null },
+  client: {
+    id: string;
+    oauthClientId: string | null;
+    clerkOauthUserId: string | null;
+    consentedByUserId: string | null;
+  },
 ): Promise<void> {
+  const ids = [client.id, client.oauthClientId, client.clerkOauthUserId].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
   for (const kind of CLIENT_OWNED_OIDC_KINDS) {
-    const rows = await store.listOidcPayloads(kind);
-    for (const row of rows) {
-      if (oidcPayloadOwnedByClient(row.payload, client)) {
-        await store.deleteOidcPayload(row.id, kind);
-      }
-    }
+    await store.deleteOidcPayloadsForClient(kind, ids, client.consentedByUserId);
   }
+}
+
+/** Drops every expired adapter row. Returns how many were removed. Call from a periodic sweep. */
+export async function purgeExpired(store: VaultStore, now: Date = new Date()): Promise<number> {
+  return store.purgeExpiredOidcPayloads(now.toISOString());
 }
 
 function parsePayload(raw: string): Payload {
@@ -53,9 +48,15 @@ function parsePayload(raw: string): Payload {
   return parsed as Payload;
 }
 
+function epochSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
 /**
  * oidc-provider adapter backed by `oidc_payloads`.
- * JWT access tokens are not stored here; revoke them via clients.revoked_at + jti denylist.
+ * Secondary lookups (uid, user code, grant id) hit indexed columns the store derives
+ * from the payload on upsert. JWT access tokens are not stored here; revoke them via
+ * clients.revoked_at + the jti denylist.
  */
 export function createStoreAdapter(store: VaultStore) {
   return class StoreAdapter {
@@ -78,19 +79,17 @@ export function createStoreAdapter(store: VaultStore) {
     async find(id: string): Promise<Payload | undefined> {
       const row = await store.getOidcPayload(id, this.#kind);
       if (!row) return undefined;
-      if (row.expiresAt && Date.parse(row.expiresAt) <= Date.now()) {
-        await store.deleteOidcPayload(id, this.#kind);
-        return undefined;
-      }
-      return parsePayload(row.payload);
+      return this.#live({ id, ...row });
     }
 
     async findByUserCode(userCode: string): Promise<Payload | undefined> {
-      return this.#findBy("userCode", userCode);
+      const row = await store.findOidcPayloadByUserCode(this.#kind, userCode);
+      return row ? this.#live(row) : undefined;
     }
 
     async findByUid(uid: string): Promise<Payload | undefined> {
-      return this.#findBy("uid", uid);
+      const row = await store.findOidcPayloadByUid(this.#kind, uid);
+      return row ? this.#live(row) : undefined;
     }
 
     async destroy(id: string): Promise<void> {
@@ -98,29 +97,30 @@ export function createStoreAdapter(store: VaultStore) {
     }
 
     async revokeByGrantId(grantId: string): Promise<void> {
-      const rows = await store.listOidcPayloads(this.#kind);
-      for (const row of rows) {
-        const payload = parsePayload(row.payload);
-        if (payload.grantId === grantId) {
-          await store.deleteOidcPayload(row.id, this.#kind);
-        }
-      }
+      await store.deleteOidcPayloadsByGrantId(this.#kind, grantId);
     }
 
+    /** Marks the row consumed without extending its life: the original expiry is kept. */
     async consume(id: string): Promise<void> {
-      const found = await this.find(id);
-      if (!found) return;
-      found.consumed = true;
-      await this.upsert(id, found);
+      const row = await store.getOidcPayload(id, this.#kind);
+      if (!row) return;
+      const payload = parsePayload(row.payload);
+      payload.consumed = epochSeconds();
+      await store.upsertOidcPayload({
+        id,
+        kind: this.#kind,
+        payload: JSON.stringify(payload),
+        expiresAt: row.expiresAt,
+      });
     }
 
-    async #findBy(field: string, value: string): Promise<Payload | undefined> {
-      const rows = await store.listOidcPayloads(this.#kind);
-      for (const row of rows) {
-        const payload = parsePayload(row.payload);
-        if (payload[field] === value) return payload;
+    /** Returns the payload unless the row has expired, in which case the row is deleted. */
+    async #live(row: OidcPayloadRow): Promise<Payload | undefined> {
+      if (row.expiresAt && Date.parse(row.expiresAt) <= Date.now()) {
+        await store.deleteOidcPayload(row.id, this.#kind);
+        return undefined;
       }
-      return undefined;
+      return parsePayload(row.payload);
     }
   };
 }

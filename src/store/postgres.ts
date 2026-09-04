@@ -23,10 +23,11 @@ import {
   HOSTED_SCHEMA_IDENTITY,
   HOSTED_SCHEMA_IDENTITY_ALTER_PG,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_OAUTH_ALTER_PG,
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import { oidcPayloadIndex, type AuditListFilter, type OidcPayloadRow, type VaultStore } from "./types.ts";
 
 function asRecord(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
@@ -49,6 +50,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_SQLITE);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_OAUTH_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
   }
 
@@ -835,10 +837,14 @@ export class PostgresStore implements VaultStore {
   }
 
   async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
+    const idx = oidcPayloadIndex(row.payload);
     await this.#pool.query(
-      `INSERT INTO oidc_payloads (id, kind, payload, expires_at) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
-      [row.id, row.kind, row.payload, row.expiresAt],
+      `INSERT INTO oidc_payloads (id, kind, payload, expires_at, uid, user_code, grant_id, client_id, account_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at,
+         uid = excluded.uid, user_code = excluded.user_code, grant_id = excluded.grant_id,
+         client_id = excluded.client_id, account_id = excluded.account_id`,
+      [row.id, row.kind, row.payload, row.expiresAt, idx.uid, idx.userCode, idx.grantId, idx.clientId, idx.accountId],
     );
   }
 
@@ -1031,6 +1037,67 @@ export class PostgresStore implements VaultStore {
   async setClientLastTokenAt(id: string, at: string): Promise<void> {
     await this.#pool.query("UPDATE clients SET last_token_at = $1 WHERE id = $2", [at, id]);
   }
+
+  async findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined> {
+    const r = await this.#pool.query(
+      `SELECT * FROM clients WHERE org_id = $1 AND (oauth_client_id = $2 OR clerk_oauth_user_id = $2)
+       ORDER BY (revoked_at IS NOT NULL), id LIMIT 1`,
+      [orgId, oauthClientId],
+    );
+    return r.rows[0] ? mapClient(r.rows[0]) : undefined;
+  }
+
+  async setClientConsentedBy(id: string, userId: string): Promise<void> {
+    await this.#pool.query(
+      "UPDATE clients SET consented_by_user_id = $1 WHERE id = $2 AND consented_by_user_id IS NULL",
+      [userId, id],
+    );
+  }
+
+  async findOidcPayloadByUid(kind: string, uid: string): Promise<OidcPayloadRow | undefined> {
+    const r = await this.#pool.query(
+      "SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = $1 AND uid = $2 LIMIT 1",
+      [kind, uid],
+    );
+    return r.rows[0] ? mapOidcRowPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async findOidcPayloadByUserCode(kind: string, userCode: string): Promise<OidcPayloadRow | undefined> {
+    const r = await this.#pool.query(
+      "SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = $1 AND user_code = $2 LIMIT 1",
+      [kind, userCode],
+    );
+    return r.rows[0] ? mapOidcRowPg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void> {
+    await this.#pool.query("DELETE FROM oidc_payloads WHERE kind = $1 AND grant_id = $2", [kind, grantId]);
+  }
+
+  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+    if (clientIds.length === 0) return;
+    await this.#pool.query(
+      `DELETE FROM oidc_payloads WHERE kind = $1 AND client_id = ANY($2::text[])
+       AND (account_id IS NULL OR account_id = $3)`,
+      [kind, clientIds, accountId],
+    );
+  }
+
+  async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {
+    const r = await this.#pool.query(
+      "DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at <= $1",
+      [nowIso],
+    );
+    return r.rowCount ?? 0;
+  }
+}
+
+function mapOidcRowPg(rec: Record<string, unknown>): OidcPayloadRow {
+  return {
+    id: String(rec.id),
+    payload: String(rec.payload),
+    expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
+  };
 }
 
 function mapEnv(row: unknown): EnvironmentRecord | undefined {
