@@ -30,6 +30,43 @@ function isAccount(v: unknown): v is AccountInfo {
   return isJson(v) && typeof v.email === "string";
 }
 
+const PLAN_KINDS = ["credentials", "agents", "members", "calls"] as const;
+
+function planNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** Plan card on the Account panel: "used of limit" per kind, from `GET /api/plan`. */
+export async function loadPlan(): Promise<void> {
+  if (!byId("plan-card")) return;
+  try {
+    const r = await api("/api/plan");
+    if (r.status === 404) {
+      for (const kind of PLAN_KINDS) text(byId(`plan-${kind}`), "Unknown");
+      return;
+    }
+    if (!r.ok) throw new Error(errorMessage(r, "Could not load plan usage"));
+    const limits = isJson(r.body.limits) ? r.body.limits : {};
+    const usage = isJson(r.body.usage) ? r.body.usage : {};
+    for (const kind of PLAN_KINDS) {
+      const used = planNumber(usage[kind]);
+      const limit = planNumber(limits[kind]);
+      const el = byId(`plan-${kind}`);
+      if (!el) continue;
+      if (used === undefined || limit === undefined) {
+        text(el, "Unknown");
+        continue;
+      }
+      text(el, `${used} of ${limit}`);
+      el.classList.toggle("is-err", used >= limit);
+    }
+    const period = typeof r.body.period_start === "string" ? r.body.period_start : "";
+    text(byId("plan-period"), period ? `Calls reset on the first of each month (since ${formatWhen(period)}).` : "");
+  } catch (err) {
+    for (const kind of PLAN_KINDS) text(byId(`plan-${kind}`), loadErrorText(err, "Unavailable"));
+  }
+}
+
 export async function loadAccount(): Promise<void> {
   const card = byId("account-card");
   if (!card) return;
@@ -53,6 +90,7 @@ export async function loadAccount(): Promise<void> {
     text(byId("account-totp"), me.totp_enabled ? "Enrolled" : "Not enrolled");
     text(byId("account-backups"), String(me.backup_codes_remaining));
     render(byId("account-created"), html`${timeHtml(me.created_at)} (${formatWhen(me.created_at)})`);
+    void loadPlan();
   } catch (err) {
     showLoadError("account-error", loadErrorText(err, "Could not load your account"), () => {
       void loadAccount();

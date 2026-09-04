@@ -13,6 +13,7 @@
  *   src/hosted/client/credentials.ts
  *   src/hosted/client/access.ts
  *   src/hosted/client/account.ts
+ *   src/hosted/client/team.ts
  *   src/hosted/client/console.ts
  */
 export const CONSOLE_BUNDLE_JS = `"use strict";
@@ -1437,6 +1438,43 @@ function isAccount(v         )                   {
   return isJson(v) && typeof v.email === "string";
 }
 
+const PLAN_KINDS = ["credentials", "agents", "members", "calls"]         ;
+
+function planNumber(v         )                     {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** Plan card on the Account panel: "used of limit" per kind, from \`GET /api/plan\`. */
+async function loadPlan()                {
+  if (!byId("plan-card")) return;
+  try {
+    const r = await api("/api/plan");
+    if (r.status === 404) {
+      for (const kind of PLAN_KINDS) text(byId(\`plan-\${kind}\`), "Unknown");
+      return;
+    }
+    if (!r.ok) throw new Error(errorMessage(r, "Could not load plan usage"));
+    const limits = isJson(r.body.limits) ? r.body.limits : {};
+    const usage = isJson(r.body.usage) ? r.body.usage : {};
+    for (const kind of PLAN_KINDS) {
+      const used = planNumber(usage[kind]);
+      const limit = planNumber(limits[kind]);
+      const el = byId(\`plan-\${kind}\`);
+      if (!el) continue;
+      if (used === undefined || limit === undefined) {
+        text(el, "Unknown");
+        continue;
+      }
+      text(el, \`\${used} of \${limit}\`);
+      el.classList.toggle("is-err", used >= limit);
+    }
+    const period = typeof r.body.period_start === "string" ? r.body.period_start : "";
+    text(byId("plan-period"), period ? \`Calls reset on the first of each month (since \${formatWhen(period)}).\` : "");
+  } catch (err) {
+    for (const kind of PLAN_KINDS) text(byId(\`plan-\${kind}\`), loadErrorText(err, "Unavailable"));
+  }
+}
+
 async function loadAccount()                {
   const card = byId("account-card");
   if (!card) return;
@@ -1460,6 +1498,7 @@ async function loadAccount()                {
     text(byId("account-totp"), me.totp_enabled ? "Enrolled" : "Not enrolled");
     text(byId("account-backups"), String(me.backup_codes_remaining));
     render(byId("account-created"), html\`\${timeHtml(me.created_at)} (\${formatWhen(me.created_at)})\`);
+    void loadPlan();
   } catch (err) {
     showLoadError("account-error", loadErrorText(err, "Could not load your account"), () => {
       void loadAccount();
@@ -1558,6 +1597,252 @@ function bindAccount()       {
   });
 }
 
+// ---- src/hosted/client/team.ts ----
+/**
+ * Team panel (under Account): members with roles, invite form, pending invites with a copyable
+ * accept link, and the rail org switcher shown when the user belongs to more than one org.
+ */
+
+const TEAM_COPY = {
+  title: "Team",
+  lede: "Who can sign in to this workspace. Owners manage members and credentials; operators approve requests.",
+};
+
+/** \`#account/team\` (with an optional query) selects the Team panel inside the Account route. */
+function isTeamRoute(hash        )          {
+  const bare = (hash || "").replace(/^#/, "");
+  const path = bare.split("?")[0] ?? "";
+  const parts = path.split("/").filter(Boolean);
+  return parts[0] === "account" && parts[1] === "team";
+}
+
+const isTeamMember = (v         )                     => isJson(v) && typeof v.user_id === "string" && typeof v.role === "string";
+const isTeamInvite = (v         )                     => isJson(v) && typeof v.id === "string" && typeof v.email === "string";
+const isOrgRow = (v         )              => isJson(v) && typeof v.org_id === "string" && typeof v.name === "string";
+
+const teamState            = { members: [], invites: [], role: "operator", userId: "" };
+let teamHandlers                          ;
+
+function ownerCount()         {
+  return teamState.members.filter((m) => m.role === "owner").length;
+}
+
+function renderMembers()       {
+  const list = byId("members-list");
+  if (!list) return;
+  const owner = teamState.role === "owner";
+  render(
+    list,
+    html\`\${teamState.members.map((m) => {
+      const lastOwner = m.role === "owner" && ownerCount() <= 1;
+      const you = m.user_id === teamState.userId;
+      return html\`<article class="access-row" data-member="\${m.user_id}">
+        <div class="access-main">
+          <strong>\${m.email || m.user_id}</strong>\${you ? html\` <span class="pill pill-muted">you</span>\` : ""}
+          <p class="meta">\${m.joined_at ? html\`Joined \${timeHtml(m.joined_at)}\` : "Joined before join dates were recorded"}</p>
+        </div>
+        <div class="access-actions">
+          \${owner
+            ? html\`<label class="visually-hidden" for="role-\${m.user_id}">Role for \${m.email}</label>
+                <select id="role-\${m.user_id}" data-role-for="\${m.user_id}" \${lastOwner ? "disabled" : ""} title="\${lastOwner ? "An org needs at least one owner" : "Change role"}">
+                  <option value="owner" \${m.role === "owner" ? "selected" : ""}>owner</option>
+                  <option value="operator" \${m.role === "operator" ? "selected" : ""}>operator</option>
+                </select>
+                <button type="button" class="btn-danger" data-remove-member="\${m.user_id}" \${lastOwner ? "disabled" : ""} title="\${lastOwner ? "The last owner cannot be removed" : "Remove from workspace"}">Remove</button>\`
+            : html\`<span class="pill">\${m.role}</span>\`}
+        </div>
+      </article>\`;
+    })}\`,
+  );
+}
+
+function renderInvites()       {
+  const list = byId("invites-list");
+  if (!list) return;
+  setHidden("invites-empty", teamState.invites.length > 0);
+  const owner = teamState.role === "owner";
+  render(
+    list,
+    html\`\${teamState.invites.map(
+      (inv) => html\`<article class="access-row" data-invite="\${inv.id}">
+        <div class="access-main">
+          <strong>\${inv.email}</strong> <span class="pill">\${inv.role}</span>
+          \${inv.expired ? html\`<span class="pill pill-warn">expired</span>\` : ""}
+          <p class="meta">Invited \${timeHtml(inv.created_at)}\${inv.invited_by_email ? html\` by \${inv.invited_by_email}\` : ""}\${inv.expired ? "" : html\`, expires \${timeHtml(inv.expires_at)}\`}</p>
+        </div>
+        <div class="access-actions">
+          \${owner ? html\`<button type="button" class="btn-ghost" data-cancel-invite="\${inv.id}">Cancel</button>\` : ""}
+        </div>
+      </article>\`,
+    )}\`,
+  );
+}
+
+async function loadTeam()                {
+  if (!byId("members-list")) return;
+  setHidden("team-error", true);
+  try {
+    const r = await api("/api/members");
+    if (r.status === 401) {
+      handleUnauthorized();
+      return;
+    }
+    if (!r.ok) throw new Error(errorMessage(r, "Could not load the team"));
+    teamState.members = arr(r.body.members, isTeamMember);
+    teamState.invites = arr(r.body.invites, isTeamInvite);
+    teamState.role = str(r.body.role, "operator");
+    teamState.userId = str(r.body.user_id);
+    setHidden("team-invite-card", teamState.role !== "owner");
+    renderMembers();
+    renderInvites();
+  } catch (err) {
+    showLoadError("team-error", loadErrorText(err, "Could not load the team"), () => {
+      void loadTeam();
+    });
+  }
+}
+
+async function changeRole(userId        , role        , select                   )                {
+  try {
+    const r = await api(\`/api/members/\${encodeURIComponent(userId)}/role\`, { method: "POST", body: JSON.stringify({ role }) });
+    if (!r.ok) {
+      flash(errorMessage(r, "Could not change the role"), false);
+      const prior = teamState.members.find((m) => m.user_id === userId);
+      if (prior) select.value = prior.role;
+      return;
+    }
+    flash(\`Role updated to \${role}\`, true);
+    await loadTeam();
+  } catch (err) {
+    flash(loadErrorText(err, "Could not change the role"), false);
+  }
+}
+
+async function deleteAction(url        , fallback        )                                            {
+  try {
+    const r = await api(url, { method: "DELETE" });
+    return { ok: r.ok, message: r.ok ? "" : errorMessage(r, fallback) };
+  } catch (err) {
+    return { ok: false, message: loadErrorText(err, fallback) };
+  }
+}
+
+function showInviteLink(url        , emailSent         , email        )       {
+  const link = byId("invite-link");
+  if (link) link.textContent = url;
+  setHidden("invite-result", false);
+  text(
+    byId("invite-result-note"),
+    emailSent
+      ? \`Invite emailed to \${email}. You can also send this link yourself.\`
+      : \`Email is not configured on this server. Send this link to \${email} yourself.\`,
+  );
+  const copy = byId                   ("invite-copy");
+  if (copy) copy.onclick = () => copyText(url, "Invite link copied");
+}
+
+function bindInviteForm()       {
+  const form = byId                 ("invite");
+  form?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const emailEl = form.elements.namedItem("email");
+    const roleEl = form.elements.namedItem("role");
+    const email = emailEl instanceof HTMLInputElement ? emailEl.value.trim() : "";
+    const role = roleEl instanceof HTMLSelectElement ? roleEl.value : "operator";
+    if (!email) {
+      setFormNotice("invite-error", "Enter an email address.", false);
+      return;
+    }
+    setFormNotice("invite-error", "", true);
+    void busy(form, async () => {
+      try {
+        const r = await api("/api/members/invite", { method: "POST", body: JSON.stringify({ email, role }) });
+        if (!r.ok) {
+          setFormNotice("invite-error", errorMessage(r, "Could not send the invite"), false);
+          return;
+        }
+        const url = str(r.body.accept_url);
+        showInviteLink(url, r.body.email_sent === true, email);
+        if (emailEl instanceof HTMLInputElement) emailEl.value = "";
+        flash(\`Invited \${email} as \${role}\`, true);
+        await loadTeam();
+      } catch (err) {
+        setFormNotice("invite-error", loadErrorText(err, "Could not send the invite"), false);
+      }
+    });
+  });
+}
+
+function bindTeam(handlers              )       {
+  teamHandlers = handlers;
+  bindInviteForm();
+  byId("members-list")?.addEventListener("change", (e) => {
+    const select = e.target instanceof HTMLSelectElement ? e.target : null;
+    const userId = select?.dataset.roleFor;
+    if (!select || !userId) return;
+    void changeRole(userId, select.value, select);
+  });
+  byId("members-list")?.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest                   ("[data-remove-member]") : null;
+    const userId = btn?.dataset.removeMember;
+    if (!userId) return;
+    const member = teamState.members.find((m) => m.user_id === userId);
+    if (!member) return;
+    teamHandlers?.onRemoveMember(member, () => deleteAction(\`/api/members/\${encodeURIComponent(userId)}\`, "Could not remove the member"));
+  });
+  byId("invites-list")?.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest                   ("[data-cancel-invite]") : null;
+    const id = btn?.dataset.cancelInvite;
+    if (!id) return;
+    const invite = teamState.invites.find((i) => i.id === id);
+    if (!invite) return;
+    teamHandlers?.onCancelInvite(invite, () => deleteAction(\`/api/invites/\${encodeURIComponent(id)}\`, "Could not cancel the invite"));
+  });
+}
+
+/* ---------- org switcher ---------- */
+
+async function loadOrgs()                {
+  const select = byId                   ("org-switcher");
+  if (!select) return;
+  try {
+    const r = await api("/api/orgs");
+    if (!r.ok) return;
+    const orgs = arr(r.body.orgs, isOrgRow);
+    setHidden("org-switch", orgs.length < 2);
+    if (orgs.length < 2) return;
+    render(
+      select,
+      html\`\${orgs.map((o) => html\`<option value="\${o.org_id}" \${o.active ? "selected" : ""}>\${o.name} (\${o.role})</option>\`)}\`,
+    );
+  } catch {
+    setHidden("org-switch", true);
+  }
+}
+
+function bindOrgSwitcher()       {
+  const select = byId                   ("org-switcher");
+  select?.addEventListener("change", () => {
+    const orgId = select.value;
+    if (!orgId) return;
+    select.disabled = true;
+    void (async () => {
+      try {
+        const r = await api("/api/session/org", { method: "POST", body: JSON.stringify({ org_id: orgId }) });
+        if (!r.ok) {
+          flash(errorMessage(r, "Could not switch workspace"), false);
+          select.disabled = false;
+          return;
+        }
+        location.href = "/console";
+      } catch (err) {
+        flash(loadErrorText(err, "Could not switch workspace"), false);
+        select.disabled = false;
+      }
+    })();
+  });
+}
+
 // ---- src/hosted/client/console.ts ----
 /** Console boot: routing, session gate, dialogs, and the wiring between panels. */
 
@@ -1574,17 +1859,23 @@ let signedOut = false;
 
 /* ---------- routing ---------- */
 
+/** Team lives at \`#account/team\`: an Account route drawn as its own panel. */
+function teamShown(route       )          {
+  return route.panel === "account" && isTeamRoute(location.hash);
+}
+
 function applyRoute(route       )       {
   current = route;
   const panel        = route.panel;
+  const shown                 = teamShown(route) ? "team" : panel;
   document.querySelectorAll             ("[data-panel]").forEach((p) => {
-    p.classList.toggle("is-active", p.dataset.panel === panel);
+    p.classList.toggle("is-active", p.dataset.panel === shown);
   });
   document.querySelectorAll             ("[data-nav]").forEach((a) => {
-    if (a.dataset.nav === panel) a.setAttribute("aria-current", "page");
+    if (a.dataset.nav === shown) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
-  const copy = PANEL_COPY[panel];
+  const copy = shown === "team" ? TEAM_COPY : PANEL_COPY[panel];
   if (!signedOut) {
     text(byId("page-title"), copy.title);
     text(byId("page-lede"), copy.lede);
@@ -1608,6 +1899,7 @@ function navigate(hash        )       {
 /** Arriving on a panel refreshes it, so a switch never shows data older than the last poll. */
 async function loadForRoute(route       )                {
   if (route.panel === "agents") await loadAccess(route);
+  else if (teamShown(route)) await loadTeam();
   else if (route.panel === "account") await loadAccount();
   else if (route.panel === "inbox") await loadInbox();
   else await loadItems();
@@ -1642,7 +1934,8 @@ function reloadAll()       {
   void loadItems();
   void loadInbox();
   void loadAccess(current);
-  if (current.panel === "account") void loadAccount();
+  if (teamShown(current)) void loadTeam();
+  else if (current.panel === "account") void loadAccount();
 }
 
 /* ---------- confirm ---------- */
@@ -1925,6 +2218,25 @@ document.addEventListener("DOMContentLoaded", () => {
   bindIssue();
   bindBreakglass();
   bindAccount();
+  bindOrgSwitcher();
+  bindTeam({
+    onRemoveMember: (m, run) =>
+      openConfirm({
+        title: \`Remove \${m.email || m.user_id} from this workspace?\`,
+        body: "They lose access to every credential and approval here now. You can invite them again later.",
+        button: "Remove member",
+        run,
+        after: () => flash(\`Removed \${m.email || m.user_id}\`, true),
+      }),
+    onCancelInvite: (inv, run) =>
+      openConfirm({
+        title: \`Cancel the invite for \${inv.email}?\`,
+        body: "The link in their email stops working now.",
+        button: "Cancel invite",
+        run,
+        after: () => flash(\`Cancelled the invite for \${inv.email}\`, true),
+      }),
+  });
   bindInbox({
     onCount: (count) => {
       const badge = byId("inbox-badge");
@@ -2021,6 +2333,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyRoute(initial);
   void loadItems();
   void loadInbox();
+  void loadOrgs();
   void loadForRoute(initial);
 });
 })();

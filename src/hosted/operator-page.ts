@@ -9,6 +9,60 @@ export function defaultEnvironmentForPlane(plane: VaultEnvName): VaultEnvName {
   return plane === "staging" ? "staging" : "production";
 }
 
+/** Team panel (3.7), routed at `#account/team`. Lists are filled by client/team.ts. */
+export function teamPanelHtml(): string {
+  return `<section class="panel" data-panel="team" aria-labelledby="page-title">
+          <div id="team-error" class="error-box" role="alert" hidden data-testid="team-error"></div>
+          <div class="card" id="team-invite-card" data-testid="team-invite-card" hidden>
+            <h2>Invite a teammate</h2>
+            <p class="hint">They get an email with a link that works for seven days. Owners manage members and credentials; operators approve requests and use the vault.</p>
+            <form id="invite" class="inline-form" data-testid="invite-form">
+              <label for="invite-email">Email</label>
+              <input id="invite-email" name="email" type="email" autocomplete="off" required />
+              <label for="invite-role">Role</label>
+              <select id="invite-role" name="role"><option value="operator">operator</option><option value="owner">owner</option></select>
+              <p id="invite-error" class="flash" role="alert"></p>
+              <button type="submit" class="btn-primary" data-testid="invite-submit">Send invite</button>
+            </form>
+            <div id="invite-result" hidden data-testid="invite-result">
+              <p id="invite-result-note" class="hint"></p>
+              <p class="copy-row"><code id="invite-link"></code> <button type="button" id="invite-copy" class="btn-ghost">Copy link</button></p>
+            </div>
+          </div>
+          <div class="card" data-testid="members-card">
+            <h2>Members</h2>
+            <div id="members-list" class="access-list" data-testid="members-list"></div>
+          </div>
+          <div class="card" data-testid="invites-card">
+            <h2>Pending invites</h2>
+            <p id="invites-empty" class="hint" hidden>No pending invites.</p>
+            <div id="invites-list" class="access-list" data-testid="invites-list"></div>
+          </div>
+        </section>`;
+}
+
+/** Plan usage (3.9) shown at the top of the Account panel; values come from `GET /api/plan`. */
+export function planCardHtml(): string {
+  return `<div class="card" id="plan-card" data-testid="plan-card">
+            <h2>Plan</h2>
+            <p class="hint">Free while in beta. <span id="plan-period"></span></p>
+            <dl class="facts">
+              <dt>Credentials</dt><dd id="plan-credentials">Loading</dd>
+              <dt>Agents</dt><dd id="plan-agents">Loading</dd>
+              <dt>Members and pending invites</dt><dd id="plan-members">Loading</dd>
+              <dt>API calls this month</dt><dd id="plan-calls">Loading</dd>
+            </dl>
+          </div>`;
+}
+
+const ACCOUNT_ANCHOR = `<div id="account-error" class="error-box" role="alert" hidden data-testid="account-error"></div>`;
+
+/** Splices the plan card into the Account panel right after its error box. Loud when the anchor moves. */
+export function withPlanCard(panels: string): string {
+  if (!panels.includes(ACCOUNT_ANCHOR)) throw new Error("Account panel anchor not found; update withPlanCard");
+  return panels.replace(ACCOUNT_ANCHOR, `${ACCOUNT_ANCHOR}\n          ${planCardHtml()}`);
+}
+
 /** Operator console HTML. `deployPlane` controls which environments Store, Issue, and the list expose. */
 export function hostedOperatorHtml(
   opts: { hosted?: boolean; nonce?: string; deployPlane?: VaultEnvName } = {},
@@ -37,6 +91,7 @@ export function hostedOperatorHtml(
     <aside class="rail">
       <a class="brand" href="/console#inbox"><img src="/assets/mark.svg" alt="" width="28" height="28" /><span class="brand-mark">${PRODUCT_NAME}</span></a>
       ${planeLabel}
+      <label id="org-switch" class="org-switch" hidden><span class="visually-hidden">Workspace</span><select id="org-switcher" data-testid="org-switcher"></select></label>
       <nav class="rail-nav" aria-label="Console">
         <a class="nav-link" href="#inbox" data-nav="inbox" data-testid="nav-inbox">Inbox <span id="inbox-badge" class="badge" data-count="0" aria-label="0 waiting">0</span></a>
         <a class="nav-link" href="#credentials" data-nav="credentials" data-testid="nav-credentials">Credentials</a>
@@ -44,6 +99,7 @@ export function hostedOperatorHtml(
       </nav>
       <div class="rail-foot">
         <a class="nav-link" href="#account" data-nav="account" data-testid="nav-account">Account</a>
+        <a class="nav-link" href="#account/team" data-nav="team" data-testid="nav-team">Team</a>
         <button type="button" id="sign-out" class="nav-link nav-button" data-testid="sign-out">Sign out</button>
         ${signin}
         <details id="breakglass" hidden data-testid="breakglass">
@@ -76,7 +132,8 @@ export function hostedOperatorHtml(
         </p>
       </div>
       <main id="main">
-        ${consolePanelsHtml(plane, defaultEnv)}
+        ${withPlanCard(consolePanelsHtml(plane, defaultEnv))}
+        ${teamPanelHtml()}
       </main>
     </div>
   </div>

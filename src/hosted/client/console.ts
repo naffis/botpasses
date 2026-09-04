@@ -23,6 +23,7 @@ import {
   text,
 } from "./shared.ts";
 import { bindStoreForm, readStoreValues, setField, storeValidationError, syncStoreFields } from "./store-form.ts";
+import { bindOrgSwitcher, bindTeam, isTeamRoute, loadOrgs, loadTeam, TEAM_COPY } from "./team.ts";
 import type { ItemRow } from "./types.ts";
 
 const STORE_IDS = {
@@ -38,17 +39,23 @@ let signedOut = false;
 
 /* ---------- routing ---------- */
 
+/** Team lives at `#account/team`: an Account route drawn as its own panel. */
+function teamShown(route: Route): boolean {
+  return route.panel === "account" && isTeamRoute(location.hash);
+}
+
 function applyRoute(route: Route): void {
   current = route;
   const panel: Panel = route.panel;
+  const shown: Panel | "team" = teamShown(route) ? "team" : panel;
   document.querySelectorAll<HTMLElement>("[data-panel]").forEach((p) => {
-    p.classList.toggle("is-active", p.dataset.panel === panel);
+    p.classList.toggle("is-active", p.dataset.panel === shown);
   });
   document.querySelectorAll<HTMLElement>("[data-nav]").forEach((a) => {
-    if (a.dataset.nav === panel) a.setAttribute("aria-current", "page");
+    if (a.dataset.nav === shown) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
-  const copy = PANEL_COPY[panel];
+  const copy = shown === "team" ? TEAM_COPY : PANEL_COPY[panel];
   if (!signedOut) {
     text(byId("page-title"), copy.title);
     text(byId("page-lede"), copy.lede);
@@ -72,6 +79,7 @@ function navigate(hash: string): void {
 /** Arriving on a panel refreshes it, so a switch never shows data older than the last poll. */
 async function loadForRoute(route: Route): Promise<void> {
   if (route.panel === "agents") await loadAccess(route);
+  else if (teamShown(route)) await loadTeam();
   else if (route.panel === "account") await loadAccount();
   else if (route.panel === "inbox") await loadInbox();
   else await loadItems();
@@ -106,7 +114,8 @@ function reloadAll(): void {
   void loadItems();
   void loadInbox();
   void loadAccess(current);
-  if (current.panel === "account") void loadAccount();
+  if (teamShown(current)) void loadTeam();
+  else if (current.panel === "account") void loadAccount();
 }
 
 /* ---------- confirm ---------- */
@@ -397,6 +406,25 @@ document.addEventListener("DOMContentLoaded", () => {
   bindIssue();
   bindBreakglass();
   bindAccount();
+  bindOrgSwitcher();
+  bindTeam({
+    onRemoveMember: (m, run) =>
+      openConfirm({
+        title: `Remove ${m.email || m.user_id} from this workspace?`,
+        body: "They lose access to every credential and approval here now. You can invite them again later.",
+        button: "Remove member",
+        run,
+        after: () => flash(`Removed ${m.email || m.user_id}`, true),
+      }),
+    onCancelInvite: (inv, run) =>
+      openConfirm({
+        title: `Cancel the invite for ${inv.email}?`,
+        body: "The link in their email stops working now.",
+        button: "Cancel invite",
+        run,
+        after: () => flash(`Cancelled the invite for ${inv.email}`, true),
+      }),
+  });
   bindInbox({
     onCount: (count) => {
       const badge = byId("inbox-badge");
@@ -493,5 +521,6 @@ document.addEventListener("DOMContentLoaded", () => {
   applyRoute(initial);
   void loadItems();
   void loadInbox();
+  void loadOrgs();
   void loadForRoute(initial);
 });
