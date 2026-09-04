@@ -131,14 +131,24 @@ test("AC-22 OTP send is uniform; sixth verify fails; sixth send is 429", async (
     assert.equal(unknown.status, 200);
     assert.equal(known.status, 200);
     assert.deepEqual(await unknown.json(), await known.json());
+    // A resend replaces the live code: a second email goes out and the first code stops working.
+    const firstOtp = codeFromEmail(ctx.emails[0]?.html ?? "");
     const again = await fetch(`${ctx.base}/api/auth/otp/send`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "new@example.com" }),
     });
     assert.equal(again.status, 200);
-    assert.equal(ctx.emails.filter((e) => e.to === "new@example.com").length, 1);
-    const otp = codeFromEmail(ctx.emails[0]?.html ?? "");
+    const sent = ctx.emails.filter((e) => e.to === "new@example.com");
+    assert.equal(sent.length, 2);
+    const otp = codeFromEmail(sent[1]?.html ?? "");
+    assert.notEqual(otp, firstOtp);
+    const stale = await fetch(`${ctx.base}/api/auth/otp/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "new@example.com", otp: firstOtp }),
+    });
+    assert.equal(stale.status, 401, "the replaced code is refused");
     let last = 0;
     for (let i = 0; i < 6; i += 1) {
       const r = await fetch(`${ctx.base}/api/auth/otp/verify`, {

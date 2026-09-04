@@ -47,7 +47,9 @@ The process exits with code 78 when configuration is wrong: a short session secr
 | `VAULT_SESSION_SECRET` | 32 bytes or more. Signs sessions and CSRF tokens |
 | `VAULT_OIDC_PRIVATE_JWK` | RS256 private JWK for OAuth access tokens |
 | `VAULT_APPROVAL_HMAC` | Signs email approval links |
-| `VAULT_BOOTSTRAP_TOKEN` | 32 characters or more. Break-glass operator token; keep it offline |
+| `VAULT_BOOTSTRAP_TOKEN` | 32 characters or more. Break-glass operator token; keep it offline. Every use is logged as `auth_bootstrap_used` with a token hash |
+| `VAULT_BOOTSTRAP_ALLOW_PLANE` | Set to `1` only for the break-glass window. Staging and production refuse to boot with `VAULT_BOOTSTRAP_TOKEN` set unless this is `1`; unset both afterwards |
+| `VAULT_TRUST_PROXY` | Set to `1` when a proxy you control sits in front and sets `Fly-Client-IP` or `X-Forwarded-For` (Fly implies it). Otherwise the socket peer is the caller's address for rate limits and logs |
 | `RESEND_API_KEY` | Sending-access key scoped to your domain |
 | `VAULT_EMAIL_FROM` | For example `Botpasses <noreply@example.com>`. Required when `RESEND_API_KEY` is set |
 | `SENTRY_DSN` | Optional |

@@ -18,7 +18,7 @@ import { api, identityServer, signUpAndEnroll } from "./identity-harness.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function setup(limits?: { credentials: number; agents: number; members: number; calls: number }) {
+async function setup(limits?: { credentials: number; agents: number; members: number; calls: number; orgs: number }) {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "team.sqlite"));
   const emails: { to: string; subject: string; html: string }[] = [];
@@ -162,7 +162,7 @@ test("invite email template escapes every field", () => {
 });
 
 test("accept: page states, email mismatch 403, matching email joins, reuse 410, expiry 410", async () => {
-  const ctx = await setup({ credentials: 25, agents: 10, members: 10, calls: 5000 });
+  const ctx = await setup({ credentials: 25, agents: 10, members: 10, calls: 5000, orgs: 10 });
   try {
     const owner = ctx.headers("user_owner");
     const res = await invite(ctx.base, owner, "new@example.com", "owner");
@@ -291,7 +291,7 @@ test("roles and removal: owner-only, the last owner cannot be demoted or removed
 });
 
 test("members plan limit counts seats and pending invites", async () => {
-  const ctx = await setup({ credentials: 25, agents: 10, members: 3, calls: 5000 });
+  const ctx = await setup({ credentials: 25, agents: 10, members: 3, calls: 5000, orgs: 10 });
   try {
     const owner = ctx.headers("user_owner");
     assert.equal((await invite(ctx.base, owner, "new@example.com")).status, 200, "third seat");
@@ -316,6 +316,8 @@ test("org switcher: store pins the session org, kernel prefers it while membersh
       mfaAt: "2026-09-04T00:00:00.000Z",
     });
     assert.equal((await store.getSession("sess_a"))?.activeOrgId, null);
+    // Memberships list oldest first by `joined_at`; join the second org later than the personal one.
+    ctx.clock.now += 60_000;
     await kernel.addMember(ctx.orgId, "user_new", "operator");
     await store.setSessionActiveOrg("sess_a", ctx.orgId);
     assert.equal((await store.getSession("sess_a"))?.activeOrgId, ctx.orgId);

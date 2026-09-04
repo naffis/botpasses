@@ -42,18 +42,21 @@ export class IpWindowLimiter {
 }
 
 /**
- * Resolve the caller's address from proxy headers.
- * Order: `Fly-Client-IP` (set by the Fly proxy, never by the client), then the LAST hop of
- * `X-Forwarded-For` (appended by the proxy we trust; clients can prepend but not append),
- * then the socket peer.
+ * Resolve the caller's address. Proxy headers are read only when `trustProxy` is set (behind
+ * Fly, or `VAULT_TRUST_PROXY=1`): `Fly-Client-IP` (set by the Fly proxy, never by the client),
+ * then the LAST hop of `X-Forwarded-For` (appended by the proxy; clients can prepend but not
+ * append). Without a trusted proxy every header is attacker-controlled, so the socket peer is
+ * the only address that counts.
  */
 export function clientIpFrom(
   flyClientIp: string | undefined,
   forwarded: string | undefined,
   remote: string | undefined,
-  trustFlyHeader = true,
+  trustProxy = true,
 ): string {
-  const fly = trustFlyHeader ? flyClientIp?.trim() : undefined;
+  const peer = remote?.trim() || "0.0.0.0";
+  if (!trustProxy) return peer;
+  const fly = flyClientIp?.trim();
   if (fly) return fly;
   const hops = (forwarded ?? "")
     .split(",")
@@ -61,8 +64,7 @@ export function clientIpFrom(
     .filter(Boolean);
   const last = hops.at(-1);
   if (last) return last;
-  const peer = remote?.trim();
-  return peer || "0.0.0.0";
+  return peer;
 }
 
 function headerValue(req: IncomingMessage, name: string): string | undefined {
@@ -71,8 +73,8 @@ function headerValue(req: IncomingMessage, name: string): string | undefined {
   return raw;
 }
 
-/** `Fly-Client-IP` is authoritative only behind Fly (or when the deployer opts in with VAULT_TRUST_PROXY=1). */
-export function trustsFlyClientIp(env: NodeJS.ProcessEnv = process.env): boolean {
+/** Proxy headers are authoritative only behind Fly, or when the deployer opts in with VAULT_TRUST_PROXY=1. */
+export function trustsProxyHeaders(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(env.FLY_APP_NAME?.trim()) || env.VAULT_TRUST_PROXY === "1";
 }
 
@@ -81,6 +83,6 @@ export function requestClientIp(req: IncomingMessage): string {
     headerValue(req, "fly-client-ip"),
     headerValue(req, "x-forwarded-for"),
     req.socket?.remoteAddress,
-    trustsFlyClientIp(),
+    trustsProxyHeaders(),
   );
 }

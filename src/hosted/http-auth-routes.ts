@@ -9,6 +9,7 @@ import {
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { totpEnabled } from "./operator-identity.ts";
 import { requestClientIp } from "./identity-limiter.ts";
+import { logAuthEvent } from "./observe.ts";
 import { needsTotpVerify } from "./identity.ts";
 import { HttpError } from "./errors.ts";
 import type Provider from "oidc-provider";
@@ -125,7 +126,12 @@ export async function handleAuthApi(
   }
   if (method === "POST" && path === "/api/auth/otp/verify") {
     const body = await opts.readJson(req);
-    const result = await opts.identity.verifyOtp(String(body.email ?? ""), String(body.otp ?? ""), cookies);
+    const result = await opts.identity.verifyOtp(
+      String(body.email ?? ""),
+      String(body.otp ?? ""),
+      cookies,
+      requestClientIp(req),
+    );
     const enrolled = totpEnabled(result.user);
     opts.setCookies(res, result.cookies, 200, { ok: true, enroll: !enrolled, verify: enrolled });
     return true;
@@ -173,6 +179,7 @@ export async function handleAuthApi(
     if (hash) {
       assertCsrf();
       await opts.identity.store.deleteSession(hash);
+      logAuthEvent("signed_out", { user_id: principal?.channel === "operator" ? principal.userId : undefined });
     }
     const opCookies = opts.oidcProvider ? await endOidcSession(opts.oidcProvider, req, res) : [];
     opts.setCookies(res, [...opts.identity.logoutCookies(opts.secure), ...opCookies], 200, { ok: true });

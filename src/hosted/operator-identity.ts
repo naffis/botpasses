@@ -15,12 +15,11 @@ import { buildOtpEmail } from "./otp-email.ts";
 import { otpauthQrSvg } from "./totp-qr.ts";
 import { IdentityKeyring } from "./identity-keys.ts";
 import { logAuthEvent } from "./observe.ts";
-import { IpWindowLimiter, clientIpFrom } from "./identity-limiter.ts";
+import { IpWindowLimiter, clientIpFrom, trustsProxyHeaders } from "./identity-limiter.ts";
 import {
   BACKUP_CODE_COUNT,
-  afterTotpFailure,
-  afterTotpSuccess,
-  attemptsRemaining,
+  TOTP_LOCK_MS,
+  TOTP_MAX_FAILURES,
   lockRemainingMs,
   looksLikeTotpCode,
   matchTotpStep,
@@ -51,12 +50,14 @@ const OTP_MAX_ATTEMPTS = 5;
 const OTP_EMAIL_WINDOW_MS = 15 * 60 * 1000;
 const OTP_EMAIL_MAX = 5;
 const OTP_IP_MAX = 10;
+/** Verify budget per window: enough for every attempt the send budget allows, not for a scan. */
+const OTP_VERIFY_EMAIL_MAX = OTP_EMAIL_MAX * OTP_MAX_ATTEMPTS;
+const OTP_VERIFY_IP_MAX = OTP_IP_MAX * OTP_MAX_ATTEMPTS;
 const SESSION_IDLE_MS = 12 * 60 * 60 * 1000;
 const SESSION_ABS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Same text for known and unknown addresses (AC-22): the response must not reveal accounts. */
-export const OTP_SENT_MESSAGE =
-  "Check your inbox for an 8-digit code. It stays valid for 10 minutes; a code already sent is not replaced.";
+export const OTP_SENT_MESSAGE = "Check your inbox for an 8-digit code. It stays valid for 10 minutes.";
 
 export type IdentityOpts = {
   store: VaultStore;
@@ -89,6 +90,7 @@ export function csrfCookieName(secure: boolean): string {
   return secure ? "__Host-bp_csrf" : "bp_csrf";
 }
 
+/** A cookie whose value is not valid percent-encoding is skipped, never a 500. */
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
@@ -97,7 +99,12 @@ export function parseCookies(header: string | undefined): Record<string, string>
     if (idx < 0) continue;
     const key = part.slice(0, idx).trim();
     const val = part.slice(idx + 1).trim();
-    if (key) out[key] = decodeURIComponent(val);
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      continue;
+    }
   }
   return out;
 }
@@ -130,12 +137,21 @@ function hmac(secret: string, value: string): string {
   return createHmac("sha256", secret).update(value).digest("base64url");
 }
 
-export function signCsrf(secret: string, raw: string): string {
-  return `${raw}.${hmac(secret, raw)}`;
+/**
+ * Double-submit CSRF token bound to one session: the signature covers the session id hash, so
+ * a token minted for another session (or planted by cookie tossing) does not verify.
+ */
+export function signCsrf(secret: string, raw: string, sessionHash: string): string {
+  return `${raw}.${hmac(secret, `${sessionHash}.${raw}`)}`;
 }
 
-export function verifyCsrfToken(secret: string, cookieVal: string | undefined, headerVal: string | undefined): void {
-  if (!cookieVal || !headerVal) throw new HttpError(403, "CSRF required");
+export function verifyCsrfToken(
+  secret: string,
+  cookieVal: string | undefined,
+  headerVal: string | undefined,
+  sessionHash: string | undefined,
+): void {
+  if (!cookieVal || !headerVal || !sessionHash) throw new HttpError(403, "CSRF required");
   if (cookieVal.length !== headerVal.length || !timingSafeEqual(Buffer.from(cookieVal), Buffer.from(headerVal))) {
     throw new HttpError(403, "CSRF required");
   }
@@ -143,7 +159,7 @@ export function verifyCsrfToken(secret: string, cookieVal: string | undefined, h
   if (dot < 1) throw new HttpError(403, "CSRF required");
   const raw = cookieVal.slice(0, dot);
   const sig = cookieVal.slice(dot + 1);
-  const expected = hmac(secret, raw);
+  const expected = hmac(secret, `${sessionHash}.${raw}`);
   if (sig.length !== expected.length || !timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
     throw new HttpError(403, "CSRF required");
   }
@@ -168,12 +184,6 @@ function mintOtp(): string {
   return String(randomInt(0, 100_000_000)).padStart(8, "0");
 }
 
-function otpChallengeLive(row: EmailOtpRecord | undefined, nowMs: number): boolean {
-  if (!row) return false;
-  if (Date.parse(row.expiresAt) <= nowMs) return false;
-  return row.attempts < OTP_MAX_ATTEMPTS;
-}
-
 function lockedError(remainingMs: number): HttpError {
   return new HttpError(429, "Too many attempts", { retry_after: Math.ceil(remainingMs / 1000) });
 }
@@ -185,6 +195,7 @@ export class OperatorIdentity {
   readonly now: () => Date;
   readonly ipLimiter = new IpWindowLimiter();
   readonly keys: IdentityKeyring;
+  #dummyOtpHash: Promise<string> | undefined;
 
   constructor(opts: IdentityOpts) {
     this.store = opts.store;
@@ -199,18 +210,18 @@ export class OperatorIdentity {
    * Prefer `requestClientIp(req)` from `identity-limiter.ts`.
    */
   clientIp(forwarded: string | undefined, remote: string | undefined): string {
-    return clientIpFrom(undefined, forwarded, remote);
+    return clientIpFrom(undefined, forwarded, remote, trustsProxyHeaders());
   }
 
-  /** Same `{ ok: true, message }` for unknown emails. Does not send again while a code is still valid. */
+  /**
+   * Same `{ ok: true, message }` for unknown emails. The code is emailed before anything is
+   * stored, so a mailer failure leaves no challenge behind. A resend while a code is still
+   * valid replaces it: the old code stops working and the send counts against the budget.
+   */
   async sendOtp(emailRaw: string, ip: string): Promise<{ ok: true; message: string }> {
     const email = normalizeEmail(emailRaw);
     const now = this.now();
     const nowMs = now.getTime();
-    const existing = await this.store.latestEmailOtp(email);
-    if (otpChallengeLive(existing, nowMs)) {
-      return { ok: true, message: OTP_SENT_MESSAGE };
-    }
     if (!this.ipLimiter.allow(`ip:${ip}`, OTP_IP_MAX, OTP_EMAIL_WINDOW_MS, nowMs)) {
       throw new HttpError(429, "Too many requests");
     }
@@ -219,15 +230,7 @@ export class OperatorIdentity {
     if (sent >= OTP_EMAIL_MAX) throw new HttpError(429, "Too many requests");
     const code = mintOtp();
     const mail = buildOtpEmail(code, OTP_TTL_MS / 60_000);
-    const row: EmailOtpRecord = {
-      id: `otp_${randomUUID()}`,
-      email,
-      codeScrypt: await scryptHash(code),
-      expiresAt: new Date(nowMs + OTP_TTL_MS).toISOString(),
-      attempts: 0,
-      sentAt: now.toISOString(),
-    };
-    await this.store.insertEmailOtp(row);
+    const codeScrypt = await scryptHash(code);
     if (this.sendEmail) {
       try {
         await this.sendEmail(email, mail.subject, mail.html, mail.text);
@@ -235,6 +238,20 @@ export class OperatorIdentity {
         throw new HttpError(503, "Email delivery failed");
       }
     }
+    const previous = await this.store.latestEmailOtp(email);
+    if (previous && Date.parse(previous.expiresAt) > nowMs) {
+      await this.store.updateEmailOtp({ ...previous, expiresAt: now.toISOString() });
+    }
+    const row: EmailOtpRecord = {
+      id: `otp_${randomUUID()}`,
+      email,
+      codeScrypt,
+      expiresAt: new Date(nowMs + OTP_TTL_MS).toISOString(),
+      attempts: 0,
+      sentAt: now.toISOString(),
+    };
+    await this.store.insertEmailOtp(row);
+    logAuthEvent("otp_sent", { email });
     return { ok: true, message: OTP_SENT_MESSAGE };
   }
 
@@ -245,24 +262,39 @@ export class OperatorIdentity {
     return scryptVerify(code, ch.codeScrypt);
   }
 
-  /** Email step. Issues a session with `mfaAt` null; the authenticator step upgrades it. */
-  async verifyOtp(emailRaw: string, otp: string, cookies: CookieOpts): Promise<IssuedSession> {
+  /**
+   * Email step. Issues a session with `mfaAt` null; the authenticator step upgrades it.
+   * The attempt is claimed atomically in the store before the hash check, so concurrent
+   * guesses cannot share one slot; a missing or exhausted challenge still costs one scrypt so
+   * the response time does not say whether a challenge exists.
+   */
+  async verifyOtp(emailRaw: string, otp: string, cookies: CookieOpts, ip: string): Promise<IssuedSession> {
     const email = normalizeEmail(emailRaw);
-    const ch = await this.store.latestEmailOtp(email);
     const now = this.now();
-    if (!ch || Date.parse(ch.expiresAt) <= now.getTime()) {
+    const nowMs = now.getTime();
+    if (
+      !this.ipLimiter.allow(`verify-ip:${ip}`, OTP_VERIFY_IP_MAX, OTP_EMAIL_WINDOW_MS, nowMs) ||
+      !this.ipLimiter.allow(`verify-email:${email}`, OTP_VERIFY_EMAIL_MAX, OTP_EMAIL_WINDOW_MS, nowMs)
+    ) {
+      throw new HttpError(429, "Too many requests");
+    }
+    const ch = await this.store.latestEmailOtp(email);
+    const attempts = ch ? await this.store.claimOtpAttempt(ch.id, now.toISOString(), OTP_MAX_ATTEMPTS) : undefined;
+    if (!ch || attempts === undefined) {
+      await scryptVerify(otp.trim(), await this.#dummyOtp());
       throw new HttpError(401, "Invalid code");
     }
-    if (ch.attempts >= OTP_MAX_ATTEMPTS) throw new HttpError(401, "Invalid code");
     const ok = await scryptVerify(otp.trim(), ch.codeScrypt);
     if (!ok) {
-      const attempts = ch.attempts + 1;
-      const expiresAt = attempts >= OTP_MAX_ATTEMPTS ? now.toISOString() : ch.expiresAt;
-      await this.store.updateEmailOtp({ ...ch, attempts, expiresAt });
-      logAuthEvent("otp_failed", { email, attempts });
+      if (attempts >= OTP_MAX_ATTEMPTS) {
+        await this.store.updateEmailOtp({ ...ch, attempts, expiresAt: now.toISOString() });
+        logAuthEvent("otp_locked", { email, attempts });
+      } else {
+        logAuthEvent("otp_failed", { email, attempts });
+      }
       throw new HttpError(401, "Invalid code", { attempts_remaining: Math.max(0, OTP_MAX_ATTEMPTS - attempts) });
     }
-    await this.store.updateEmailOtp({ ...ch, expiresAt: now.toISOString(), attempts: ch.attempts });
+    await this.store.updateEmailOtp({ ...ch, attempts, expiresAt: now.toISOString() });
     logAuthEvent("otp_verified", { email });
     let user = await this.store.getUserByEmail(email);
     if (!user) {
@@ -332,11 +364,10 @@ export class OperatorIdentity {
     const nowMs = this.now().getTime();
     const pending = pendingEnvelope(user, nowMs);
     if (!pending) throw new HttpError(400, "Authenticator enrollment not started");
-    const remaining = lockRemainingMs(user, nowMs);
-    if (remaining > 0) throw lockedError(remaining);
+    const failures = await this.#claimTotpAttempt(user);
     const { secret } = await this.keys.unwrap(user.id, "totp_pending", pending);
     const step = matchTotpStep(secret, code.trim(), nowMs);
-    if (step === null) throw await this.#recordFailure(user, nowMs);
+    if (step === null) throw await this.#totpFailure(user.id, failures);
     const wrapped = await this.keys.wrap(user.id, "totp", secret);
     const next: UserRow = {
       ...user,
@@ -344,12 +375,15 @@ export class OperatorIdentity {
       totpWrappedCiphertext: wrapped.ciphertext,
       totpWrappedTag: wrapped.tag,
       totpLastStep: step,
-      ...withoutPending(afterTotpSuccess(securityOf(user))),
+      ...withoutPending(securityOf(user)),
+      totpFailures: 0,
+      totpLockedUntil: null,
     };
     await this.store.updateUser(next);
     await this.store.updateUserSecurity(next.id, securityOf(next));
     await this.store.deleteUnusedBackupCodes(next.id);
     const backups = await this.#mintBackups(next.id);
+    logAuthEvent("totp_verified", { user_id: user.id, factor: "enroll" });
     const issued = await this.#rotateSession(next, sessionHash, cookies);
     return { ...issued, backup_codes: backups };
   }
@@ -390,13 +424,18 @@ export class OperatorIdentity {
     await this.keys.rotateKek(oldKek, newKek);
   }
 
+  /**
+   * The session named by the cookie for this mode only: `__Host-bp_session` when `secure`,
+   * `bp_session` otherwise. There is no fallback from one name to the other, so a plain cookie
+   * tossed onto the HTTPS origin cannot fix a session.
+   */
   async loadSession(cookieHeader: string | undefined, secure: boolean): Promise<{
     user: UserRow;
     session: OperatorSessionRow;
     token: string;
   } | undefined> {
     const cookies = parseCookies(cookieHeader);
-    const token = cookies[sessionCookieName(secure)] ?? cookies[sessionCookieName(false)];
+    const token = cookies[sessionCookieName(secure)];
     if (!token) return undefined;
     const session = await this.store.getSession(hashToken(token));
     if (!session) return undefined;
@@ -418,9 +457,14 @@ export class OperatorIdentity {
     return { user, session: { ...session, lastSeenAt: lastSeen, expiresAt: idleExp }, token };
   }
 
+  /**
+   * Cookies live for the absolute session lifetime; the server-side idle expiry (extended on
+   * every request by `loadSession`) is authoritative, so activity keeps a session alive
+   * without re-issuing the cookie and an idle one ends after twelve hours regardless.
+   */
   sessionCookies(token: string, cookies: CookieOpts): string[] {
-    const maxAge = Math.floor(SESSION_IDLE_MS / 1000);
-    const csrf = signCsrf(this.sessionSecret, randomBytes(32).toString("base64url"));
+    const maxAge = Math.floor(SESSION_ABS_MS / 1000);
+    const csrf = signCsrf(this.sessionSecret, randomBytes(32).toString("base64url"), hashToken(token));
     return [
       setCookieHeader(sessionCookieName(cookies.secure), token, cookies.secure, true, maxAge),
       setCookieHeader(csrfCookieName(cookies.secure), csrf, cookies.secure, false, maxAge),
@@ -434,10 +478,16 @@ export class OperatorIdentity {
     ];
   }
 
+  /** The CSRF token must match the header and be signed for the session cookie sent with it. */
   assertCsrf(cookieHeader: string | undefined, csrfHeader: string | undefined, secure: boolean): void {
     const cookies = parseCookies(cookieHeader);
-    const cookieVal = cookies[csrfCookieName(secure)] ?? cookies[csrfCookieName(false)];
-    verifyCsrfToken(this.sessionSecret, cookieVal, csrfHeader);
+    const sessionToken = cookies[sessionCookieName(secure)];
+    verifyCsrfToken(
+      this.sessionSecret,
+      cookies[csrfCookieName(secure)],
+      csrfHeader,
+      sessionToken ? hashToken(sessionToken) : undefined,
+    );
   }
 
   async #issueSession(user: UserRow, cookies: CookieOpts, mfaAt: string | null): Promise<IssuedSession> {
@@ -465,44 +515,55 @@ export class OperatorIdentity {
 
   /**
    * Check an authenticator code (6 digits, replay-protected) or a backup code against the
-   * confirmed secret, under the failure counter. Returns the user row with the consumed step
-   * and reset counter persisted. Throws 429 while locked, 401 with `attempts_remaining` otherwise.
+   * confirmed secret. The attempt is charged in the store before the check and the replay
+   * step and backup code are consumed with conditional updates, so two concurrent submissions
+   * cannot both pass on one code or both read the same counter. Returns the user row with the
+   * consumed step and reset counter. Throws 429 while locked, 401 with `attempts_remaining`
+   * otherwise.
    */
   async #checkFactor(user: UserRow, rawCode: string): Promise<UserRow> {
     const nowMs = this.now().getTime();
-    const remaining = lockRemainingMs(user, nowMs);
-    if (remaining > 0) throw lockedError(remaining);
+    const failures = await this.#claimTotpAttempt(user);
     const code = rawCode.trim();
     if (looksLikeTotpCode(code)) {
       const { secret, user: current } = await this.#totpSecret(user);
       const step = matchTotpStep(secret, code, nowMs);
-      if (step !== null && step > (current.totpLastStep ?? -1)) {
-        const next: UserRow = { ...current, totpLastStep: step, ...afterTotpSuccess(securityOf(current)) };
-        await this.store.updateUser(next);
-        await this.store.updateUserSecurity(next.id, securityOf(next));
-        return next;
+      if (step !== null && (await this.store.consumeTotpStep(current.id, step))) {
+        await this.store.resetTotpFailures(current.id);
+        logAuthEvent("totp_verified", { user_id: current.id, factor: "authenticator" });
+        return { ...current, totpLastStep: step, totpFailures: 0, totpLockedUntil: null };
       }
-      throw await this.#recordFailure(current, nowMs);
+      throw await this.#totpFailure(current.id, failures);
     }
     if (await this.#useBackup(user.id, normalizeBackupCode(code))) {
-      const next: UserRow = { ...user, ...afterTotpSuccess(securityOf(user)) };
-      await this.store.updateUserSecurity(next.id, securityOf(next));
+      await this.store.resetTotpFailures(user.id);
       logAuthEvent("backup_code_used", { user_id: user.id });
-      return next;
+      logAuthEvent("totp_verified", { user_id: user.id, factor: "backup_code" });
+      return { ...user, totpFailures: 0, totpLockedUntil: null };
     }
-    throw await this.#recordFailure(user, nowMs);
+    throw await this.#totpFailure(user.id, failures);
   }
 
-  async #recordFailure(user: UserRow, nowMs: number): Promise<HttpError> {
-    const next = afterTotpFailure(securityOf(user), nowMs);
-    await this.store.updateUserSecurity(user.id, next);
-    const locked = lockRemainingMs(next, nowMs);
-    if (locked > 0) {
-      logAuthEvent("totp_locked", { user_id: user.id, retry_after_ms: locked });
-      return lockedError(locked);
+  /** Charges one attempt atomically; 429 with the remaining lock time when the store refuses. */
+  async #claimTotpAttempt(user: UserRow): Promise<number> {
+    const now = this.now();
+    const failures = await this.store.claimTotpAttempt(user.id, now.toISOString());
+    if (failures !== undefined) return failures;
+    const fresh = (await this.store.getUser(user.id)) ?? user;
+    const remaining = lockRemainingMs(fresh, now.getTime());
+    throw lockedError(remaining > 0 ? remaining : TOTP_LOCK_MS);
+  }
+
+  /** After a wrong code: the charged attempt count decides between 401 and the 15-minute lock. */
+  async #totpFailure(userId: string, failures: number): Promise<HttpError> {
+    if (failures >= TOTP_MAX_FAILURES) {
+      await this.store.lockTotp(userId, new Date(this.now().getTime() + TOTP_LOCK_MS).toISOString());
+      logAuthEvent("totp_locked", { user_id: userId, retry_after_ms: TOTP_LOCK_MS });
+      return lockedError(TOTP_LOCK_MS);
     }
-    logAuthEvent("totp_failed", { user_id: user.id, attempts_remaining: attemptsRemaining(next) });
-    return new HttpError(401, "Invalid code", { attempts_remaining: attemptsRemaining(next) });
+    const remaining = Math.max(0, TOTP_MAX_FAILURES - failures);
+    logAuthEvent("totp_failed", { user_id: userId, attempts_remaining: remaining });
+    return new HttpError(401, "Invalid code", { attempts_remaining: remaining });
   }
 
   /** Confirmed secret via the keyring; a legacy raw-KEK envelope is re-wrapped and persisted here. */
@@ -536,15 +597,21 @@ export class OperatorIdentity {
     return backups;
   }
 
+  /** True only when this call consumed the code: the conditional update decides under concurrency. */
   async #useBackup(userId: string, code: string): Promise<boolean> {
     const rows = await this.store.listBackupCodes(userId);
     for (const row of rows) {
       if (row.usedAt) continue;
       if (await scryptVerify(code, row.codeScrypt)) {
-        await this.store.markBackupUsed(userId, row.codeScrypt, this.now().toISOString());
-        return true;
+        return this.store.markBackupUsed(userId, row.codeScrypt, this.now().toISOString());
       }
     }
     return false;
+  }
+
+  /** One scrypt hash of a random value, computed once, so the no-challenge path costs a real compare. */
+  #dummyOtp(): Promise<string> {
+    this.#dummyOtpHash ??= scryptHash(randomBytes(8).toString("hex"));
+    return this.#dummyOtpHash;
   }
 }

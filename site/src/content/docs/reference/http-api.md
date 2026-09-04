@@ -37,7 +37,7 @@ A session that has not completed the authenticator step gets 403 `{ "error": "mf
 | GET | `/sign-in`, `/sign-up` | HTML. A ready session redirects to `/console`; a verified email without an authenticator redirects to `/enroll-totp`; an enrolled account that has not passed the authenticator step this session redirects to `/verify-totp` |
 | GET | `/enroll-totp` | HTML. Session required. Shows backup codes once after confirm |
 | GET | `/verify-totp` | HTML. The sign-in authenticator step: one field for an authenticator code or a backup code |
-| POST | `/api/auth/otp/send` | `{ "email" }`. Returns `{ "ok": true }` for known and unknown emails. A still-valid unused code is not sent again |
+| POST | `/api/auth/otp/send` | `{ "email" }`. Returns `{ "ok": true }` for known and unknown emails. Sending again replaces the previous code; five sends per email in 15 minutes |
 | POST | `/api/auth/otp/verify` | `{ "email", "otp" }`. Sets a pending session cookie. Returns `{ "ok", "enroll", "verify" }`: `enroll` means go to `/enroll-totp`, `verify` means go to `/verify-totp`. A 401 carries `attempts_remaining` |
 | POST | `/api/auth/totp/start` | Begin authenticator enrollment. Returns `otpauth_url` and a locally rendered `qr_svg`. Re-enrolling needs a ready session and `{ "current_code" }` |
 | POST | `/api/auth/totp/confirm` | `{ "code" }`. Marks the session ready and returns backup codes once |
@@ -45,7 +45,7 @@ A session that has not completed the authenticator step gets 403 `{ "error": "mf
 | GET | `/api/auth/me` | `{ "email", "totp_enabled", "backup_codes_remaining", "created_at" }` |
 | POST | `/api/auth/backup-codes/regenerate` | `{ "code" }`. Replaces every unused backup code and returns the new set once |
 | POST | `/api/auth/logout` | Clears the session cookies and ends the OAuth sign-in session. Needs `X-CSRF-Token` |
-| POST | `/api/orgs` | `{ "name" }`. Creates an organisation for the signed-in user |
+| POST | `/api/orgs` | `{ "name" }` (1 to 80 characters). Creates an organisation for the signed-in user after the authenticator step; up to ten owned organisations per account (402 `plan_limit`) |
 | DELETE | `/api/orgs` | `{ "confirm_name" }`. Deletes the organisation and everything in it |
 
 Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end the challenge. Authenticator codes are RFC 6238 (SHA-1, 6 digits) with replay protection. Authenticator secrets are encrypted under a key that `vault kek-rotate` re-wraps.
@@ -93,7 +93,7 @@ Policies: `prompt` (one successful call, then consumed; a failed call keeps it u
 | --- | --- | --- |
 | GET | `/api/access` | Live snapshot: operators, clients, grants, sessions, with created, first and last access, fetched names, and bearer last-4. No ledger array, no tokens |
 | GET | `/api/access/events` | Issuance ledger, newest first, limit 200. `jti` is hashed |
-| POST | `/api/sessions/:id/revoke` | 400 `cannot_revoke_current` for the session making the call |
+| POST | `/api/sessions/:id/revoke` | Only sessions acting in this organisation are listed and revocable. 400 `cannot_revoke_current` for the session making the call |
 | POST | `/api/sessions/revoke-others` | Ends every other operator session |
 
 ## Trusted resolve

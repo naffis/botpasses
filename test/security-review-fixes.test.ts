@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { requireModelOrOperator } from "../src/hosted/auth.ts";
 import { redactOriginHeaders } from "../src/hosted/connector.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
-import { clientIpFrom, trustsFlyClientIp } from "../src/hosted/identity-limiter.ts";
+import { clientIpFrom, trustsProxyHeaders } from "../src/hosted/identity-limiter.ts";
 import { pathWithinPrefix, scopeDenialReason } from "../src/hosted/kernel-grants.ts";
 import { assertSafePath, hasDotSegments } from "../src/hosted/ssrf.ts";
 
@@ -54,10 +54,12 @@ test("a pending-MFA operator session cannot use the model channel", () => {
   );
 });
 
-test("Fly-Client-IP is honoured only behind Fly or with an explicit opt-in", () => {
-  assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", false), "198.51.100.7");
+test("proxy headers are honoured only behind Fly or with an explicit opt-in; otherwise the socket peer counts", () => {
+  assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", false), "127.0.0.1");
+  assert.equal(clientIpFrom(undefined, "10.0.0.1, 198.51.100.7", "127.0.0.1", false), "127.0.0.1");
   assert.equal(clientIpFrom("203.0.113.9", "10.0.0.1, 198.51.100.7", "127.0.0.1", true), "203.0.113.9");
-  assert.equal(trustsFlyClientIp({}), false);
-  assert.equal(trustsFlyClientIp({ FLY_APP_NAME: "botpasses-prod" }), true);
-  assert.equal(trustsFlyClientIp({ VAULT_TRUST_PROXY: "1" }), true);
+  assert.equal(clientIpFrom(undefined, "10.0.0.1, 198.51.100.7", "127.0.0.1", true), "198.51.100.7");
+  assert.equal(trustsProxyHeaders({}), false);
+  assert.equal(trustsProxyHeaders({ FLY_APP_NAME: "botpasses-prod" }), true);
+  assert.equal(trustsProxyHeaders({ VAULT_TRUST_PROXY: "1" }), true);
 });

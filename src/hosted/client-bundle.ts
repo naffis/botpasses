@@ -431,6 +431,17 @@ function arr   (v         , guard                        )      {
   return Array.isArray(v) ? v.filter(guard) : [];
 }
 
+/**
+ * Where a 403 \`mfa_required\` sends the browser: the \`verify_url\` (enrolled, this session has
+ * not passed the authenticator step) or \`enroll_url\` (no authenticator yet) the server named.
+ * Only same-origin paths are followed. Undefined for every other response.
+ */
+function mfaRedirectUrl(status        , body      )                     {
+  if (status !== 403 || body.error !== "mfa_required") return undefined;
+  const next = str(body.verify_url) || str(body.enroll_url);
+  return next.startsWith("/") && !next.startsWith("//") ? next : undefined;
+}
+
 async function api(url        , init              = {})                     {
   let res          ;
   try {
@@ -445,6 +456,8 @@ async function api(url        , init              = {})                     {
   } catch {
     body = {};
   }
+  const next = mfaRedirectUrl(res.status, body);
+  if (next && typeof location !== "undefined") location.assign(next);
   return { ok: res.ok, status: res.status, body };
 }
 
@@ -3008,6 +3021,17 @@ function arr   (v         , guard                        )      {
   return Array.isArray(v) ? v.filter(guard) : [];
 }
 
+/**
+ * Where a 403 \`mfa_required\` sends the browser: the \`verify_url\` (enrolled, this session has
+ * not passed the authenticator step) or \`enroll_url\` (no authenticator yet) the server named.
+ * Only same-origin paths are followed. Undefined for every other response.
+ */
+function mfaRedirectUrl(status        , body      )                     {
+  if (status !== 403 || body.error !== "mfa_required") return undefined;
+  const next = str(body.verify_url) || str(body.enroll_url);
+  return next.startsWith("/") && !next.startsWith("//") ? next : undefined;
+}
+
 async function api(url        , init              = {})                     {
   let res          ;
   try {
@@ -3022,6 +3046,8 @@ async function api(url        , init              = {})                     {
   } catch {
     body = {};
   }
+  const next = mfaRedirectUrl(res.status, body);
+  if (next && typeof location !== "undefined") location.assign(next);
   return { ok: res.ok, status: res.status, body };
 }
 

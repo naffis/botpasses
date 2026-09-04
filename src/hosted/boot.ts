@@ -231,6 +231,9 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (bootstrap.length > 0 && bootstrap.length < 32) {
     return "VAULT_BOOTSTRAP_TOKEN must be at least 32 characters when set.";
   }
+  if (bootstrap.length > 0 && deployPlaneRaw(env) && env.VAULT_BOOTSTRAP_ALLOW_PLANE !== "1") {
+    return "VAULT_BOOTSTRAP_TOKEN is refused on staging and production unless VAULT_BOOTSTRAP_ALLOW_PLANE=1 (break-glass only; unset both when done).";
+  }
   const plane = hostedDeployPlane(env);
   const pub = env.VAULT_PUBLIC_URL?.trim() ?? "";
   if (!pub) {
