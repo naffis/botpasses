@@ -540,12 +540,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
   };
 }
 
-/**
- * Cookie sessions need the double-submit header on every mutation. Only the email-OTP steps
- * (no session yet) and POST /approve (protected by its HMAC token; an HTML form from an email
- * link cannot set headers) are exempt. TOTP and logout are no longer exempt here; their handlers
- * run first in `handleAuthApi` and enforce CSRF themselves.
- */
 /** The bucket an open SSE stream counts against. */
 function ssePrincipalKey(principal: Principal): string {
   switch (principal.channel) {
@@ -558,6 +552,12 @@ function ssePrincipalKey(principal: Principal): string {
   }
 }
 
+/**
+ * Cookie sessions need the double-submit header on every mutation. Only the email-OTP steps
+ * (no session yet) and POST /approve (protected by its HMAC token; an HTML form from an email
+ * link cannot set headers) are exempt. TOTP and logout are no longer exempt here; their handlers
+ * run first in `handleAuthApi` and enforce CSRF themselves.
+ */
 function cookieCsrfApplies(path: string, principal: Principal | undefined): boolean {
   if (principal?.channel !== "operator" || !principal.sessionHash) return false;
   if (path.startsWith("/api/auth/otp/")) return false;

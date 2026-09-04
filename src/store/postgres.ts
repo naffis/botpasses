@@ -1159,6 +1159,16 @@ export class PostgresStore implements VaultStore {
     return (r.rowCount ?? 0) > 0;
   }
 
+  async consumePendingTotp(userId: string, pendingIv: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      `UPDATE users SET totp_pending_wrapped_iv = NULL, totp_pending_wrapped_ciphertext = NULL,
+         totp_pending_wrapped_tag = NULL, totp_pending_at = NULL
+       WHERE id = $1 AND totp_pending_wrapped_iv = $2`,
+      [userId, pendingIv],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
   async lockTotp(userId: string, untilIso: string): Promise<void> {
     await this.#pool.query("UPDATE users SET totp_locked_until = $1 WHERE id = $2", [untilIso, userId]);
   }
@@ -1302,12 +1312,18 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query("DELETE FROM oidc_payloads WHERE kind = $1 AND grant_id = $2", [kind, grantId]);
   }
 
-  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+  async deleteOidcPayloadsForClient(
+    kind: string,
+    clientIds: string[],
+    accountId: string | null,
+    onlyWithoutGrant = false,
+  ): Promise<void> {
     if (clientIds.length === 0) return;
     await this.#pool.query(
       `DELETE FROM oidc_payloads WHERE kind = $1 AND client_id = ANY($2::text[])
-       AND (($3::text IS NULL AND account_id IS NULL) OR account_id = $3)`,
-      [kind, clientIds, accountId],
+       AND (($3::text IS NULL AND account_id IS NULL) OR account_id = $3)
+       AND (NOT $4::boolean OR grant_id IS NULL)`,
+      [kind, clientIds, accountId, onlyWithoutGrant],
     );
   }
 

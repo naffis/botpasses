@@ -77,7 +77,7 @@ test("I1: concurrent wrong OTP guesses each spend an attempt; the challenge dies
   }
 });
 
-test("I1: OTP verify is rate limited per address and per email", async () => {
+test("I1: OTP verify is rate limited per address; verifies with no live code do not spend the per-email budget", async () => {
   const ctx = await identityServer();
   try {
     const email = "burst@example.com";
@@ -87,8 +87,19 @@ test("I1: OTP verify is rate limited per address and per email", async () => {
       const r = await api(ctx, "/api/auth/otp/verify", { body: { email, otp: "00000000" } });
       statuses.push(r.status);
     }
-    assert.deepEqual(statuses.slice(0, 25), Array(25).fill(401));
-    assert.equal(statuses[25], 429, "the per-email verify budget is spent");
+    // Five wrong codes kill the challenge; the other 21 find no live code and count against
+    // the address only, so they cannot lock the owner out (R1-4).
+    assert.deepEqual(statuses, Array(26).fill(401));
+    await expectStatus(await api(ctx, "/api/auth/otp/send", { body: { email } }), 200, "otp/send");
+    const otp = codeFromEmail(ctx.emails.filter((e) => e.to === email).at(-1)?.html ?? "");
+    await expectStatus(await api(ctx, "/api/auth/otp/verify", { body: { email, otp } }), 200, "the owner signs in after 26 bogus verifies");
+    // Every verify counts against the address: 50 in the window, the next is 429.
+    for (let used = statuses.length + 1; used < 50; used += 1) {
+      const r = await api(ctx, "/api/auth/otp/verify", { body: { email: `other-${used}@example.com`, otp: "00000000" } });
+      assert.equal(r.status, 401, `verify ${used + 1}`);
+    }
+    const spent = await api(ctx, "/api/auth/otp/verify", { body: { email, otp: "00000000" } });
+    assert.equal(spent.status, 429, "the per-address verify budget is spent");
   } finally {
     await ctx.close();
   }

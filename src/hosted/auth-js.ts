@@ -1,8 +1,16 @@
-/** Sign-in, sign-up, enroll, verify, consent client script. Served at /assets/auth.js. */
-export const AUTH_JS = `function csrf() {
-  const m = document.cookie.match(/(?:^|; )(?:__Host-bp_csrf|bp_csrf)=([^;]+)/);
+/**
+ * Reads the CSRF token cookie in the browser. The `__Host-` cookie is tried first and the
+ * plain name only when it is absent (loopback), so a plain `bp_csrf` a subdomain plants cannot
+ * shadow the real token. Mirrors `csrfFromCookie` in `client/shared.ts`; inlined here for the
+ * pages that do not load the console bundle.
+ */
+export const CSRF_COOKIE_JS = `function csrf() {
+  const m = document.cookie.match(/(?:^|; )__Host-bp_csrf=([^;]+)/) || document.cookie.match(/(?:^|; )bp_csrf=([^;]+)/);
   return m ? decodeURIComponent(m[1]) : "";
-}
+}`;
+
+/** Sign-in, sign-up, enroll, verify, consent client script. Served at /assets/auth.js. */
+export const AUTH_JS = `${CSRF_COOKIE_JS}
 function headers(json) {
   const h = {};
   if (json) h["content-type"] = "application/json";

@@ -77,7 +77,7 @@ Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 
 | POST | `/api/clients/model` | Issues an `avm_...` once, plus `mcp_url`. The token is not listed later |
 | POST | `/api/clients/trusted` | Issues an `avt_...` once for `/runtime/resolve` |
 | POST | `/api/clients/:id/rotate` | New token once. The old hash stops working |
-| POST | `/api/clients/:id/revoke` | Later bearer calls are 401; OAuth tokens are denylisted; approvals revoked |
+| POST | `/api/clients/:id/revoke` | Later bearer calls are 401; OAuth tokens are denylisted; approvals revoked. Every OAuth grant this organisation's members gave for the client is destroyed; the same person's grants for it in other organisations survive |
 | POST | `/api/grants/request` | Model or operator. `{ "item_name", "task_description?" }`. Returns the grant plus `approval_code`. 30 per organisation per hour |
 | POST | `/api/grants/:id/approve` | `{ "policy", "confirm_name?" }`. `folder_standing` is owner-only and needs `confirm_name` |
 | POST | `/api/grants/:id/revoke` | Status becomes `revoked`. The row stays listed |
@@ -117,7 +117,7 @@ PKCE S256 is required. Clients are public (`token_endpoint_auth_method` `none`; 
 | `/oauth/register` | Dynamic client registration. `redirect_uris` may be `https`, loopback `http`, or a desktop scheme such as `cursor://`. `javascript:`, `data:`, and `file:` are rejected. 20 per IP per hour |
 | `/oauth/device/auth` | RFC 8628 device code. The operator finishes at `/device` (10 code attempts per 15 minutes per IP) |
 | `/oauth/revoke` | RFC 7009. Revoking a refresh token also revokes every access token issued with it; a JWT access token is revoked by its `jti`. Marked in the Access ledger |
-| `/consent`, `/device` | HTML pages for the two flows above. The consent page's script posts `{ "uid", "decision" }` with `Accept: application/json` and gets `200 { "location" }` to navigate to; other callers get a 303 to the same resume URL |
+| `/consent`, `/device` | HTML pages for the two flows above. The consent page's script posts `{ "uid", "decision" }` with `X-CSRF-Token` and `Accept: application/json` and gets `200 { "location" }` to navigate to; a caller with the CSRF header and no such `Accept` gets a 303 to the same resume URL. A form submit without the header (scripts off) is 403 |
 
 ## Local vault serve (loopback)
 

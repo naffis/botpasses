@@ -408,9 +408,18 @@ function userPathHint(provider          , host        , path        )           
 
 const FLASH_CLEAR_MS = 6000;
 
-function csrf()         {
-  const m = document.cookie.match(/(?:^|; )(?:__Host-bp_csrf|bp_csrf)=([^;]+)/);
+/**
+ * The CSRF token from a cookie header. The \`__Host-\` cookie wins whenever it is present; the
+ * plain name is only a fallback for the loopback console, since a subdomain can plant a plain
+ * \`bp_csrf\` that would otherwise sort first and break every mutation on the HTTPS origin.
+ */
+function csrfFromCookie(cookie        )         {
+  const m = /(?:^|; )__Host-bp_csrf=([^;]+)/.exec(cookie) ?? /(?:^|; )bp_csrf=([^;]+)/.exec(cookie);
   return m?.[1] ? decodeURIComponent(m[1]) : "";
+}
+
+function csrf()         {
+  return csrfFromCookie(document.cookie);
 }
 
 function bootstrapToken()         {
@@ -3048,9 +3057,18 @@ function storeRequestBody(values                 , opts                      )  
 
 const FLASH_CLEAR_MS = 6000;
 
-function csrf()         {
-  const m = document.cookie.match(/(?:^|; )(?:__Host-bp_csrf|bp_csrf)=([^;]+)/);
+/**
+ * The CSRF token from a cookie header. The \`__Host-\` cookie wins whenever it is present; the
+ * plain name is only a fallback for the loopback console, since a subdomain can plant a plain
+ * \`bp_csrf\` that would otherwise sort first and break every mutation on the HTTPS origin.
+ */
+function csrfFromCookie(cookie        )         {
+  const m = /(?:^|; )__Host-bp_csrf=([^;]+)/.exec(cookie) ?? /(?:^|; )bp_csrf=([^;]+)/.exec(cookie);
   return m?.[1] ? decodeURIComponent(m[1]) : "";
+}
+
+function csrf()         {
+  return csrfFromCookie(document.cookie);
 }
 
 function bootstrapToken()         {

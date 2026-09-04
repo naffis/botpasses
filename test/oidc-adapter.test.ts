@@ -167,10 +167,12 @@ for (const backend of backends) {
       const dcr = id("dcr_shared");
       const grants = [
         // owner's grant in A, member's grant in A, member's grant in B (same account, other org),
-        // a legacy grant (no org marker) by a member of A, and a legacy grant by a stranger.
+        // the consenting owner's grant in B, a legacy grant (no org marker) by a member of A,
+        // and a legacy grant by a stranger.
         { g: id("g_owner_a"), account: id("owner"), org: orgA },
         { g: id("g_member_a"), account: id("member"), org: orgA },
         { g: id("g_member_b"), account: id("member"), org: orgB },
+        { g: id("g_owner_b"), account: id("owner"), org: orgB },
         { g: id("g_legacy_member"), account: id("member"), org: undefined },
         { g: id("g_legacy_stranger"), account: id("stranger"), org: undefined },
       ];
@@ -193,6 +195,14 @@ for (const backend of backends) {
           expiresAt: null,
         });
       }
+      // A token the consenting owner holds for this client id with no grant behind it: the
+      // account-scoped sweep still removes it.
+      await store.upsertOidcPayload({
+        id: id("rt_owner_loose"),
+        kind: "RefreshToken",
+        payload: JSON.stringify({ jti: id("rt_owner_loose"), clientId: dcr, accountId: id("owner") }),
+        expiresAt: null,
+      });
       await destroyOidcPayloadsForClient(
         store,
         { id: id("cli_a"), oauthClientId: dcr, clerkOauthUserId: null, consentedByUserId: id("owner") },
@@ -204,6 +214,9 @@ for (const backend of backends) {
       assert.equal(await alive(id("g_legacy_member")), false, "member's legacy grant gone");
       assert.equal(await alive(id("g_member_b")), true, "the same member's consent in org B survives");
       assert.equal(await alive(id("g_legacy_stranger")), true, "a non-member's legacy grant survives");
+      assert.equal(await store.getOidcPayload(id("g_owner_b"), "Grant") !== undefined, true, "the consenting owner's grant in org B survives");
+      assert.equal(await store.getOidcPayload(`rt_${id("g_owner_b")}`, "RefreshToken") !== undefined, true, "and so does its refresh token");
+      assert.equal(await store.getOidcPayload(id("rt_owner_loose"), "RefreshToken"), undefined, "the owner's grantless token for the client id is gone");
     } finally {
       await done();
     }

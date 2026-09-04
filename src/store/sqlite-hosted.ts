@@ -1156,6 +1156,17 @@ export class SqliteHostedStore implements VaultStore {
     return Number(r.changes) > 0;
   }
 
+  async consumePendingTotp(userId: string, pendingIv: string): Promise<boolean> {
+    const r = this.#db
+      .prepare(
+        `UPDATE users SET totp_pending_wrapped_iv = NULL, totp_pending_wrapped_ciphertext = NULL,
+           totp_pending_wrapped_tag = NULL, totp_pending_at = NULL
+         WHERE id = ? AND totp_pending_wrapped_iv = ?`,
+      )
+      .run(userId, pendingIv);
+    return Number(r.changes) > 0;
+  }
+
   async lockTotp(userId: string, untilIso: string): Promise<void> {
     this.#db.prepare("UPDATE users SET totp_locked_until = ? WHERE id = ?").run(untilIso, userId);
   }
@@ -1335,13 +1346,19 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("DELETE FROM oidc_payloads WHERE kind = ? AND grant_id = ?").run(kind, grantId);
   }
 
-  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+  async deleteOidcPayloadsForClient(
+    kind: string,
+    clientIds: string[],
+    accountId: string | null,
+    onlyWithoutGrant = false,
+  ): Promise<void> {
     if (clientIds.length === 0) return;
     const marks = clientIds.map(() => "?").join(", ");
     this.#db
       .prepare(
         `DELETE FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})
-         AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)`,
+         AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)
+         ${onlyWithoutGrant ? "AND grant_id IS NULL" : ""}`,
       )
       .run(kind, ...clientIds, accountId, accountId);
   }

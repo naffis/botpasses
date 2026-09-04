@@ -16,6 +16,26 @@ import { CANARY, cleanup, tempHome } from "./helpers.ts";
 
 const HMAC = Buffer.from("bb".repeat(32), "hex");
 
+/** The `auth_*` event names logged (as JSON lines on stderr) while `run` executes. */
+async function captureAuthEvents(run: () => Promise<unknown>): Promise<string[]> {
+  const events: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    try {
+      const line = JSON.parse(args.map(String).join(" ")) as { event?: unknown };
+      if (typeof line.event === "string" && line.event.startsWith("auth_")) events.push(line.event);
+    } catch {
+      // not a JSON line
+    }
+  };
+  try {
+    await run();
+  } finally {
+    console.error = original;
+  }
+  return events;
+}
+
 async function setup(opts: { now?: () => Date; clientName?: string } = {}) {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "hosted.sqlite"));
@@ -478,10 +498,15 @@ test("revokeSession needs a 12+ char id and owner role for another member's sess
     const asOp = { userId: "user_op", role: "operator" as const, sessionHash: opHash };
     const asOwner = { userId: "user_owner", role: "owner" as const, sessionHash: ownerHash };
     await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, "a"), (e: unknown) => isHttpError(e) && e.status === 400);
-    await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, ownerHash.slice(0, 12)), (e: unknown) => isHttpError(e) && e.status === 403);
+    // A refused revoke is not a revocation: no session_revoked line for it (R1-2).
+    const refused = await captureAuthEvents(() =>
+      assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, ownerHash.slice(0, 12)), (e: unknown) => isHttpError(e) && e.status === 403),
+    );
+    assert.ok(!refused.includes("auth_session_revoked"), refused.join(","));
     await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, opHash), (e: unknown) => isHttpError(e) && e.message === "cannot_revoke_current");
     await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOwner, opHash.slice(0, 12)), (e: unknown) => isHttpError(e) && e.status === 404, "ambiguous prefix is not a match");
-    await ctx.kernel.revokeSession(ctx.orgId, asOp, opOther);
+    const own = await captureAuthEvents(() => ctx.kernel.revokeSession(ctx.orgId, asOp, opOther));
+    assert.ok(own.includes("auth_session_revoked"), own.join(","));
     assert.equal(await ctx.store.getSession(opOther), undefined);
     await ctx.kernel.revokeSession(ctx.orgId, asOwner, opHash.slice(0, 12));
     assert.equal(await ctx.store.getSession(opHash), undefined);
