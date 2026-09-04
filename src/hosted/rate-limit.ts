@@ -12,6 +12,12 @@ function hourWindowStart(now: number): string {
   return d.toISOString();
 }
 
+/**
+ * 30 grant-or-need hits per org per UTC hour. Increment first, then compare the returned count,
+ * so concurrent callers cannot all read "29" and each be admitted (S15 TOCTOU). A denied call
+ * still counts against the window. The two kinds share one budget but live in two rows, so a
+ * burst mixing kinds can deny a little early; it can never admit late.
+ */
 export class OrgRateLimiter {
   readonly #hits = new Map<string, number[]>();
   readonly #store: VaultStore | undefined;
@@ -23,20 +29,15 @@ export class OrgRateLimiter {
   async allow(orgId: string, now = Date.now(), kind: RateKind = "grant"): Promise<boolean> {
     if (this.#store) {
       const start = hourWindowStart(now);
-      const grant = await this.#store.countRateHits(orgId, "grant", start);
-      const need = await this.#store.countRateHits(orgId, "need", start);
-      if (grant + need >= MAX_PER_WINDOW) return false;
-      await this.#store.incrementRateHit(orgId, kind, start);
-      return true;
+      const mine = await this.#store.incrementRateHit(orgId, kind, start);
+      const other: RateKind = kind === "grant" ? "need" : "grant";
+      const theirs = await this.#store.countRateHits(orgId, other, start);
+      return mine + theirs <= MAX_PER_WINDOW;
     }
     const cutoff = now - WINDOW_MS;
     const prev = (this.#hits.get(orgId) ?? []).filter((t) => t > cutoff);
-    if (prev.length >= MAX_PER_WINDOW) {
-      this.#hits.set(orgId, prev);
-      return false;
-    }
     prev.push(now);
     this.#hits.set(orgId, prev);
-    return true;
+    return prev.length <= MAX_PER_WINDOW;
   }
 }

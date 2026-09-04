@@ -7,7 +7,7 @@ import { encrypt, decrypt } from "../crypto.ts";
 import { redactOauthJson } from "../redact.ts";
 import { HttpError } from "./errors.ts";
 import type { ConnectorFetch, ConnectorItem, ConnectorResult } from "./connector.ts";
-import { executeConnector } from "./connector.ts";
+import { executeConnector, redactConnectorBody } from "./connector.ts";
 
 export const SPOTIFY_API_HOST = "api.spotify.com";
 export const SPOTIFY_ACCOUNTS_HOST = "accounts.spotify.com";
@@ -126,7 +126,7 @@ export function emptyOriginHint(status: number): string | undefined {
   if (status === 410) {
     return (
       "Upstream returned 410 with an empty body. This is the origin status, not a Botpasses consume error. " +
-      "Retry uses the same approval — do not ask for a new 8-digit code."
+      "Retry uses the same approval. Do not ask for a new 8-digit code."
     );
   }
   if (status === 401) {
@@ -141,16 +141,24 @@ export function emptyOriginHint(status: number): string | undefined {
 
 export { redactOauthJson };
 
+/** Same redaction set as the connector (all encodings of the secret and any minted tokens). */
 export function redactConnectorOauthBody(body: string, item: ConnectorItem, extra: string[] = []): string {
-  let out = redactOauthJson(body);
-  if (item.secret.length > 0) out = out.split(item.secret).join("[redacted]");
-  for (const value of extra) {
-    if (value.length >= 8) out = out.split(value).join("[redacted]");
-  }
-  if (item.last4.length >= 4 && item.secret.length >= 8) {
-    out = out.split(item.last4).join("••••");
-  }
-  return out;
+  return redactConnectorBody(body, item, extra);
+}
+
+/** Model-facing hints for the Spotify client-credentials path. Vendor text lives here only. */
+export function clientIdRequiredHint(): string {
+  return (
+    "This item is a Client Secret, not a user access token. Pass client_id or store the Spotify " +
+    "Client ID as the item username, then retry. Token mint uses HTTP Basic + form body."
+  );
+}
+
+export function mintFailedHint(): string {
+  return (
+    "Spotify token mint failed. Retry uses the same approval. Token endpoint needs HTTP Basic " +
+    "(client_id:client_secret) and application/x-www-form-urlencoded."
+  );
 }
 
 function last4(value: string): string {

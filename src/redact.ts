@@ -15,27 +15,71 @@ const OAUTH_TOKEN_KEYS = new Set([
   "client_secret",
 ]);
 
-const OAUTH_TOKEN_RE = /"(?:access_token|refresh_token|id_token|client_secret)"\s*:\s*"[^"]*"/g;
+const OAUTH_TOKEN_RE = /"(?:access_token|refresh_token|id_token|client_secret)"\s*:\s*"[^"]*"/gi;
 
-/** Replace token fields in an origin JSON body. Never emit the raw value. */
+function redactOauthTree(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(redactOauthTree);
+  if (!node || typeof node !== "object") return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    out[key] =
+      OAUTH_TOKEN_KEYS.has(key.toLowerCase()) && typeof value === "string"
+        ? "[redacted]"
+        : redactOauthTree(value);
+  }
+  return out;
+}
+
+/**
+ * Replace token fields anywhere in an origin JSON body (nested objects and arrays included).
+ * Non-JSON bodies get a structural regex pass over `"access_token": "..."` shapes.
+ */
 export function redactOauthJson(body: string): string {
   const trimmed = body.trim();
   if (!trimmed) return body;
   try {
     const parsed: unknown = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return body.replace(OAUTH_TOKEN_RE, (m) => m.replace(/:"[^"]*"$/, ':"[redacted]"'));
+    if (!parsed || typeof parsed !== "object") {
+      return body.replace(OAUTH_TOKEN_RE, (m) => m.replace(/:\s*"[^"]*"$/, ':"[redacted]"'));
     }
-    const out: Record<string, unknown> = { ...(parsed as Record<string, unknown>) };
-    for (const key of Object.keys(out)) {
-      if (OAUTH_TOKEN_KEYS.has(key.toLowerCase()) && typeof out[key] === "string") {
-        out[key] = "[redacted]";
-      }
-    }
-    return JSON.stringify(out);
+    return JSON.stringify(redactOauthTree(parsed));
   } catch {
-    return body.replace(OAUTH_TOKEN_RE, (m) => m.replace(/:"[^"]*"$/, ':"[redacted]"'));
+    return body.replace(OAUTH_TOKEN_RE, (m) => m.replace(/:\s*"[^"]*"$/, ':"[redacted]"'));
   }
+}
+
+/** Shortest derived encoding still worth matching; shorter forms mangle dates and ids. */
+const MIN_DERIVED_LEN = 8;
+
+/**
+ * Every encoding of a credential an origin could echo back: raw, HTTP Basic base64 of
+ * `user:secret`, base64 of the secret, URL-encoded, JSON-escaped, and hex. The raw secret is
+ * always included; derived forms only when they are long enough to be unambiguous.
+ */
+export function secretEncodings(secret: string, username?: string | null): string[] {
+  if (secret.length === 0) return [];
+  const forms = new Set<string>([secret]);
+  const derived = [
+    Buffer.from(`${username ?? ""}:${secret}`).toString("base64"),
+    Buffer.from(secret).toString("base64"),
+    Buffer.from(secret).toString("base64url"),
+    encodeURIComponent(secret),
+    JSON.stringify(secret).slice(1, -1),
+    Buffer.from(secret, "utf8").toString("hex"),
+  ];
+  for (const form of derived) {
+    if (form.length >= MIN_DERIVED_LEN) forms.add(form);
+  }
+  return [...forms].sort((a, b) => b.length - a.length);
+}
+
+/** Replace every encoding of every secret with `[redacted]`. Longest forms first. */
+export function redactSecrets(body: string, secrets: readonly string[]): string {
+  let out = body;
+  for (const form of [...secrets].sort((a, b) => b.length - a.length)) {
+    if (form.length > 0) out = out.split(form).join("[redacted]");
+  }
+  return out;
 }
 
 export function containsSecret(haystack: string, secret: string): boolean {

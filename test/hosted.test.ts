@@ -28,6 +28,21 @@ async function setup() {
   });
   const { orgId } = await kernel.createOrg("acme", "user_owner");
   await kernel.addMember(orgId, "user_op", "operator");
+  for (const [id, email] of [
+    ["user_owner", "owner@example.com"],
+    ["user_op", "op@example.com"],
+  ] as const) {
+    await store.insertUser({
+      id,
+      email,
+      emailVerifiedAt: "2026-01-01T00:00:00.000Z",
+      totpWrappedIv: null,
+      totpWrappedCiphertext: null,
+      totpWrappedTag: null,
+      totpLastStep: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
   const item = await kernel.createItem({
     orgId,
     actor: "user_owner",
@@ -219,7 +234,7 @@ test("AC-01 isolation across MCP REST email audit connector", async () => {
         id: 4,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
         },
       }),
@@ -236,7 +251,7 @@ test("AC-01 isolation across MCP REST email audit connector", async () => {
       emails: ctx.emails,
     });
     assert.ok(!blob.includes(CANARY));
-    assert.equal(ctx.emails.length, 0);
+    assert.ok(ctx.emails.every((e) => !e.html.includes(CANARY)));
     const tools = listHostedMcpTools().map((t) => t.name as string);
     assert.ok(!tools.includes("revoke_grant"));
     assert.ok(!tools.includes("get_secret"));
@@ -395,7 +410,7 @@ test("AC-05 concurrent prompt consume: one origin fetch", async () => {
           id: 1,
           method: "tools/call",
           params: {
-            name: "http.request",
+            name: "http_request",
             arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
           },
         }),
@@ -487,7 +502,7 @@ test("AC-07 connector host is allowlisted; IP literal never leaves process", asy
         id: 1,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
         },
       }),
@@ -534,7 +549,7 @@ test("AC-09 rotate updates envelope used by connector", async () => {
         id: 1,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
         },
       }),
@@ -935,7 +950,7 @@ test("prompt grant reactivates when origin fetch fails", async () => {
         id: 1,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
         },
       }),
@@ -1036,9 +1051,21 @@ test("CORS preflight exposes WWW-Authenticate", async () => {
   }
 });
 
-test("operator session JWT path can call MCP stdio-style", async () => {
+test("operator session JWT path can call MCP stdio-style on the plane default environment", async () => {
   const ctx = await setup();
   try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "production",
+      kind: "secret",
+      name: "PROD_STDIO_KEY",
+      value: "prod-stdio-not-a-canary",
+      allowedHosts: ["api.stripe.com"],
+      inject: "bearer",
+    });
+    // The kernel in setup() is on the production plane, so the stdio shim binds to production.
+    // The body asks for staging; S4 says the body does not choose.
     const res = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
       headers: ctx.op,
@@ -1046,13 +1073,16 @@ test("operator session JWT path can call MCP stdio-style", async () => {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "list_items", arguments: {} },
+        params: { name: "list_items", arguments: { environment: "staging" } },
       }),
     });
     assert.equal(res.status, 200);
     const body = await res.text();
-    assert.match(body, /STRIPE_KEY/);
+    assert.match(body, /PROD_STDIO_KEY/);
+    assert.doesNotMatch(body, /STRIPE_KEY/);
     assert.ok(!body.includes(CANARY));
+    const shim = (await ctx.store.listClients(ctx.orgId)).find((c) => c.name === "stdio:user_owner");
+    assert.equal(shim?.environment, "production");
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -1063,10 +1093,9 @@ test("operator session JWT path can call MCP stdio-style", async () => {
 test("unauthenticated handshake succeeds; tools/call is 401 with PRM", async () => {
   const ctx = await setup();
   try {
-    const ac = new AbortController();
-    const res = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" }, signal: ac.signal });
-    assert.equal(res.status, 200);
-    ac.abort();
+    const sse = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
+    assert.equal(sse.status, 401, "GET /mcp SSE needs a model or operator principal (S16)");
+    assert.match(sse.headers.get("www-authenticate") ?? "", /resource_metadata=/);
     const tools = await fetch(`${ctx.base}/mcp/tools`);
     assert.equal(tools.status, 200);
     const init = await fetch(`${ctx.base}/mcp`, {
@@ -1088,7 +1117,7 @@ test("unauthenticated handshake succeeds; tools/call is 401 with PRM", async () 
         jsonrpc: "2.0",
         id: 3,
         method: "tools/call",
-        params: { name: "http.request", arguments: { method: "GET", path: "/v1/me", host: "api.spotify.com" } },
+        params: { name: "http_request", arguments: { method: "GET", path: "/v1/me", host: "api.spotify.com" } },
       }),
     });
     assert.equal(call.status, 401);

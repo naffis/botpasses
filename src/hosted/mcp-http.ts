@@ -1,14 +1,16 @@
 import type { VaultEnvName } from "../hosted-types.ts";
 import { executeConnector, type ConnectorFetch, type ConnectorItem } from "./connector.ts";
 import { HttpError, isHttpError, isNeedItemError, type NeedItemPayload } from "./errors.ts";
-import type { HostedKernel } from "./kernel.ts";
+import type { HostedKernel, InjectOutcome } from "./kernel.ts";
 import type { ModelPrincipal } from "./auth.ts";
 import {
   cachedMint,
+  clientIdRequiredHint,
   emptyOriginHint,
   isSpotifyTokenPath,
   isSpotifyUserPath,
   itemWithAccessToken,
+  mintFailedHint,
   mintSpotifyAccessToken,
   readMintedAccessToken,
   redactConnectorOauthBody,
@@ -89,14 +91,14 @@ export function connectorTargetFromArgs(args: Record<string, unknown>): Connecto
       host = u.hostname;
       if (path === "/" && u.pathname && u.pathname !== "/") path = u.pathname + u.search;
     } catch {
-      throw new HttpError(400, "host must be a hostname such as api.spotify.com");
+      throw new HttpError(400, "host must be a hostname such as api.example.com");
     }
   }
   if (host) host = host.toLowerCase();
   if (!itemName && !host) {
     throw new HttpError(
       400,
-      "http.request requires item_name or host, plus method and path. Example: host=api.spotify.com method=GET path=/v1/me",
+      "http_request requires item_name or host, plus method and path. Example: host=api.example.com method=GET path=/v1/me",
     );
   }
   if (!path.startsWith("/") || path.startsWith("//")) {
@@ -169,7 +171,7 @@ export async function runHttpRequest(
     itemName = found.item.name;
   }
   if (!itemName) {
-    throw new HttpError(400, "http.request requires item_name or host");
+    throw new HttpError(400, "http_request requires item_name or host");
   }
   const prepared = await prepareOrGrant(deps, {
     itemName,
@@ -177,19 +179,31 @@ export async function runHttpRequest(
     taskDescription: target.taskDescription,
   });
   if (!isPreparedConnector(prepared)) return withRetry(prepared, target, itemName);
+  const audit = (outcome: InjectOutcome) =>
+    deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, prepared.name, outcome);
   try {
     const result = await dispatchConnector(deps, prepared, target, args, environment);
-    if (typeof result === "object" && result && "status" in result) {
-      const status = (result as { status: unknown }).status;
-      if (typeof status === "number") {
-        await releaseGrantOnFailure(deps.kernel, prepared, status);
-      }
+    if (sentToOrigin(result)) {
+      await releaseGrantOnFailure(deps.kernel, prepared, result.status);
+      await audit("inject");
+    } else {
+      await audit("inject_denied");
     }
     return withRetry(result, target, itemName);
   } catch (err) {
     await releaseGrantOnFailure(deps.kernel, prepared);
+    // 400-class connector errors (host mismatch, blocked address) stop the send; anything else
+    // means the credential left the process but the origin did not answer.
+    await audit(isHttpError(err) && err.status === 400 ? "inject_denied" : "inject_failed");
     throw err;
   }
+}
+
+/** `originPayload` shape: the request reached the origin and got an HTTP status back. */
+function sentToOrigin(result: unknown): result is { status: number; body: string } {
+  if (!result || typeof result !== "object") return false;
+  const rec = result as { status?: unknown; body?: unknown };
+  return typeof rec.status === "number" && typeof rec.body === "string";
 }
 
 async function dispatchConnector(
@@ -259,12 +273,7 @@ async function dispatchConnector(
 
   if (shouldMintClientCredentials({ host, path: target.path, item, clientId })) {
     if (!clientId) {
-      return {
-        status: 400,
-        error: "client_id_required",
-        hint:
-          "This item is a Client Secret, not a user access token. Pass client_id or store the Spotify Client ID as the item username, then retry. Token mint uses HTTP Basic + form body.",
-      };
+      return { status: 400, error: "client_id_required", hint: clientIdRequiredHint() };
     }
     const minted = await ensureAppToken(deps, item, clientId);
     if ("status" in minted) return minted;
@@ -314,10 +323,7 @@ async function ensureAppToken(
     resolveAddresses: deps.resolveAddresses,
   });
   if (origin.status < 200 || origin.status >= 300 || !minted.accessToken) {
-    return originPayload(origin, {
-      hint:
-        "Spotify token mint failed. Retry uses the same approval. Token endpoint needs HTTP Basic (client_id:client_secret) and application/x-www-form-urlencoded.",
-    }) as { status: number; body: string; hint?: string };
+    return originPayload(origin, { hint: mintFailedHint() }) as { status: number; body: string; hint?: string };
   }
   storeMint(deps.principal.orgId, item.itemId ?? item.name, clientId, "client_credentials", minted);
   return { accessToken: minted.accessToken, last4: minted.last4 };
@@ -339,6 +345,7 @@ async function tryUserSpotify(
       clientId: deps.principal.clientId,
       itemName: refreshName,
       environment,
+      auditAfterSend: true,
     });
     const clientId = resolveSpotifyClientId(refreshItem, target.clientId) ?? resolveSpotifyClientId(item, target.clientId);
     if (!clientId) return undefined;
@@ -352,6 +359,7 @@ async function tryUserSpotify(
         fetchImpl: deps.fetchImpl,
         resolveAddresses: deps.resolveAddresses,
       });
+      await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, "inject");
       if (origin.status < 200 || origin.status >= 300 || !minted.accessToken) {
         await deps.kernel.reactivatePromptGrant(refreshItem.grantId);
         return originPayload(origin, { hint: userContextHint(target.path) });
@@ -387,6 +395,7 @@ async function prepareOrGrant(
       clientId: principal.clientId,
       itemName: input.itemName,
       environment: input.environment,
+      auditAfterSend: true,
     });
   } catch (err) {
     if (isNeedItemError(err)) return err.payload;
@@ -404,6 +413,7 @@ async function prepareOrGrant(
           clientId: principal.clientId,
           itemName: input.itemName,
           environment: input.environment,
+          auditAfterSend: true,
         });
       }
       return {

@@ -16,6 +16,7 @@ import type {
 import type { VaultStore } from "../store/types.ts";
 import { StoreConflictError } from "../store/conflict.ts";
 import { HttpError, NeedItemError, type NeedItemPayload } from "./errors.ts";
+import { itemAad } from "./item-aad.ts";
 import { matchFindItems, NEED_ITEM_MESSAGE } from "./need-match.ts";
 import { storedItemUsername } from "./store-form-fields.ts";
 import type { OrgRateLimiter } from "./rate-limit.ts";
@@ -316,9 +317,14 @@ export async function fulfillNeed(
     kind === "login"
       ? JSON.stringify({ username: input.username, password: input.value })
       : input.value;
-  const envelope = encrypt(payload, dek, input.orgId);
   const at = nowIso(host.now());
   const itemId = `itm_${randomUUID()}`;
+  const allowedHostsJson = JSON.stringify(input.allowedHosts);
+  const envelope = encrypt(
+    payload,
+    dek,
+    itemAad({ orgId: input.orgId, itemId, allowedHostsJson, inject: input.inject }),
+  );
   const item: ItemRecord = {
     id: itemId,
     environmentId: env.id,
@@ -327,7 +333,7 @@ export async function fulfillNeed(
     name,
     last4: last4(input.value),
     username: storedItemUsername(kind, input.inject, input.username),
-    allowedHostsJson: JSON.stringify(input.allowedHosts),
+    allowedHostsJson,
     inject: input.inject,
     iv: envelope.iv,
     ciphertext: envelope.ciphertext,

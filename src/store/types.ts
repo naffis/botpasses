@@ -15,6 +15,7 @@ import type {
   PersistFulfillInput,
   PolicyRecord,
   UserRecord,
+  VaultEnvName,
   VaultRecord,
 } from "../hosted-types.ts";
 
@@ -86,6 +87,8 @@ export type VaultStore = {
   getMember(orgId: string, userId: string): Promise<MemberRecord | undefined>;
   listMembers(orgId: string): Promise<MemberRecord[]>;
   listMembershipsForUser(userId: string): Promise<MemberRecord[]>;
+  /** Verified member emails for approval notifications. Members without a user row are skipped. */
+  listMemberEmails(orgId: string): Promise<string[]>;
   upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void>;
   getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined>;
   deleteOidcPayload(id: string, kind: string): Promise<void>;
@@ -128,6 +131,7 @@ export type VaultStore = {
   listClients(orgId: string): Promise<ClientRecord[]>;
   findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined>;
   updateClientHashedSecret(id: string, hashedSecret: string, tokenLast4: string): Promise<void>;
+  updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void>;
   incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
   countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
 

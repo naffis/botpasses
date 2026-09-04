@@ -13,19 +13,23 @@ import { assertSafePublicObject } from "../redact.ts";
 import {
   emptyClientFields,
   type AccessEventRecord,
+  type ApprovalChallengeRecord,
   type ClientRecord,
   type FindItemsResult,
   type GrantPolicy,
   type HostedGrantRecord,
   type ItemKind,
   type ItemPublic,
+  type ItemRecord,
   type MemberRole,
   type VaultEnvName,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "../store/conflict.ts";
 import type { VaultStore } from "../store/types.ts";
+import { escapeHtml } from "./auth-shell.ts";
 import { deployPlaneAllowsEnvironment, environmentsForDeployPlane } from "./deploy-plane.ts";
 import { HttpError } from "./errors.ts";
+import { itemAad, legacyItemAad } from "./item-aad.ts";
 import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
 import {
   ensureNeedItem,
@@ -58,6 +62,8 @@ const SESSION_TTL_MS = 8 * 3600 * 1000;
 const CODE_TTL_MS = 10 * 60 * 1000;
 const MAGIC_TTL_MS = 15 * 60 * 1000;
 const MAX_ITEM_BYTES = 64 * 1024;
+/** Access shows `idHash.slice(0, 12)`; anything shorter is not a session id. */
+const SESSION_ID_MIN_CHARS = 12;
 
 /** Single-operator org when `VAULT_BOOTSTRAP_TOKEN` is set. */
 export const BOOTSTRAP_ORG_ID = "org_bootstrap";
@@ -93,6 +99,21 @@ function parseHosts(json: string): string[] {
   }
   return v as string[];
 }
+
+/** Item names from clients are user input; a bad name is a 400, not a 500. */
+function normalizeItemName(raw: string): string {
+  try {
+    return normalizeSecretName(raw);
+  } catch (err) {
+    throw new HttpError(400, err instanceof Error ? err.message : "Invalid name");
+  }
+}
+
+function isPast(iso: string | null, now: Date): boolean {
+  return iso !== null && new Date(iso).getTime() < now.getTime();
+}
+
+export type InjectOutcome = "inject" | "inject_denied" | "inject_failed";
 
 export class HostedKernel {
   readonly store: VaultStore;
@@ -275,12 +296,7 @@ export class HostedKernel {
     folderName?: string;
   }): Promise<ItemPublic> {
     this.#assertHosts(input.allowedHosts);
-    let name: string;
-    try {
-      name = normalizeSecretName(input.name);
-    } catch (err) {
-      throw new HttpError(400, err instanceof Error ? err.message : "Invalid name");
-    }
+    const name = normalizeItemName(input.name);
     if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
     if (Buffer.byteLength(input.value, "utf8") > MAX_ITEM_BYTES) {
       throw new HttpError(400, "Value exceeds 64KiB");
@@ -309,9 +325,14 @@ export class HostedKernel {
       input.kind === "login"
         ? JSON.stringify({ username: input.username, password: input.value })
         : input.value;
-    const envelope = encrypt(payload, dek, input.orgId);
     const at = nowIso(this.now());
     const itemId = `itm_${randomUUID()}`;
+    const allowedHostsJson = JSON.stringify(input.allowedHosts);
+    const envelope = encrypt(
+      payload,
+      dek,
+      itemAad({ orgId: input.orgId, itemId, allowedHostsJson, inject: input.inject }),
+    );
     await this.store.insertItem({
       id: itemId,
       environmentId: env.id,
@@ -320,7 +341,7 @@ export class HostedKernel {
       name,
       last4: last4(input.value),
       username,
-      allowedHostsJson: JSON.stringify(input.allowedHosts),
+      allowedHostsJson,
       inject: input.inject,
       iv: envelope.iv,
       ciphertext: envelope.ciphertext,
@@ -358,7 +379,16 @@ export class HostedKernel {
       item.kind === "login"
         ? JSON.stringify({ username: item.username, password: input.value })
         : input.value;
-    const envelope = encrypt(payload, dek, input.orgId);
+    const envelope = encrypt(
+      payload,
+      dek,
+      itemAad({
+        orgId: input.orgId,
+        itemId: item.id,
+        allowedHostsJson: item.allowedHostsJson,
+        inject: item.inject,
+      }),
+    );
     const at = nowIso(this.now());
     await this.store.updateItemEnvelope(item.id, {
       iv: envelope.iv,
@@ -528,6 +558,7 @@ export class HostedKernel {
     return { client: row, plaintext };
   }
 
+  /** Reuses the live model client for this OAuth id. Revoked clients are never resurrected. */
   async ensureModelClient(input: {
     orgId: string;
     name: string;
@@ -538,11 +569,29 @@ export class HostedKernel {
     const existing = clients.find(
       (c) =>
         c.kind === "model" &&
+        !c.revokedAt &&
         (c.oauthClientId === input.clerkOauthUserId || c.clerkOauthUserId === input.clerkOauthUserId),
     );
     if (existing) return existing;
     const created = await this.createModelClient(input);
     return created.client;
+  }
+
+  /** Operator-only. Moves a client (including OAuth-issued ones) to another vault environment. */
+  async setClientEnvironment(
+    orgId: string,
+    actor: string,
+    clientId: string,
+    environment: VaultEnvName,
+  ): Promise<ClientRecord> {
+    this.#assertPlane(environment);
+    const client = await this.#clientInOrg(orgId, clientId);
+    if (client.revokedAt) throw new HttpError(409, "Client is revoked");
+    if (client.environment !== environment) {
+      await this.store.updateClientEnvironment(client.id, environment);
+      await this.#audit(orgId, "client_environment", actor, null, client.id);
+    }
+    return { ...client, environment };
   }
 
   async lookupTrusted(orgId: string, token: string): Promise<ClientRecord | undefined> {
@@ -553,6 +602,13 @@ export class HostedKernel {
     return this.store.findClientByHashedSecret(hashSecret(token));
   }
 
+  /**
+   * One open grant per (client, item). A standing policy activates immediately; otherwise the
+   * existing pending grant is reused with a fresh approval code. The org limiter is counted here
+   * exactly once per call, whichever surface (REST, request_grant, http_request) asked.
+   * Notification goes to `operatorEmail` (must be a member) or to every member; it is sent for a
+   * new grant or when the previous magic link expired, never on every retry.
+   */
   async requestGrant(input: {
     orgId: string;
     clientId: string;
@@ -562,12 +618,15 @@ export class HostedKernel {
     taskDescription?: string;
     operatorEmail?: string;
   }): Promise<{ grant: HostedGrantRecord; code?: string; notifyFailed?: boolean }> {
+    if (!(await this.limiter.allow(input.orgId, this.now().getTime(), "grant"))) {
+      throw new HttpError(429, "request_grant rate limit");
+    }
     const client = await this.#clientInOrg(input.orgId, input.clientId);
     if (client.environment !== input.environment) {
       throw new HttpError(403, "Client cannot access this environment");
     }
     const env = await this.envFor(input.orgId, input.environment);
-    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    const item = await this.store.getItemByName(env.id, normalizeItemName(input.itemName));
     if (!item) {
       throw await this.needItemError({
         orgId: input.orgId,
@@ -579,74 +638,173 @@ export class HostedKernel {
         alreadyLimited: true,
       });
     }
+    const recipients = await this.#notifyRecipients(input.orgId, input.operatorEmail);
     const standing = await this.#standingFor(input.orgId, client.id, item);
-    const at = nowIso(this.now());
-    const grant: HostedGrantRecord = {
+    const now = this.now();
+    const at = nowIso(now);
+    const open = await this.#openGrantFor(input.orgId, client.id, item.id);
+    let grant: HostedGrantRecord;
+    if (open && open.status === "active") {
+      grant = open;
+    } else if (standing) {
+      grant = open
+        ? { ...open, policy: standing.kind, status: "active", approvedAt: at, expiresAt: null }
+        : this.#newGrant(input, client.id, item, env.id, at, standing.kind, "active");
+      if (open) await this.store.updateGrant(grant);
+      else await this.store.insertGrant(grant);
+    } else if (open) {
+      grant = open;
+    } else {
+      grant = this.#newGrant(input, client.id, item, env.id, at, "prompt", "pending");
+      await this.store.insertGrant(grant);
+    }
+    await this.#audit(input.orgId, "request_grant", client.id, item.name, client.id);
+    if (grant.status === "active") {
+      assertSafePublicObject("requestGrant", grant);
+      return { grant };
+    }
+    const code = await this.#rotateCodeChallenge(grant.id, now);
+    const magic = await this.#ensureMagicChallenge(grant.id, now);
+    let notifyFailed = false;
+    if (!open || magic.fresh) {
+      notifyFailed = !(await this.#notify(input.orgId, recipients, client, item, magic.token));
+    }
+    assertSafePublicObject("requestGrant", grant);
+    return { grant, code, notifyFailed };
+  }
+
+  #newGrant(
+    input: { orgId: string; taskId?: string; taskDescription?: string },
+    clientId: string,
+    item: { id: string; folderId: string | null },
+    environmentId: string,
+    at: string,
+    policy: GrantPolicy,
+    status: "active" | "pending",
+  ): HostedGrantRecord {
+    return {
       id: `grt_${randomUUID()}`,
       orgId: input.orgId,
-      clientId: client.id,
+      clientId,
       itemId: item.id,
       folderId: item.folderId,
-      environmentId: env.id,
-      policy: standing ? standing.kind : "prompt",
-      status: standing ? "active" : "pending",
+      environmentId,
+      policy,
+      status,
       expiresAt: null,
       createdAt: at,
-      approvedAt: standing ? at : null,
+      approvedAt: status === "active" ? at : null,
       consumedAt: null,
       taskId: input.taskId ?? null,
       taskDescription: input.taskDescription ?? null,
     };
-    await this.store.insertGrant(grant);
-    await this.#audit(input.orgId, "request_grant", client.id, item.name, client.id);
-    if (standing) {
-      assertSafePublicObject("requestGrant", grant);
-      return { grant };
+  }
+
+  /** Newest pending or unexpired active grant for the pair; active wins over pending. */
+  async #openGrantFor(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord | undefined> {
+    const grants = await this.#settleExpired(await this.store.listGrants(orgId));
+    const pair = grants.filter((g) => g.clientId === clientId && g.itemId === itemId);
+    return pair.find((g) => g.status === "active") ?? pair.find((g) => g.status === "pending");
+  }
+
+  /** D15: an active `session` grant past `expires_at` reads as `expired`. */
+  async #settleExpired(grants: HostedGrantRecord[]): Promise<HostedGrantRecord[]> {
+    const now = this.now();
+    const out: HostedGrantRecord[] = [];
+    for (const g of grants) {
+      if (g.status === "active" && isPast(g.expiresAt, now)) {
+        const expired: HostedGrantRecord = { ...g, status: "expired" };
+        await this.store.updateGrant(expired);
+        out.push(expired);
+      } else {
+        out.push(g);
+      }
     }
+    return out;
+  }
+
+  async #rotateCodeChallenge(grantId: string, now: Date): Promise<string> {
+    const prior = await this.store.getChallengeByGrantKind(grantId, "code");
+    if (prior) await this.store.deleteChallenge(prior.id);
     const code = String(randomInt(0, 100_000_000)).padStart(8, "0");
     const salt = randomBytes(8).toString("hex");
     await this.store.insertChallenge({
       id: `chl_${randomUUID()}`,
-      grantId: grant.id,
+      grantId,
       codeHash: `${salt}:${hashCode(code, salt)}`,
-      expiresAt: new Date(this.now().getTime() + CODE_TTL_MS).toISOString(),
+      expiresAt: new Date(now.getTime() + CODE_TTL_MS).toISOString(),
       attempts: 0,
       kind: "code",
     });
-    let magicToken: string | undefined;
-    if (this.approvalHmac) {
-      const exp = this.now().getTime() + MAGIC_TTL_MS;
-      magicToken = mintApprovalToken(this.approvalHmac, grant.id, exp);
-      await this.store.insertChallenge({
-        id: `chl_${randomUUID()}`,
-        grantId: grant.id,
-        codeHash: magicToken,
-        expiresAt: new Date(exp).toISOString(),
-        attempts: 0,
-        kind: "magic",
-      });
+    return code;
+  }
+
+  /** Keeps an unexpired magic link; mints a new one otherwise. `fresh` means a new link was made. */
+  async #ensureMagicChallenge(grantId: string, now: Date): Promise<{ token?: string; fresh: boolean }> {
+    if (!this.approvalHmac) return { fresh: true };
+    const prior = await this.store.getChallengeByGrantKind(grantId, "magic");
+    if (prior && !isPast(prior.expiresAt, now)) return { token: prior.codeHash, fresh: false };
+    if (prior) await this.store.deleteChallenge(prior.id);
+    const exp = now.getTime() + MAGIC_TTL_MS;
+    const token = mintApprovalToken(this.approvalHmac, grantId, exp);
+    await this.store.insertChallenge({
+      id: `chl_${randomUUID()}`,
+      grantId,
+      codeHash: token,
+      expiresAt: new Date(exp).toISOString(),
+      attempts: 0,
+      kind: "magic",
+    });
+    return { token, fresh: true };
+  }
+
+  /** An explicit `operatorEmail` wins; otherwise every member with a verified email is notified. */
+  async #notifyRecipients(orgId: string, operatorEmail: string | undefined): Promise<string[]> {
+    if (operatorEmail !== undefined) return [operatorEmail.trim().toLowerCase()];
+    return this.store.listMemberEmails(orgId);
+  }
+
+  /** REST boundary check for `operator_email`: only this org's members may be addressed. */
+  async assertMemberEmail(orgId: string, email: string): Promise<string> {
+    const wanted = email.trim().toLowerCase();
+    const members = await this.store.listMemberEmails(orgId);
+    if (!members.some((m) => m.toLowerCase() === wanted)) {
+      throw new HttpError(400, "operator_email must be a member of this org");
     }
-    let notifyFailed = false;
-    if (this.sendEmail && input.operatorEmail) {
-      try {
-        const link = magicToken
-          ? `${this.publicUrl}/approve?token=${encodeURIComponent(magicToken)}`
-          : `${this.publicUrl.replace(/\/$/, "")}/console`;
-        await this.sendEmail(
-          input.operatorEmail,
-          `Grant request ${item.name}`,
-          `<p>Client ${client.name} requested ${item.name} (••••${item.last4}).</p><p>Approve in inbox or use the code in the agent result.</p><p><a href="${link}">Approve</a></p>`,
-        );
-      } catch {
-        notifyFailed = true;
-        await this.#audit(input.orgId, "notify_failed", "system", item.name, client.id);
+    return wanted;
+  }
+
+  /** Sends the approval email to each recipient. True when at least one send succeeded. */
+  async #notify(
+    orgId: string,
+    recipients: string[],
+    client: ClientRecord,
+    item: { name: string; last4: string },
+    magicToken: string | undefined,
+  ): Promise<boolean> {
+    let sent = 0;
+    if (this.sendEmail && recipients.length > 0) {
+      const link = magicToken
+        ? `${this.publicUrl}/approve?token=${encodeURIComponent(magicToken)}`
+        : `${this.publicUrl.replace(/\/$/, "")}/console`;
+      const html =
+        `<p>Client ${escapeHtml(client.name)} requested ${escapeHtml(item.name)} (••••${escapeHtml(item.last4)}).</p>` +
+        `<p>Approve in inbox or use the code in the agent result.</p>` +
+        `<p><a href="${escapeHtml(link)}">Approve</a></p>`;
+      for (const to of recipients) {
+        try {
+          await this.sendEmail(to, `Grant request ${item.name}`, html);
+          sent += 1;
+        } catch {
+          // counted below
+        }
       }
-    } else {
-      notifyFailed = true;
-      await this.#audit(input.orgId, "notify_failed", "system", item.name, client.id);
     }
-    assertSafePublicObject("requestGrant", grant);
-    return { grant, code, notifyFailed };
+    if (sent === 0) {
+      await this.#audit(orgId, "notify_failed", "system", item.name, client.id);
+      return false;
+    }
+    return true;
   }
 
   async approveGrant(input: {
@@ -715,40 +873,40 @@ export class HostedKernel {
     return next;
   }
 
+  /**
+   * Finds the pending challenge whose code matches. A wrong code charges one attempt against the
+   * most recently requested pending grant only, so typos cannot lock out every open approval.
+   */
   async approveByCode(orgId: string, actor: string, role: MemberRole, code: string): Promise<HostedGrantRecord> {
     const pending = await this.store.listPendingGrants(orgId);
-    let sawExpiredMatch = false;
+    const now = this.now();
+    const candidates: { grant: HostedGrantRecord; ch: ApprovalChallengeRecord }[] = [];
     for (const grant of pending) {
       const ch = await this.store.getChallengeByGrantKind(grant.id, "code");
-      if (!ch || ch.kind !== "code") continue;
+      if (ch && ch.kind === "code") candidates.push({ grant, ch });
+    }
+    let sawExpiredMatch = false;
+    for (const { grant, ch } of candidates) {
       const [salt, expected] = ch.codeHash.split(":");
       if (!salt || !expected) continue;
       const actual = hashCode(code, salt);
       const ok =
         actual.length === expected.length &&
         timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
-      if (!ok) {
-        if (new Date(ch.expiresAt).getTime() >= this.now().getTime() && ch.attempts < 5) {
-          ch.attempts += 1;
-          await this.store.updateChallenge(ch);
-        }
-        continue;
-      }
-      if (new Date(ch.expiresAt).getTime() < this.now().getTime()) {
+      if (!ok) continue;
+      if (isPast(ch.expiresAt, now)) {
         sawExpiredMatch = true;
         continue;
       }
       if (ch.attempts >= 5) continue;
       await this.store.deleteChallenge(ch.id);
-      return this.approveGrant({
-        orgId,
-        grantId: grant.id,
-        policy: "prompt",
-        role,
-        actor,
-      });
+      return this.approveGrant({ orgId, grantId: grant.id, policy: "prompt", role, actor });
     }
     if (sawExpiredMatch) throw new HttpError(410, "Expired code");
+    const newest = candidates.find(({ ch }) => !isPast(ch.expiresAt, now) && ch.attempts < 5);
+    if (newest) {
+      await this.store.updateChallenge({ ...newest.ch, attempts: newest.ch.attempts + 1 });
+    }
     throw new HttpError(409, "Invalid or reused code");
   }
 
@@ -764,12 +922,22 @@ export class HostedKernel {
     await this.store.deleteOrg(orgId);
   }
 
+  /** Revokes every open grant for the (client, item) pair and drops the policies that would re-grant it. */
   async revokeGrant(orgId: string, actor: string, grantId: string): Promise<HostedGrantRecord> {
     const grant = await this.store.getGrant(grantId);
     if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
-    const at = nowIso(this.now());
     const next = { ...grant, status: "revoked" as const };
     await this.store.updateGrant(next);
+    const siblings = (await this.store.listGrants(orgId)).filter(
+      (g) =>
+        g.id !== grant.id &&
+        g.clientId === grant.clientId &&
+        g.itemId === grant.itemId &&
+        (g.status === "active" || g.status === "pending"),
+    );
+    for (const g of siblings) {
+      await this.store.updateGrant({ ...g, status: "revoked" });
+    }
     const policies = await this.store.listPoliciesForClient(orgId, grant.clientId);
     for (const p of policies) {
       if (grant.itemId && p.itemId === grant.itemId) await this.store.deletePolicy(p.id);
@@ -799,7 +967,7 @@ export class HostedKernel {
       approved_at: string | null;
     }>
   > {
-    const all = await this.store.listGrants(orgId);
+    const all = await this.#settleExpired(await this.store.listGrants(orgId));
     const rows = all.filter(
       (g) => g.status === "pending" || (g.status === "active" && g.policy === "prompt"),
     );
@@ -823,7 +991,7 @@ export class HostedKernel {
   }
 
   async listClientGrants(orgId: string, clientId: string): Promise<HostedGrantRecord[]> {
-    const all = await this.store.listGrants(orgId);
+    const all = await this.#settleExpired(await this.store.listGrants(orgId));
     return all.filter((g) => g.clientId === clientId);
   }
 
@@ -841,7 +1009,7 @@ export class HostedKernel {
       throw new HttpError(403, "Client cannot access this environment");
     }
     const env = await this.envFor(input.orgId, input.environment);
-    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    const item = await this.store.getItemByName(env.id, normalizeItemName(input.itemName));
     if (!item) throw new HttpError(404, "Unknown item");
     await this.consumeActiveGrant(input.orgId, client.id, item.id);
     const decrypted = await this.decryptItem(input.orgId, item.id);
@@ -854,11 +1022,17 @@ export class HostedKernel {
     };
   }
 
+  /**
+   * Hands the decrypted item to a connector. Handing out the plaintext is audited as `inject`
+   * unless the caller sets `auditAfterSend` and calls `auditInject` with the real outcome once the
+   * request has (or has not) left the process.
+   */
   async prepareConnector(input: {
     orgId: string;
     clientId: string;
     itemName: string;
     environment: VaultEnvName;
+    auditAfterSend?: boolean;
   }): Promise<{
     secret: string;
     username: string | null;
@@ -876,7 +1050,7 @@ export class HostedKernel {
       throw new HttpError(403, "Client cannot access this environment");
     }
     const env = await this.envFor(input.orgId, input.environment);
-    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    const item = await this.store.getItemByName(env.id, normalizeItemName(input.itemName));
     if (!item) {
       throw await this.needItemError({
         orgId: input.orgId,
@@ -889,13 +1063,24 @@ export class HostedKernel {
     }
     const grant = await this.consumeActiveGrant(input.orgId, client.id, item.id);
     const decrypted = await this.decryptItem(input.orgId, item.id);
-    await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
+    if (!input.auditAfterSend) {
+      await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
+    }
     return {
       ...decrypted,
       grantId: grant.id,
       grantPolicy: grant.policy,
       itemId: item.id,
     };
+  }
+
+  /**
+   * Audit truth for the connector: `inject` only after the credential left the process,
+   * `inject_denied` when policy stopped it (host mismatch, blocked address), `inject_failed`
+   * when the origin could not be reached.
+   */
+  async auditInject(orgId: string, clientId: string, itemName: string, outcome: InjectOutcome): Promise<void> {
+    await this.#audit(orgId, outcome, clientId, itemName, clientId);
   }
 
   async reactivatePromptGrant(grantId: string | undefined): Promise<boolean> {
@@ -905,7 +1090,7 @@ export class HostedKernel {
 
   async findStoredItem(orgId: string, environment: VaultEnvName, itemName: string) {
     const env = await this.envFor(orgId, environment);
-    return this.store.getItemByName(env.id, normalizeSecretName(itemName));
+    return this.store.getItemByName(env.id, normalizeItemName(itemName));
   }
 
   async updateItemMeta(input: {
@@ -949,14 +1134,7 @@ export class HostedKernel {
     if (inject === "client_credentials" && !storedItemUsername(nextKind, inject, nextUsernameRaw)) {
       throw new HttpError(400, "client_credentials items require a Client ID in username");
     }
-    let name = item.name;
-    if (input.name !== undefined) {
-      try {
-        name = normalizeSecretName(input.name);
-      } catch (err) {
-        throw new HttpError(400, err instanceof Error ? err.message : "Invalid name");
-      }
-    }
+    const name = input.name !== undefined ? normalizeItemName(input.name) : item.name;
     let nextEnv = env;
     if (input.environment && input.environment !== env.name) {
       nextEnv = await this.envFor(input.orgId, input.environment);
@@ -979,7 +1157,8 @@ export class HostedKernel {
     };
     const newValue = input.value !== undefined && input.value.length > 0 ? input.value : undefined;
     const loginShapeChanged = itemStoresLoginPayload(item.kind) !== itemStoresLoginPayload(nextKind);
-    if (newValue !== undefined || loginShapeChanged) {
+    const aadChanged = next.allowedHostsJson !== item.allowedHostsJson || next.inject !== item.inject;
+    if (newValue !== undefined || loginShapeChanged || aadChanged) {
       if (newValue !== undefined) {
         if (Buffer.byteLength(newValue, "utf8") > MAX_ITEM_BYTES) {
           throw new HttpError(400, "Value exceeds 64KiB");
@@ -990,7 +1169,16 @@ export class HostedKernel {
         ? JSON.stringify({ username: next.username, password: secret })
         : secret;
       const dek = await this.dekForOrg(input.orgId);
-      const envelope = encrypt(payload, dek, input.orgId);
+      const envelope = encrypt(
+        payload,
+        dek,
+        itemAad({
+          orgId: input.orgId,
+          itemId: item.id,
+          allowedHostsJson: next.allowedHostsJson,
+          inject: next.inject,
+        }),
+      );
       await this.store.updateItemEnvelope(item.id, {
         iv: envelope.iv,
         ciphertext: envelope.ciphertext,
@@ -1129,29 +1317,55 @@ export class HostedKernel {
     return { item_name: name, last4: last };
   }
 
+  /** Validates a magic link and returns what approving it would do. No state change. */
+  async previewMagic(orgId: string, token: string): Promise<{
+    grant_id: string;
+    client_name: string;
+    item_name: string;
+    item_last4: string;
+    policy: string;
+    task_description: string | null;
+  }> {
+    const grant = await this.#magicGrant(orgId, token);
+    const item = grant.itemId ? await this.store.getItem(grant.itemId) : undefined;
+    const client = await this.store.getClient(grant.clientId);
+    const preview = {
+      grant_id: grant.id,
+      client_name: client?.name ?? "agent",
+      item_name: item?.name ?? "",
+      item_last4: item?.last4 ?? "",
+      policy: "prompt",
+      task_description: grant.taskDescription,
+    };
+    assertSafePublicObject("previewMagic", preview);
+    return preview;
+  }
+
   async approveMagic(orgId: string, actor: string, role: MemberRole, token: string): Promise<HostedGrantRecord> {
+    const grant = await this.#magicGrant(orgId, token);
+    const magic = await this.store.getChallengeByGrantKind(grant.id, "magic");
+    if (!magic) throw new HttpError(410, "Expired link");
+    await this.store.deleteChallenge(magic.id);
+    return this.approveGrant({ orgId, grantId: grant.id, policy: "prompt", role, actor });
+  }
+
+  async #magicGrant(orgId: string, token: string): Promise<HostedGrantRecord> {
     if (!this.approvalHmac) throw new HttpError(500, "Magic links are not configured");
     const grantId = verifyApprovalToken(this.approvalHmac, token, this.now().getTime());
     const grant = await this.store.getGrant(grantId);
     if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
-    const pending = await this.store.listPendingGrants(orgId);
-    const still = pending.find((g) => g.id === grantId);
-    if (!still) throw new HttpError(410, "Expired link");
+    if (grant.status !== "pending") throw new HttpError(410, "Expired link");
     const magic = await this.store.getChallengeByGrantKind(grantId, "magic");
     if (!magic || magic.codeHash !== token) throw new HttpError(410, "Expired link");
-    await this.store.deleteChallenge(magic.id);
-    return this.approveGrant({ orgId, grantId, policy: "prompt", role, actor });
+    return grant;
   }
 
   async consumeActiveGrant(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord> {
-    const grants = await this.store.listGrants(orgId);
+    const grants = await this.#settleExpired(await this.store.listGrants(orgId));
     const at = this.now();
-    const match = grants.find((g) => {
-      if (g.clientId !== clientId || g.itemId !== itemId) return false;
-      if (g.status !== "active") return false;
-      if (g.expiresAt && new Date(g.expiresAt).getTime() < at.getTime()) return false;
-      return true;
-    });
+    const match = grants.find(
+      (g) => g.clientId === clientId && g.itemId === itemId && g.status === "active",
+    );
     if (!match) throw new HttpError(403, "inject_denied");
     if (match.policy === "prompt") {
       const ok = await this.store.consumeGrant(match.id, nowIso(at));
@@ -1165,11 +1379,7 @@ export class HostedKernel {
     const item = await this.store.getItem(itemId);
     if (!item) throw new HttpError(404, "Unknown item");
     const dek = await this.dekForOrg(orgId);
-    const plain = decrypt(
-      { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag },
-      dek,
-      orgId,
-    );
+    const plain = await this.#openItemEnvelope(orgId, item, dek);
     if (item.kind === "login") {
       const parsed: unknown = JSON.parse(plain);
       if (
@@ -1199,6 +1409,35 @@ export class HostedKernel {
       name: item.name,
       kind: item.kind,
     };
+  }
+
+  /**
+   * Decrypts with the item-bound AAD. Rows written before binding decrypt under the legacy
+   * `orgId` AAD and are re-encrypted in place (migrate-on-read) without touching `updated_at`.
+   */
+  async #openItemEnvelope(orgId: string, item: ItemRecord, dek: Buffer): Promise<string> {
+    const envelope = { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag };
+    const aad = itemAad({
+      orgId,
+      itemId: item.id,
+      allowedHostsJson: item.allowedHostsJson,
+      inject: item.inject,
+    });
+    try {
+      return decrypt(envelope, dek, aad);
+    } catch {
+      // fall through to the legacy binding
+    }
+    const plain = decrypt(envelope, dek, legacyItemAad(orgId));
+    const rebound = encrypt(plain, dek, aad);
+    await this.store.updateItemEnvelope(item.id, {
+      iv: rebound.iv,
+      ciphertext: rebound.ciphertext,
+      tag: rebound.tag,
+      last4: item.last4,
+      updatedAt: item.updatedAt,
+    });
+    return plain;
   }
 
   #assertHosts(hosts: string[]): void {
@@ -1295,7 +1534,7 @@ export class HostedKernel {
   }
 
   async listAccess(orgId: string, currentSessionHash?: string) {
-    const [members, clients, grants, sessions, audit, events] = await Promise.all([
+    const [members, clients, storedGrants, sessions, audit, events] = await Promise.all([
       this.store.listMembers(orgId),
       this.store.listClients(orgId),
       this.store.listGrants(orgId),
@@ -1303,6 +1542,7 @@ export class HostedKernel {
       this.store.listAudit(orgId, 200, { action: "inject" }),
       this.store.listAccessEvents(orgId, 200),
     ]);
+    const grants = await this.#settleExpired(storedGrants);
     const users = await Promise.all(members.map((m) => this.store.getUser(m.userId)));
     const operators = members.map((m, i) => ({
       user_id: m.userId,
@@ -1402,11 +1642,26 @@ export class HostedKernel {
     await this.#audit(orgId, "client_revoked", actor, null, clientId);
   }
 
-  async revokeSession(orgId: string, actorHash: string, sessionPrefix: string): Promise<void> {
+  /**
+   * `sessionId` is the 12+ character hash prefix shown in Access (or the full hash). Members may
+   * revoke their own sessions; only owners may revoke another member's.
+   */
+  async revokeSession(
+    orgId: string,
+    actor: { userId: string; role: MemberRole; sessionHash: string },
+    sessionId: string,
+  ): Promise<void> {
+    if (sessionId.length < SESSION_ID_MIN_CHARS || !/^[0-9a-f]+$/i.test(sessionId)) {
+      throw new HttpError(400, "Session id must be at least 12 hex characters");
+    }
     const sessions = await this.store.listOperatorSessions(orgId);
-    const match = sessions.find((s) => s.idHash.startsWith(sessionPrefix) || s.idHash === sessionPrefix);
-    if (!match) throw new HttpError(404, "Unknown session");
-    if (match.idHash === actorHash) throw new HttpError(400, "cannot_revoke_current");
+    const matches = sessions.filter((s) => s.idHash.startsWith(sessionId.toLowerCase()));
+    const match = matches[0];
+    if (!match || matches.length > 1) throw new HttpError(404, "Unknown session");
+    if (match.idHash === actor.sessionHash) throw new HttpError(400, "cannot_revoke_current");
+    if (match.userId !== actor.userId && actor.role !== "owner") {
+      throw new HttpError(403, "Only owners may revoke another member's session");
+    }
     await this.store.deleteSession(match.idHash);
   }
 

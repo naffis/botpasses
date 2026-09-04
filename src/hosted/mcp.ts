@@ -29,8 +29,16 @@ export const HOSTED_MCP_TOOL_NAMES = [
   "find_items",
   "request_grant",
   "list_grants",
-  "http.request",
+  "http_request",
 ] as const;
+
+/**
+ * Old name of `http_request`. Hosts with `^[a-zA-Z0-9_-]+$` tool-name grammars rejected the dot.
+ * Accepted on `tools/call` for one release; never advertised.
+ */
+export const HOSTED_MCP_TOOL_ALIASES: Record<string, (typeof HOSTED_MCP_TOOL_NAMES)[number]> = {
+  "http.request": "http_request",
+};
 
 const FORBIDDEN = ["get_secret", "read_value", "read_secret", "reveal_secret", "decrypt_secret", "revoke_grant"];
 
@@ -45,7 +53,12 @@ export type HostedMcpTool = {
   name: (typeof HOSTED_MCP_TOOL_NAMES)[number];
   description: string;
   inputSchema: JsonSchema;
-  annotations?: { title: string; readOnlyHint?: boolean; openWorldHint?: boolean };
+  annotations?: {
+    title: string;
+    readOnlyHint?: boolean;
+    openWorldHint?: boolean;
+    destructiveHint?: boolean;
+  };
 };
 
 export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
@@ -55,9 +68,7 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
     annotations: { title: "List stored credential names", readOnlyHint: true },
     inputSchema: {
       type: "object",
-      properties: {
-        environment: { type: "string", enum: ["staging", "production"] },
-      },
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -74,7 +85,6 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
         },
-        environment: { type: "string", enum: ["staging", "production"] },
       },
       additionalProperties: false,
     },
@@ -87,7 +97,6 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
       type: "object",
       properties: {
         item_name: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.grant_item_name },
-        environment: { type: "string", enum: ["staging", "production"] },
         task_id: { type: "string" },
         task_description: {
           type: "string",
@@ -109,9 +118,13 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
     },
   },
   {
-    name: "http.request",
-    description: HOSTED_TOOL_DESCRIPTIONS["http.request"],
-    annotations: { title: "Call an API with a Botpasses credential", openWorldHint: true },
+    name: "http_request",
+    description: HOSTED_TOOL_DESCRIPTIONS.http_request,
+    annotations: {
+      title: "Call an API with a Botpasses credential",
+      openWorldHint: true,
+      destructiveHint: true,
+    },
     inputSchema: {
       type: "object",
       properties: {
@@ -134,7 +147,6 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
         },
-        environment: { type: "string", enum: ["staging", "production"] },
       },
       required: ["method", "path"],
       additionalProperties: false,
@@ -169,7 +181,8 @@ function publicGrant(g: HostedGrantRecord) {
   };
 }
 
-function envOf(principal: ModelPrincipal, _args: Record<string, unknown>): VaultEnvName {
+/** Environment is the client's binding. An `environment` argument is accepted and ignored. */
+function envOf(principal: ModelPrincipal): VaultEnvName {
   return principal.environment;
 }
 
@@ -188,8 +201,9 @@ export async function callHostedMcpTool(
   if (FORBIDDEN.includes(name) || name.includes("value") || name.includes("decrypt")) {
     return fail(`Tool ${name} is not available. Vault MCP never returns secret values.`);
   }
+  const canonical = HOSTED_MCP_TOOL_ALIASES[name] ?? name;
   try {
-    const payload = attachMcpNext(await dispatch(deps, name, args));
+    const payload = attachMcpNext(await dispatch(deps, canonical, args));
     assertSafePublicObject(`mcp:${name}`, payload);
     return mcpPayloadResult(payload);
   } catch (err) {
@@ -209,7 +223,7 @@ async function dispatch(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const { kernel, principal } = deps;
-  const environment = envOf(principal, args);
+  const environment = envOf(principal);
   switch (name) {
     case "list_items": {
       const items: ItemPublic[] = await kernel.listItems(principal.orgId, environment);
@@ -257,7 +271,7 @@ async function dispatch(
       const grants = await kernel.listClientGrants(principal.orgId, principal.clientId);
       return { grants: grants.map(publicGrant) };
     }
-    case "http.request": {
+    case "http_request": {
       return runHttpRequest(deps, args, environment);
     }
     default:

@@ -16,6 +16,22 @@ test("org rate limiter allows 30 hits then denies in the same hour", async () =>
   assert.equal(await limiter.allow("org_1", now + 60 * 60 * 1000 + 1), true);
 });
 
+test("store-backed limiter admits exactly 30 of 40 concurrent callers (S15 TOCTOU)", async () => {
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "rate.sqlite"));
+  try {
+    const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const limiter = new OrgRateLimiter(store);
+    const results = await Promise.all(
+      Array.from({ length: 40 }, () => limiter.allow("org_race", now, "grant")),
+    );
+    assert.equal(results.filter(Boolean).length, 30);
+  } finally {
+    await store.close();
+    cleanup(home);
+  }
+});
+
 test("store-backed limiter holds the window across processes", async () => {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "rate.sqlite"));

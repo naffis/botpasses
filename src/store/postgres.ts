@@ -15,6 +15,7 @@ import type {
   PersistFulfillInput,
   PolicyRecord,
   UserRecord,
+  VaultEnvName,
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
@@ -195,6 +196,14 @@ export class PostgresStore implements VaultStore {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM oidc_payloads WHERE payload::jsonb ->> 'accountId' IN (
+           SELECT user_id FROM org_members WHERE org_id = $1
+         )`,
+        [orgId],
+      );
+      await client.query("DELETE FROM access_events WHERE org_id = $1", [orgId]);
+      await client.query("DELETE FROM rate_hits WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM need_items WHERE org_id = $1", [orgId]);
       await client.query(
         "DELETE FROM approval_challenges WHERE grant_id IN (SELECT id FROM grants WHERE org_id = $1)",
@@ -435,6 +444,10 @@ export class PostgresStore implements VaultStore {
       tokenLast4,
       id,
     ]);
+  }
+
+  async updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void> {
+    await this.#pool.query("UPDATE clients SET environment = $1 WHERE id = $2", [environment, id]);
   }
 
   async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
@@ -915,6 +928,15 @@ export class PostgresStore implements VaultStore {
         role: rec.role as MemberRecord["role"],
       };
     });
+  }
+
+  async listMemberEmails(orgId: string): Promise<string[]> {
+    const r = await this.#pool.query(
+      `SELECT u.email AS email FROM org_members m JOIN users u ON u.id = m.user_id
+       WHERE m.org_id = $1 AND u.email_verified_at IS NOT NULL ORDER BY u.email`,
+      [orgId],
+    );
+    return r.rows.map((row) => String(asRecord(row).email));
   }
 
   async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
