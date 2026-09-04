@@ -37,7 +37,15 @@ export type SweepCounts = {
   oidcPayloads: number;
   /** Unaccepted invites more than seven days past `expires_at`. */
   orgInvites: number;
+  /** Revoked, consumed, or expired grants settled more than 30 days ago. */
+  grants: number;
 };
+
+/** An item still bound to the legacy `orgId` AAD (or unrecorded), with the org that owns it. */
+export type LegacyAadItem = { item: ItemRecord; orgId: string };
+
+/** Rate limit buckets: `grant` and `need` share the hourly org budget; `approve_code` has its own. */
+export type RateHitKind = "grant" | "need" | "approve_code";
 
 /**
  * Identity columns added after `UserRecord` froze (see `HOSTED_SCHEMA_IDENTITY_ALTER2_*`).
@@ -94,13 +102,16 @@ export type VaultStore = {
   /**
    * Delete rows nothing can read again: expired OTP challenges, sessions, approval
    * challenges, and oidc payloads; cancelled/expired needs older than 24 h; rate_hits
-   * windows older than 2 h. Runs at boot and hourly.
+   * windows older than 2 h; revoked, consumed, or expired grants settled more than 30 days
+   * ago (the audit rows they produced stay). Runs at boot and hourly.
    */
   sweepExpired(nowIso: string): Promise<SweepCounts>;
 
   insertOrg(row: OrgRecord): Promise<void>;
   getOrg(id: string): Promise<OrgRecord | undefined>;
   listOrgs(): Promise<OrgRecord[]>;
+  /** Orgs whose `created_by` is this user, oldest first. */
+  listOrgsCreatedBy(userId: string): Promise<OrgRecord[]>;
   updateOrgWrappedDek(
     id: string,
     patch: Pick<OrgRecord, "wrappedDekIv" | "wrappedDekCiphertext" | "wrappedDekTag">,
@@ -132,6 +143,7 @@ export type VaultStore = {
   getFolderByName(environmentId: string, name: string): Promise<FolderRecord | undefined>;
 
   insertItem(row: ItemRecord): Promise<void>;
+  /** Writes a bound envelope (`aad_version` becomes current). */
   updateItemEnvelope(
     id: string,
     patch: Pick<ItemRecord, "iv" | "ciphertext" | "tag" | "last4" | "updatedAt">,
@@ -143,6 +155,31 @@ export type VaultStore = {
       "name" | "kind" | "environmentId" | "username" | "inject" | "allowedHostsJson" | "updatedAt"
     >,
   ): Promise<void>;
+  /**
+   * Envelope and metadata in one statement, so a re-encryption under new `allowed_hosts_json`
+   * or `inject` never lands without the columns it is bound to (or the other way round).
+   */
+  updateItemEnvelopeAndMeta(
+    id: string,
+    patch: Pick<
+      ItemRecord,
+      | "iv"
+      | "ciphertext"
+      | "tag"
+      | "last4"
+      | "name"
+      | "kind"
+      | "environmentId"
+      | "username"
+      | "inject"
+      | "allowedHostsJson"
+      | "updatedAt"
+    >,
+  ): Promise<void>;
+  /** Items whose `aad_version` is below the current binding, with their org. Boot rebind input. */
+  listItemsWithLegacyAad(): Promise<LegacyAadItem[]>;
+  /** Marks an envelope verified under the current binding without rewriting it. */
+  setItemAadVersion(id: string, version: number): Promise<void>;
   deleteItem(id: string): Promise<void>;
   getItem(id: string): Promise<ItemRecord | undefined>;
   getItemByName(environmentId: string, name: string): Promise<ItemRecord | undefined>;
@@ -156,8 +193,8 @@ export type VaultStore = {
   findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined>;
   updateClientHashedSecret(id: string, hashedSecret: string, tokenLast4: string): Promise<void>;
   updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void>;
-  incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
-  countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
+  incrementRateHit(orgId: string, kind: RateHitKind, windowStart: string): Promise<number>;
+  countRateHits(orgId: string, kind: RateHitKind, windowStart: string): Promise<number>;
 
   insertPolicy(row: PolicyRecord): Promise<void>;
   deletePolicy(id: string): Promise<void>;
@@ -174,6 +211,8 @@ export type VaultStore = {
   getGrant(id: string): Promise<HostedGrantRecord | undefined>;
   listGrants(orgId: string): Promise<HostedGrantRecord[]>;
   listPendingGrants(orgId: string): Promise<HostedGrantRecord[]>;
+  /** Every grant for one (client, item) pair, newest first; uses `grants_client_item_status`. */
+  listGrantsForPair(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord[]>;
   /** Writes every grant column except `calls_used`, which only `recordGrantCall` moves. */
   updateGrant(row: HostedGrantRecord): Promise<void>;
   consumeGrant(id: string, consumedAt: string): Promise<boolean>;

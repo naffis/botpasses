@@ -38,6 +38,8 @@ export type OrgRecord = {
   wrappedDekCiphertext: string;
   wrappedDekTag: string;
   createdAt: string;
+  /** User who provisioned the org; null for rows written before migration 010. */
+  createdBy: string | null;
 };
 
 export type MemberRecord = {

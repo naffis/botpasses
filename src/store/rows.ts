@@ -47,6 +47,7 @@ export function mapOrg(r: Row): OrgRecord {
     wrappedDekCiphertext: String(r.wrapped_dek_ciphertext),
     wrappedDekTag: String(r.wrapped_dek_tag),
     createdAt: String(r.created_at),
+    createdBy: text(r.created_by),
   };
 }
 
@@ -248,10 +249,16 @@ export function mapAccess(r: Row): AccessEventRecord {
 
 /* ---- insert column lists and value tuples (same order in both stores) ---- */
 
-export const ITEM_INSERT_COLUMNS =
-  "id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json, inject, iv, ciphertext, tag, created_at, updated_at";
+/**
+ * `items.aad_version` written by every kernel insert and envelope update: the envelope is bound
+ * to orgId|itemId|allowed_hosts_json|inject. Rows at 0 predate the column and are rebound at boot.
+ */
+export const ITEM_AAD_VERSION = 1;
 
-export function itemValues(row: ItemRecord): (string | null)[] {
+export const ITEM_INSERT_COLUMNS =
+  "id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json, inject, iv, ciphertext, tag, created_at, updated_at, aad_version";
+
+export function itemValues(row: ItemRecord): (string | number | null)[] {
   return [
     row.id,
     row.environmentId,
@@ -267,6 +274,7 @@ export function itemValues(row: ItemRecord): (string | null)[] {
     row.tag,
     row.createdAt,
     row.updatedAt,
+    ITEM_AAD_VERSION,
   ];
 }
 
