@@ -5,7 +5,7 @@ section: reference
 order: 3
 ---
 
-Run `npx vault` from the cloned repository (or `npm run vault -- <command>`) until the npm package is published. Process environment names are `VAULT_*`. The local server listens on **8788**.
+Run `npx vault` from the cloned repository (or `npm run vault -- <command>`) until the npm package is published. Process environment names are `VAULT_*`. The local server listens on **8788**. `vault <command> --help` prints the usage for every command.
 
 ## Environment
 
@@ -23,14 +23,14 @@ Run `npx vault` from the cloned repository (or `npm run vault -- <command>`) unt
 | `vault init` | Create `$VAULT_HOME`, the SQLite schema, and a master key if needed |
 | `vault set NAME [--host api.example.com]... [--inject MODE] [--username USER]` | Read the value from stdin (or a no-echo prompt on a terminal), encrypt, and store. There is no `--value` flag: argv is visible to every process. Prints the name and last-4, never the value. `--host` allowlists the APIs `http_request` may send it to; `--inject` takes the same modes as hosted (`bearer`, `basic`, `client_credentials`, `refresh`, `sigv4`, `header:Name`, `query:param`, `cookie:name`, `hmac:...`); `--username` is the HTTP Basic user, OAuth client id, or AWS access key id |
 | `vault list` | Names and last-4 |
-| `vault grant --secret NAME --agent A --tool T [--once, --session] [--ttl 8h]` | Approve a pending request |
+| `vault grant --secret NAME --agent A --tool T [--once \| --session [--ttl 8h]]` | Approve a pending request. `--once` (the default) is spent by the first use and has no expiry. `--session` stays active until `--ttl` elapses (default 8h). `--ttl` applies to `--session` only, and the two scope flags exclude each other; either mistake is refused |
 | `vault revoke --id GRANT_ID` (or `--secret NAME --agent A --tool T`) | Stop later injects |
 | `vault audit` | Store, grant, revoke, and inject events. No values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject the value into the child process environment and run the command. Nothing is printed |
-| `vault serve [--host 127.0.0.1] [--port 8788]` | Loopback HTTP, the local console, and `POST /mcp`. Prints two loopback bearers: the operator bearer for `/api` and the console, the model bearer for `POST /mcp`. Neither opens the other surface |
-| `vault mcp` | MCP over stdio against the local vault |
+| `vault serve [--host 127.0.0.1] [--port 8788]` | Loopback HTTP, the local console, and `POST /mcp`. Prints two loopback bearers: the operator bearer for `/api` and the console, the model bearer for `POST /mcp`. Neither opens the other surface. `--port` must be a whole number from 1 to 65535 |
+| `vault mcp` | MCP over stdio against the local vault (the same five tools as hosted, `http_request` included) |
 | `vault mcp --remote [URL]` | MCP over stdio forwarded to a running `vault serve` (default `http://127.0.0.1:8788`) with the model bearer, derived from the master key so nothing is pasted into a client config |
-| `vault mcp --user-jwt` | MCP over stdio proxied to the hosted server with `VAULT_USER_JWT` |
+| `vault mcp --user-jwt [TOKEN]` | MCP over stdio proxied to the hosted server. The token comes from `--user-jwt TOKEN`, `--user-jwt=TOKEN`, or `VAULT_USER_JWT` when the flag is bare; the flag alone selects hosted mode, so a missing token is an error, never the local vault |
 | `vault login` | Print the hosted `/sign-in`, `/console`, and `/device` URLs |
 | `vault kek-wrap`, `vault kek-rotate` | Self-hosting only. Wrap or rotate the platform key with AWS KMS. See [Self-hosting](/docs/self-hosting) |
 

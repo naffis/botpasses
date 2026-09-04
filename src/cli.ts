@@ -63,9 +63,10 @@ Usage:
       header:Name, query:param, cookie:name, hmac:stripe_sig|slack_sig|github_sig
     --username is the HTTP Basic user, OAuth client id, or AWS access key id (--username "" clears it)
   vault list
-  vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]
+  vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session [--ttl 8h]]
   vault grant --id GRANT_ID --agent AGENT --tool TOOL
     MCP http_request grants use --tool http_request; the agent is the MCP client's name
+    --once (default) is spent by the first use; --ttl applies to --session only (default 8h)
   vault revoke --id GRANT_ID
   vault revoke --secret NAME --agent AGENT --tool TOOL
   vault audit
@@ -74,11 +75,13 @@ Usage:
     prints two loopback bearers (HMACs of the master key): the operator bearer is the
     Authorization for /api and the console; the model bearer is the Authorization for POST /mcp
   vault login
-  vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt JWT]
+  vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt [JWT]]
     stdio MCP with list_items, find_items, request_grant, list_grants, http_request (same as hosted)
     --remote forwards stdio to a running vault serve with the model bearer
+    --user-jwt proxies the hosted server; the token is the flag's value or VAULT_USER_JWT
   vault kek-wrap
   vault kek-rotate
+  vault <command> --help
 
 Env:
   VAULT_MASTER_KEY   32-byte key as 64 hex chars (preferred) or base64
@@ -94,6 +97,12 @@ export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Pr
     return argv.length === 0 ? 1 : 0;
   }
   const [command = "", ...rest] = argv;
+  // Per-command help is answered before any option parsing, so `vault grant --help` prints usage
+  // instead of "Unknown option" and `vault mcp --help` does not start serving.
+  if (wantsHelp(rest)) {
+    io.log(USAGE);
+    return 0;
+  }
   switch (command) {
     case "init":
       return cmdInit(io);
@@ -214,7 +223,15 @@ function cmdGrant(argv: string[], io: Io): number {
     allowPositionals: false,
   });
   if (!values.agent || !values.tool) {
-    io.error("Usage: vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session]");
+    io.error("Usage: vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]");
+    return 1;
+  }
+  if (values.once && values.session) {
+    io.error("Pass --once or --session, not both.");
+    return 1;
+  }
+  if (values.ttl !== undefined && !values.session) {
+    io.error("--ttl applies to --session grants only; a --once grant is spent by its first use and has no expiry.");
     return 1;
   }
   const scope: GrantScope = values.session ? "session" : "once";
@@ -348,8 +365,12 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
     },
     allowPositionals: false,
   });
+  const port = parsePort(values.port);
+  if (port === undefined) {
+    io.error(`--port must be a whole number from 1 to 65535 (got "${values.port}").`);
+    return 1;
+  }
   const vault = open();
-  const port = Number(values.port);
   const http = createVaultServer({ vault, host: values.host, port });
   const addr = await http.listen();
   io.error(`${PRODUCT_NAME} listening on http://${addr.host}:${addr.port}`);
@@ -387,13 +408,64 @@ function cmdLogin(io: Io): number {
   return 0;
 }
 
+const MCP_USAGE = "Usage: vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt [JWT]]";
+
+/**
+ * `--remote` and `--user-jwt` both take an optional value, which parseArgs has no notion of:
+ * a bare `--user-jwt` becomes `--user-jwt=` (the token then comes from VAULT_USER_JWT) and
+ * `--remote=URL` becomes `--remote URL` so the URL is read as a positional.
+ */
+export function normalizeMcpArgs(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    if (arg === "--user-jwt") {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("-")) {
+        out.push("--user-jwt=");
+        continue;
+      }
+    }
+    if (arg.startsWith("--remote=")) {
+      out.push("--remote", arg.slice("--remote=".length));
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
 async function cmdMcp(argv: string[], io: Io): Promise<number> {
-  const remoteIdx = argv.indexOf("--remote");
-  if (remoteIdx >= 0) {
+  let values: { remote: boolean; "user-jwt"?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: normalizeMcpArgs(argv),
+      options: {
+        remote: { type: "boolean", default: false },
+        "user-jwt": { type: "string" },
+      },
+      allowPositionals: true,
+    }));
+  } catch (err) {
+    io.error(err instanceof Error ? err.message : String(err));
+    io.error(MCP_USAGE);
+    return 1;
+  }
+  const jwtOption = values["user-jwt"];
+  if (values.remote && jwtOption !== undefined) {
+    io.error("Pass --remote or --user-jwt, not both.");
+    return 1;
+  }
+  if (!values.remote && positionals.length > 0) {
+    io.error(`Unexpected argument: ${positionals[0]}`);
+    io.error(MCP_USAGE);
+    return 1;
+  }
+  if (values.remote) {
     // Forward stdio to a running `vault serve` on loopback with the model bearer. The bearer is
     // derived from the master key here, so nothing is pasted into an MCP client's config.
-    const next = argv[remoteIdx + 1];
-    const rawUrl = next && !next.startsWith("-") ? next : "http://127.0.0.1:8788";
+    const rawUrl = positionals[0] ?? "http://127.0.0.1:8788";
     let target: URL;
     try {
       target = new URL(rawUrl);
@@ -410,12 +482,11 @@ async function cmdMcp(argv: string[], io: Io): Promise<number> {
     await runRemoteMcpStdio({ publicUrl: target.origin, userJwt: loopbackBearer(key, "model") });
     return 0;
   }
-  const jwtIdx = argv.indexOf("--user-jwt");
-  const wantsJwt = jwtIdx >= 0 || Boolean(process.env.VAULT_USER_JWT);
+  // The option's presence (in either `--user-jwt TOKEN` or `--user-jwt=TOKEN` form) means hosted
+  // mode; it must never fall through to serving the local vault because the token was not seen.
+  const wantsJwt = jwtOption !== undefined || Boolean(process.env.VAULT_USER_JWT);
   if (wantsJwt) {
-    const next = jwtIdx >= 0 ? argv[jwtIdx + 1] : undefined;
-    const token =
-      next && !next.startsWith("-") ? next : process.env.VAULT_USER_JWT;
+    const token = jwtOption || process.env.VAULT_USER_JWT;
     const rawUrl = process.env.VAULT_PUBLIC_URL;
     if (!rawUrl) {
       io.error("VAULT_PUBLIC_URL is required for hosted stdio MCP.");
@@ -524,6 +595,19 @@ function open(): Vault {
   const home = defaultHome();
   const { key } = loadMasterKey(home);
   return new Vault({ home, masterKey: key });
+}
+
+/** `-h` or `--help` anywhere before `--`; a child command after `--` keeps its own flags. */
+function wantsHelp(args: string[]): boolean {
+  const end = args.indexOf("--");
+  return (end === -1 ? args : args.slice(0, end)).some((a) => a === "-h" || a === "--help");
+}
+
+/** A TCP port from argv, or undefined for anything that is not a whole number in range. */
+export function parsePort(raw: string): number | undefined {
+  if (!/^\d{1,5}$/.test(raw.trim())) return undefined;
+  const port = Number(raw);
+  return port >= 1 && port <= 65535 ? port : undefined;
 }
 
 function splitRun(argv: string[]): { vaultArgs: string[]; childArgs: string[] } {

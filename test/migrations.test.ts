@@ -58,6 +58,7 @@ test("listMigrations returns NNN_*.sql in order with unique versions", () => {
   const versions = files.map((f) => f.version.slice(0, 3));
   assert.deepEqual(versions, [...versions].sort());
   assert.equal(new Set(versions).size, versions.length);
+  assert.deepEqual(files.map((f) => f.prefix), versions, "prefix is the three-digit number of the file");
 });
 
 test("migrationDatabaseUrl prefers DATABASE_URL_DIRECT", () => {
@@ -131,6 +132,27 @@ test("PostgresStore.migrate() is a no-op when schema_migrations exists", async (
     }
     const after = await objects(client, schema);
     assert.deepEqual(after.tables, ["schema_migrations"], "boot did not run DDL");
+  });
+});
+
+test("a migration file renamed after it was applied is refused, not applied a second time", async (t) => {
+  if (!dbUrl) {
+    t.skip("DATABASE_URL not set");
+    return;
+  }
+  const schema = schemaName("rename");
+  await withSchema(schema, async (client) => {
+    const files = listMigrations(migrationsDir);
+    await runMigrations(client, files);
+    const renamed = files.map((f, i) => (i === 0 ? { ...f, version: `${f.prefix}_init_renamed` } : f));
+    await assert.rejects(runMigrations(client, renamed), /migration 001 was applied as 001_init but the file is now 001_init_renamed/);
+    const recorded = await client.query<{ version: string }>("SELECT version FROM schema_migrations ORDER BY version");
+    assert.deepEqual(recorded.rows.map((r) => r.version), files.map((f) => f.version), "nothing was re-applied or re-recorded");
+    const lockFree = await client.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM pg_locks WHERE locktype = 'advisory' AND objid = $1",
+      [MIGRATION_LOCK_KEY % 2 ** 32],
+    );
+    assert.equal(lockFree.rows[0]?.n, "0", "advisory lock released after the refusal");
   });
 });
 

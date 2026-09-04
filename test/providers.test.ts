@@ -12,6 +12,7 @@ import { HostedKernel } from "../src/hosted/kernel.ts";
 import { assertRedirectUri } from "../src/hosted/oauth-as.ts";
 import { isTokenPath, pathMatchesPrefix, PROVIDERS, providerById, providerForHost, userPathHint } from "../src/hosted/providers/registry.ts";
 import { cachedMint, clearMintCache, storeMint } from "../src/hosted/providers/token-cache.ts";
+import { readMintedAccessToken } from "../src/hosted/providers/oauth.ts";
 import { authorizeUrl, chooseRedirect, openOauthState, sealOauthState } from "../src/hosted/providers/user-oauth.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
 import { redactOauthJson } from "../src/redact.ts";
@@ -204,6 +205,50 @@ test("user connect helpers are provider-generic", () => {
   );
   assert.equal(openOauthState(state, kek).providerId, "google");
   assert.throws(() => openOauthState(state, parseMasterKey(generateMasterKey())), /Invalid OAuth state/);
+});
+
+test("Google and Slack authorize URLs carry the scopes their endpoints require", () => {
+  const google = providerById("google");
+  const slack = providerById("slack");
+  const github = providerById("github");
+  assert.ok(google && slack && github);
+  const base = { clientId: "cid", redirectUri: "https://x/cb", state: "s", codeVerifier: "v".repeat(43) };
+
+  const g = new URL(authorizeUrl(google, base));
+  const googleScopes = (g.searchParams.get("scope") ?? "").split(" ");
+  assert.ok(googleScopes.includes("openid") && googleScopes.includes("email"), googleScopes.join(" "));
+  assert.ok(googleScopes.includes("https://www.googleapis.com/auth/gmail.readonly"), "Gmail read scope for gmail.googleapis.com");
+  assert.ok(googleScopes.includes("https://www.googleapis.com/auth/spreadsheets.readonly"), "Sheets read scope for sheets.googleapis.com");
+  assert.ok(googleScopes.includes("https://www.googleapis.com/auth/drive.file"), "per-file Drive scope for www.googleapis.com");
+  assert.equal(g.searchParams.get("access_type"), "offline", "Google issues a refresh token only for offline access");
+  assert.equal(g.searchParams.get("prompt"), "consent", "a re-connect must get a refresh token again");
+
+  const s = new URL(authorizeUrl(slack, base));
+  assert.equal(s.searchParams.get("scope"), null, "scope would ask Slack for a bot token");
+  assert.equal(s.searchParams.get("user_scope"), "users:read,channels:read,chat:write", "user token scopes, comma-joined");
+
+  // An empty scope list is refused for a provider whose endpoint rejects it, with a 400 the route can pass on.
+  for (const p of [google, slack]) {
+    assert.throws(
+      () => authorizeUrl(p, { ...base, scopes: [] }),
+      (err: unknown) => isHttpError(err) && err.status === 400 && /scope/.test(err.message) && err.extra.provider === p.id,
+      `${p.id} refuses an authorize URL with no scopes`,
+    );
+  }
+  // GitHub's endpoint accepts no scope at all; nothing changes for it.
+  assert.equal(new URL(authorizeUrl(github, { ...base, scopes: [] })).searchParams.get("scope"), null);
+});
+
+test("a Slack user-scope token exchange is read from authed_user", () => {
+  const nested = readMintedAccessToken(
+    JSON.stringify({ ok: true, token_type: "user", authed_user: { id: "U1", access_token: "xoxp-user-token-1234", refresh_token: "xoxe-1-refresh", expires_in: 43200 } }),
+  );
+  assert.equal(nested.accessToken, "xoxp-user-token-1234");
+  assert.equal(nested.refreshToken, "xoxe-1-refresh");
+  assert.equal(nested.last4, "1234");
+  const top = readMintedAccessToken(JSON.stringify({ access_token: "xoxb-bot-token-9999", authed_user: { id: "U1" } }));
+  assert.equal(top.accessToken, "xoxb-bot-token-9999", "a top-level token still wins");
+  assert.throws(() => readMintedAccessToken(JSON.stringify({ ok: true, authed_user: { id: "U1" } })), /did not return access_token/);
 });
 
 /** The provider's authorize URL from `POST /api/integrations/:provider/start`, with its sealed state. */

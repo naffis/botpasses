@@ -341,10 +341,9 @@ for (const backend of backends) {
       assert.equal((await store.getUser(userId))?.totpLastStep, 101);
 
       await store.insertBackupCode(userId, sha(id("code")));
-      assert.deepEqual(
-        await Promise.all([store.markBackupUsed(userId, sha(id("code")), now), store.markBackupUsed(userId, sha(id("code")), now)]),
-        [true, false],
-      );
+      // Two concurrent consumes: exactly one wins, in whichever order the pool answers them.
+      const consumed = await Promise.all([store.markBackupUsed(userId, sha(id("code")), now), store.markBackupUsed(userId, sha(id("code")), now)]);
+      assert.deepEqual([...consumed].sort(), [false, true], "a backup code is consumed exactly once under concurrency");
     } finally {
       await done();
     }

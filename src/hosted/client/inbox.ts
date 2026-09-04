@@ -258,17 +258,22 @@ async function approveWithLimits(id: string, form: HTMLFormElement): Promise<voi
   await postApprove(id, body, form);
 }
 
-async function deny(id: string, button: HTMLButtonElement): Promise<void> {
-  await busy(button, async () => {
+/** Outcome of an operator action; the confirm dialog shows `message` and stays open when `ok` is false. */
+export type ActionResult = { ok: boolean; message: string };
+
+async function deny(id: string, button: HTMLButtonElement): Promise<ActionResult> {
+  return busy(button, async () => {
     try {
       const r = await api(`/api/grants/${encodeURIComponent(id)}/revoke`, { method: "POST", body: "{}" });
-      flash(r.ok ? "Denied. The agent gets no access to this credential." : errorMessage(r, "Deny failed"), r.ok);
+      if (!r.ok) return { ok: false, message: errorMessage(r, "Deny failed") };
     } catch (err) {
-      flash(loadErrorText(err, "Deny failed"), false);
+      return { ok: false, message: loadErrorText(err, "Deny failed") };
     }
+    flash("Denied. The agent gets no access to this credential.", true);
+    await loadInbox({ force: true });
+    listeners.onChanged();
+    return { ok: true, message: "" };
   });
-  await loadInbox({ force: true });
-  listeners.onChanged();
 }
 
 /** `force` re-renders even while a limits form is open (after an approve or deny). */
@@ -358,10 +363,12 @@ export function bindInbox(on: InboxListeners): void {
 }
 
 /** Console wires this to the confirm dialog so the copy is specific. */
-let denyHandler: (id: string, client: string, name: string, button: HTMLButtonElement) => Promise<void> = (id, _client, _name, button) =>
-  deny(id, button);
+let denyHandler: (id: string, client: string, name: string, button: HTMLButtonElement) => Promise<void> = async (id, _client, _name, button) => {
+  const result = await deny(id, button);
+  if (!result.ok) flash(result.message, false);
+};
 
-export function onDeny(fn: (id: string, client: string, name: string, run: () => Promise<void>) => Promise<void>): void {
+export function onDeny(fn: (id: string, client: string, name: string, run: () => Promise<ActionResult>) => Promise<void>): void {
   denyHandler = (id, client, name, button) => fn(id, client, name, () => deny(id, button));
 }
 

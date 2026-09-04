@@ -286,11 +286,15 @@ export function relativeTime(iso: string | null | undefined, now: number = Date.
   const abs = Math.abs(diff);
   const future = diff > 0;
   const unit = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
+  // The unit is chosen from the rounded count, so 59.6 minutes reads "1 hour", never "60 min".
+  const minutes = Math.round(abs / 60_000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
   let phrase: string;
   if (abs < 45_000) return future ? "in under a minute" : "just now";
-  else if (abs < 3_600_000) phrase = unit(Math.round(abs / 60_000), "min");
-  else if (abs < 86_400_000) phrase = unit(Math.round(abs / 3_600_000), "hour");
-  else if (abs < 30 * 86_400_000) phrase = unit(Math.round(abs / 86_400_000), "day");
+  else if (minutes < 60) phrase = unit(minutes, "min");
+  else if (hours < 24) phrase = unit(hours, "hour");
+  else if (days < 30) phrase = unit(days, "day");
   else phrase = unit(Math.round(abs / (30 * 86_400_000)), "month");
   return future ? `in ${phrase}` : `${phrase} ago`;
 }

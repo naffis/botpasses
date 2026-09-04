@@ -153,7 +153,8 @@ test("console bundle carries the routed behaviours", () => {
   assert.doesNotMatch(CONSOLE_JS, /\/api\/items\?environment=/);
   assert.match(CONSOLE_JS, /history\.pushState/);
   assert.match(CONSOLE_JS, /addEventListener\("hashchange"/);
-  assert.match(CONSOLE_JS, /addEventListener\("popstate"/);
+  // popstate fires for every hash navigation too; binding both loaded each panel twice.
+  assert.doesNotMatch(CONSOLE_JS, /addEventListener\("popstate"/);
   assert.match(CONSOLE_JS, /\/api\/auth\/logout/);
   assert.match(CONSOLE_JS, /\/api\/auth\/me/);
   assert.match(CONSOLE_JS, /\/api\/auth\/backup-codes\/regenerate/);

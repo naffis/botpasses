@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_HOME_DIRNAME } from "./brand.ts";
 import { decrypt, encrypt, generateMasterKey, keyFingerprint, parseMasterKey } from "./crypto.ts";
@@ -461,6 +461,9 @@ export function initVaultHome(home: string): {
   fingerprint: string;
   generatedKey?: string;
 } {
+  // The home directory is created here, before master.key is written; openDb (further down) would
+  // create it too, but only after the key file, which fails with ENOENT on a fresh machine.
+  mkdirSync(home, { recursive: true, mode: 0o700 });
   const keyPath = join(home, "master.key");
   let key: Buffer;
   let keySource: string;

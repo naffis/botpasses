@@ -46,12 +46,12 @@ export function readMintedAccessToken(body: string): MintedToken {
   if (!parsed || typeof parsed !== "object") {
     throw new HttpError(502, "Token endpoint returned a non-object body");
   }
-  const rec = parsed as {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-    token_type?: unknown;
-  };
+  type TokenBody = { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; token_type?: unknown };
+  const top = parsed as TokenBody & { authed_user?: unknown };
+  // Slack's oauth.v2.access keeps the top level for the bot token and carries the user token (and
+  // its refresh token) under `authed_user`; with user scopes only there is no top-level token.
+  const nested = top.authed_user && typeof top.authed_user === "object" ? (top.authed_user as TokenBody) : undefined;
+  const rec: TokenBody = typeof top.access_token === "string" && top.access_token.length > 0 ? top : nested ?? top;
   if (typeof rec.access_token !== "string" || rec.access_token.length === 0) {
     throw new HttpError(502, "Token endpoint did not return access_token");
   }

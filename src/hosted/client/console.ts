@@ -5,7 +5,7 @@ import { providerById } from "../providers/registry.ts";
 import type { Provider } from "../providers/types.ts";
 import { bindAccess, loadAccess, setAgentsTab } from "./access.ts";
 import { bindAccount, loadAccount } from "./account.ts";
-import { bindCredentials, closeDrawer, loadItems, openDrawer } from "./credentials.ts";
+import { bindCredentials, closeDrawer, findItem, loadItems, openDrawer } from "./credentials.ts";
 import { bindInbox, loadInbox, onDeny } from "./inbox.ts";
 import { PANEL_COPY, type Panel, parseRoute, type Route } from "./routes.ts";
 import {
@@ -66,8 +66,8 @@ function applyRoute(route: Route): void {
   if (storeBtn) storeBtn.hidden = signedOut || panel !== "credentials";
   setHidden("breakglass", !route.breakglass);
   if (panel === "agents") setAgentsTab(route.tab);
-  if (panel === "credentials" && route.itemId) void openDrawer(route.itemId);
-  else closeDrawer();
+  // The drawer opens from loadCredentials, once the item list it reads from is loaded.
+  if (panel !== "credentials" || !route.itemId) closeDrawer();
 }
 
 /** Programmatic navigation: push a history entry then render. */
@@ -84,10 +84,31 @@ async function loadForRoute(route: Route): Promise<void> {
   else if (teamShown(route)) await loadTeam();
   else if (route.panel === "account") await loadAccount();
   else if (route.panel === "inbox") await loadInbox();
-  else await loadItems();
+  else await loadCredentials(route);
 }
 
-function onHashOrPop(): void {
+/**
+ * The credentials panel, and the drawer when the route names an item. A row click opens the
+ * drawer at once from the loaded list; a deep link on a fresh page waits for the list first.
+ * An id no loaded item has (deleted, or from another org) says so and returns to the list.
+ */
+async function loadCredentials(route: Route): Promise<void> {
+  if (!route.itemId) {
+    await loadItems();
+    return;
+  }
+  if (findItem(route.itemId)) {
+    void openDrawer(route.itemId);
+    await loadItems();
+    return;
+  }
+  const loaded = await loadItems();
+  if (!loaded || (await openDrawer(route.itemId))) return;
+  flash("That credential was not found. It may have been deleted.", false);
+  navigate("#credentials");
+}
+
+function onHashChange(): void {
   const route = parseRoute(location.hash);
   applyRoute(route);
   void loadForRoute(route);
@@ -459,10 +480,8 @@ document.addEventListener("DOMContentLoaded", () => {
       title: `Deny ${client}'s request for ${name}?`,
       body: "The agent gets no access to this credential. It can ask again later.",
       button: "Deny request",
-      run: async () => {
-        await run();
-        return { ok: true, message: "" };
-      },
+      // A failed deny keeps the dialog open with the server's message, like every other confirm.
+      run,
     });
   });
   const revokeGrant = (id: string, client: string, name: string): void =>
@@ -533,12 +552,12 @@ document.addEventListener("DOMContentLoaded", () => {
       }),
     navigate,
   });
-  window.addEventListener("hashchange", onHashOrPop);
-  window.addEventListener("popstate", onHashOrPop);
+  // hashchange alone: browsers fire popstate for every hash navigation too, so binding both
+  // loaded each panel twice. Boot loads the route's panel once, plus the inbox for its badge.
+  window.addEventListener("hashchange", onHashChange);
   const initial = parseRoute(location.hash);
   applyRoute(initial);
-  void loadItems();
-  void loadInbox();
-  void loadOrgs();
   void loadForRoute(initial);
+  if (initial.panel !== "inbox") void loadInbox();
+  void loadOrgs();
 });
