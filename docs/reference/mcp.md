@@ -89,6 +89,12 @@ Inventory: `name`, `kind`, `last4`, `username`, `environment`, `inject`. No valu
 
 ### `request_grant`
 
+Optional `host`, `method`, `path`: the call the agent will make. `host` must be one of the item's allowed hosts, `method` one of GET POST PUT PATCH DELETE, `path` must start with `/`; otherwise 400 (`host_mismatch` carries `allowed_hosts`). Stored on the pending grant as `requested_scope` and shown on the inbox card. When the operator approves without limits, the grant is scoped to that method, host, and path prefix.
+
+Public grant fields gain `requested_scope` (`{ host, method, path }` or null) and `grant_scope` (`{ methods, path_prefixes, hosts, max_calls, calls_used, expires_at }`, or null when unrestricted). `list_items` items include `allowed_hosts` and `kind`.
+
+A scoped grant refuses a call outside its scope with 403 `scope_denied`: `{ status: "scope_denied", reason: "method" | "host" | "path", grant_id, grant_scope }`. Grants with `max_calls` become `consumed` on the last call and the standing policy behind them is removed. `find_items` is optional; `http_request` finds the item itself.
+
 Returns the existing open grant for this client and item (an active one as-is; a pending one with a fresh `approval_code`). Ten calls yield one grant, not ten. Counted against the org rate limit (30 per hour) inside the kernel, so `http_request` and REST share the same budget.
 
 Requires `item_name`; optional `task_description`. Returns public grant fields (including `task_id`) plus `approval_code` and `notify_failed`. Never the secret. Standing policies may activate immediately.
