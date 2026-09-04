@@ -13,66 +13,79 @@ import type {
   ItemRecord,
   MemberRecord,
   NeedItemRecord,
-  OperatorSessionRecord,
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
   UserRecord,
+  VaultEnvName,
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
-import { HOSTED_SCHEMA_IDENTITY, HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE, HOSTED_SCHEMA_SQLITE } from "./schema.ts";
+import {
+  HOSTED_SCHEMA_IDENTITY,
+  HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
+  HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
+  HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
+  HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
+  HOSTED_SCHEMA_SQLITE,
+  HOSTED_SCHEMA_TEAM,
+  HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+} from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import {
+  GRANT_INSERT_COLUMNS,
+  grantValues,
+  ITEM_INSERT_COLUMNS,
+  itemValues,
+  mapAccess,
+  mapChallenge,
+  mapEnv,
+  mapFolder,
+  mapGrant,
+  mapIdentityKey,
+  mapInvite,
+  mapItem,
+  mapMember,
+  mapMemberRecord,
+  mapNeed,
+  mapOidcRow,
+  mapOrg,
+  mapOtp,
+  mapPolicy,
+  mapSess,
+  mapUser,
+  mapVault,
+  NEED_INSERT_COLUMNS,
+  needValues,
+  placeholders,
+} from "./rows.ts";
+import {
+  oidcPayloadIndex,
+  requestedScopeJson,
+  scopeListJson,
+  type AuditListFilter,
+  type IdentityKeyRecord,
+  type InviteRecord,
+  type MemberRow,
+  type OidcPayloadRow,
+  type OperatorSessionRow,
+  type SweepCounts,
+  type UserRow,
+  type UserSecurityState,
+  type VaultStore,
+} from "./types.ts";
 
-function mapOrg(r: Record<string, unknown>): OrgRecord {
-  return {
-    id: String(r.id),
-    name: String(r.name),
-    wrappedDekIv: String(r.wrapped_dek_iv),
-    wrappedDekCiphertext: String(r.wrapped_dek_ciphertext),
-    wrappedDekTag: String(r.wrapped_dek_tag),
-    createdAt: String(r.created_at),
-  };
-}
+const GRANT_INSERT_SQL = `INSERT INTO grants (${GRANT_INSERT_COLUMNS}) VALUES (${placeholders(20, "sqlite")})`;
 
-function mapItem(r: Record<string, unknown>): ItemRecord {
-  return {
-    id: String(r.id),
-    environmentId: String(r.environment_id),
-    folderId: r.folder_id == null ? null : String(r.folder_id),
-    kind: r.kind as ItemRecord["kind"],
-    name: String(r.name),
-    last4: String(r.last4),
-    username: r.username == null ? null : String(r.username),
-    allowedHostsJson: String(r.allowed_hosts_json),
-    inject: String(r.inject),
-    iv: String(r.iv),
-    ciphertext: String(r.ciphertext),
-    tag: String(r.tag),
-    createdAt: String(r.created_at),
-    updatedAt: String(r.updated_at),
-  };
-}
-
-function mapGrant(r: Record<string, unknown>): HostedGrantRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: String(r.client_id),
-    itemId: r.item_id == null ? null : String(r.item_id),
-    folderId: r.folder_id == null ? null : String(r.folder_id),
-    environmentId: String(r.environment_id),
-    policy: r.policy as HostedGrantRecord["policy"],
-    status: r.status as HostedGrantRecord["status"],
-    expiresAt: r.expires_at == null ? null : String(r.expires_at),
-    createdAt: String(r.created_at),
-    approvedAt: r.approved_at == null ? null : String(r.approved_at),
-    consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
-    taskId: r.task_id == null ? null : String(r.task_id),
-    taskDescription: r.task_description == null ? null : String(r.task_description),
-  };
-}
+/** Column additions shipped after the base schema; "duplicate column" means the database has them. */
+const SQLITE_ALTERS = [
+  HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
+  HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
+  HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
+  HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
+  HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -81,16 +94,27 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(HOSTED_SCHEMA_SQLITE);
   db.exec(HOSTED_SCHEMA_IDENTITY);
-  for (const stmt of HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE.trim().split(";")) {
-    const sql = stmt.trim();
-    if (!sql) continue;
-    try {
-      db.exec(sql);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("duplicate column")) throw err;
+  // clients_org_oauth shipped once as a plain index; CREATE UNIQUE ... IF NOT EXISTS would keep it.
+  const orgOauthIndex = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'clients_org_oauth'")
+    .get() as { sql: string | null } | undefined;
+  if (orgOauthIndex && !/UNIQUE/i.test(orgOauthIndex.sql ?? "")) {
+    db.exec("DROP INDEX clients_org_oauth");
+  }
+  for (const alter of SQLITE_ALTERS) {
+    for (const stmt of alter.trim().split(";")) {
+      const sql = stmt.trim();
+      if (!sql) continue;
+      try {
+        db.exec(sql);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("duplicate column")) throw err;
+      }
     }
   }
+  db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
+  db.exec(HOSTED_SCHEMA_TEAM);
   return new SqliteHostedStore(db);
 }
 
@@ -150,6 +174,20 @@ export class SqliteHostedStore implements VaultStore {
   async deleteOrg(orgId: string): Promise<void> {
     this.#db.exec("BEGIN");
     try {
+      this.#db
+        .prepare(
+          `DELETE FROM oidc_payloads WHERE account_id IN (
+            SELECT user_id FROM org_members WHERE org_id = ?
+          ) AND (
+            client_id IN (SELECT id FROM clients WHERE org_id = ?)
+            OR (client_id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM org_members m2 WHERE m2.user_id = oidc_payloads.account_id AND m2.org_id <> ?
+            ))
+          )`,
+        )
+        .run(orgId, orgId, orgId);
+      this.#db.prepare("DELETE FROM access_events WHERE org_id = ?").run(orgId);
+      this.#db.prepare("DELETE FROM rate_hits WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM need_items WHERE org_id = ?").run(orgId);
       this.#db
         .prepare(
@@ -181,6 +219,7 @@ export class SqliteHostedStore implements VaultStore {
         )
         .run(orgId);
       this.#db.prepare("DELETE FROM vaults WHERE org_id = ?").run(orgId);
+      this.#db.prepare("DELETE FROM org_invites WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM org_members WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM orgs WHERE id = ?").run(orgId);
       this.#db.exec("COMMIT");
@@ -190,18 +229,17 @@ export class SqliteHostedStore implements VaultStore {
     }
   }
 
-  async insertMember(row: MemberRecord): Promise<void> {
+  async insertMember(row: MemberRecord & { joinedAt?: string }): Promise<void> {
     this.#db
-      .prepare("INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)")
-      .run(row.orgId, row.userId, row.role);
+      .prepare("INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)")
+      .run(row.orgId, row.userId, row.role, row.joinedAt ?? null);
   }
 
   async getMember(orgId: string, userId: string): Promise<MemberRecord | undefined> {
     const r = this.#db
       .prepare("SELECT * FROM org_members WHERE org_id = ? AND user_id = ?")
       .get(orgId, userId) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return { orgId: String(r.org_id), userId: String(r.user_id), role: r.role as MemberRecord["role"] };
+    return r ? mapMemberRecord(r) : undefined;
   }
 
   async insertVault(row: VaultRecord): Promise<void> {
@@ -213,7 +251,7 @@ export class SqliteHostedStore implements VaultStore {
       string,
       unknown
     >[];
-    return rows.map((r) => ({ id: String(r.id), orgId: String(r.org_id), name: String(r.name) }));
+    return rows.map(mapVault);
   }
 
   async insertEnvironment(row: EnvironmentRecord): Promise<void> {
@@ -226,12 +264,7 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db.prepare("SELECT * FROM environments WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r.id),
-      vaultId: String(r.vault_id),
-      name: r.name as EnvironmentRecord["name"],
-    };
+    return r ? mapEnv(r) : undefined;
   }
 
   async getEnvironmentByName(
@@ -241,23 +274,14 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db
       .prepare("SELECT * FROM environments WHERE vault_id = ? AND name = ?")
       .get(vaultId, name) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r.id),
-      vaultId: String(r.vault_id),
-      name: r.name as EnvironmentRecord["name"],
-    };
+    return r ? mapEnv(r) : undefined;
   }
 
   async listEnvironments(vaultId: string): Promise<EnvironmentRecord[]> {
     const rows = this.#db
       .prepare("SELECT * FROM environments WHERE vault_id = ?")
       .all(vaultId) as Record<string, unknown>[];
-    return rows.map((r) => ({
-      id: String(r.id),
-      vaultId: String(r.vault_id),
-      name: r.name as EnvironmentRecord["name"],
-    }));
+    return rows.map(mapEnv);
   }
 
   async insertFolder(row: FolderRecord): Promise<void> {
@@ -270,42 +294,20 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db.prepare("SELECT * FROM folders WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
-    if (!r) return undefined;
-    return { id: String(r.id), environmentId: String(r.environment_id), name: String(r.name) };
+    return r ? mapFolder(r) : undefined;
   }
 
   async getFolderByName(environmentId: string, name: string): Promise<FolderRecord | undefined> {
     const r = this.#db
       .prepare("SELECT * FROM folders WHERE environment_id = ? AND name = ?")
       .get(environmentId, name) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return { id: String(r.id), environmentId: String(r.environment_id), name: String(r.name) };
+    return r ? mapFolder(r) : undefined;
   }
 
   async insertItem(row: ItemRecord): Promise<void> {
     this.#db
-      .prepare(
-        `INSERT INTO items (
-          id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
-          inject, iv, ciphertext, tag, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.environmentId,
-        row.folderId,
-        row.kind,
-        row.name,
-        row.last4,
-        row.username,
-        row.allowedHostsJson,
-        row.inject,
-        row.iv,
-        row.ciphertext,
-        row.tag,
-        row.createdAt,
-        row.updatedAt,
-      );
+      .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+      .run(...itemValues(row));
   }
 
   async updateItemEnvelope(
@@ -409,6 +411,10 @@ export class SqliteHostedStore implements VaultStore {
       .run(hashedSecret, tokenLast4, id);
   }
 
+  async updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void> {
+    this.#db.prepare("UPDATE clients SET environment = ? WHERE id = ?").run(environment, id);
+  }
+
   async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
     this.#db
       .prepare(
@@ -435,17 +441,6 @@ export class SqliteHostedStore implements VaultStore {
       | undefined;
     if (!r) return undefined;
     return mapClientRow(r);
-  }
-
-  async getClientByHashedSecret(
-    orgId: string,
-    hashedSecret: string,
-  ): Promise<ClientRecord | undefined> {
-    const r = this.#db
-      .prepare("SELECT * FROM clients WHERE org_id = ? AND hashed_secret = ?")
-      .get(orgId, hashedSecret) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return this.getClient(String(r.id));
   }
 
   async findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined> {
@@ -480,8 +475,10 @@ export class SqliteHostedStore implements VaultStore {
   async insertPolicy(row: PolicyRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO policies (id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO policies (
+          id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at,
+          methods, path_prefixes, hosts, max_calls, calls_used, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -492,7 +489,22 @@ export class SqliteHostedStore implements VaultStore {
         row.environmentId,
         row.kind,
         row.createdAt,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        row.callsUsed,
+        row.expiresAt,
       );
+  }
+
+  async recordPolicyCall(id: string): Promise<boolean> {
+    const result = this.#db
+      .prepare(
+        "UPDATE policies SET calls_used = calls_used + 1 WHERE id = ? AND (max_calls IS NULL OR calls_used < max_calls)",
+      )
+      .run(id);
+    return result.changes === 1;
   }
 
   async deletePolicy(id: string): Promise<void> {
@@ -535,29 +547,7 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async insertGrant(row: HostedGrantRecord): Promise<void> {
-    this.#db
-      .prepare(
-        `INSERT INTO grants (
-          id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-          expires_at, created_at, approved_at, consumed_at, task_id, task_description
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.orgId,
-        row.clientId,
-        row.itemId,
-        row.folderId,
-        row.environmentId,
-        row.policy,
-        row.status,
-        row.expiresAt,
-        row.createdAt,
-        row.approvedAt,
-        row.consumedAt,
-        row.taskId,
-        row.taskDescription,
-      );
+    this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(row));
   }
 
   async getGrant(id: string): Promise<HostedGrantRecord | undefined> {
@@ -585,7 +575,8 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare(
         `UPDATE grants SET status = ?, policy = ?, expires_at = ?, approved_at = ?, consumed_at = ?,
-         item_id = ?, folder_id = ?, task_id = ?, task_description = ? WHERE id = ?`,
+         item_id = ?, folder_id = ?, task_id = ?, task_description = ?,
+         methods = ?, path_prefixes = ?, hosts = ?, max_calls = ?, requested_scope_json = ? WHERE id = ?`,
       )
       .run(
         row.status,
@@ -597,8 +588,26 @@ export class SqliteHostedStore implements VaultStore {
         row.folderId,
         row.taskId,
         row.taskDescription,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        requestedScopeJson(row.requestedScope),
         row.id,
       );
+  }
+
+  async recordGrantCall(id: string, at: string): Promise<boolean> {
+    const result = this.#db
+      .prepare(
+        `UPDATE grants SET
+           calls_used = calls_used + 1,
+           status = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN 'consumed' ELSE status END,
+           consumed_at = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN ? ELSE consumed_at END
+         WHERE id = ? AND status = 'active' AND (max_calls IS NULL OR calls_used < max_calls)`,
+      )
+      .run(at, id);
+    return result.changes === 1;
   }
 
   async consumeGrant(id: string, consumedAt: string): Promise<boolean> {
@@ -778,27 +787,8 @@ export class SqliteHostedStore implements VaultStore {
   async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
     try {
       this.#db
-        .prepare(
-          `INSERT INTO need_items (
-            id, org_id, client_id, environment_id, suggested_name, host, task_description,
-            status, item_id, grant_id, expires_at, created_at, fulfilled_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          row.id,
-          row.orgId,
-          row.clientId,
-          row.environmentId,
-          row.suggestedName,
-          row.host,
-          row.taskDescription,
-          row.status,
-          row.itemId,
-          row.grantId,
-          row.expiresAt,
-          row.createdAt,
-          row.fulfilledAt,
-        );
+        .prepare(`INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(13, "sqlite")})`)
+        .run(...needValues(row));
       return row;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
@@ -862,51 +852,9 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.exec("BEGIN");
     try {
       this.#db
-        .prepare(
-          `INSERT INTO items (
-            id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
-            inject, iv, ciphertext, tag, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.item.id,
-          input.item.environmentId,
-          input.item.folderId,
-          input.item.kind,
-          input.item.name,
-          input.item.last4,
-          input.item.username,
-          input.item.allowedHostsJson,
-          input.item.inject,
-          input.item.iv,
-          input.item.ciphertext,
-          input.item.tag,
-          input.item.createdAt,
-          input.item.updatedAt,
-        );
-      this.#db
-        .prepare(
-          `INSERT INTO grants (
-            id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-            expires_at, created_at, approved_at, consumed_at, task_id, task_description
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.grant.id,
-          input.grant.orgId,
-          input.grant.clientId,
-          input.grant.itemId,
-          input.grant.folderId,
-          input.grant.environmentId,
-          input.grant.policy,
-          input.grant.status,
-          input.grant.expiresAt,
-          input.grant.createdAt,
-          input.grant.approvedAt,
-          input.grant.consumedAt,
-          input.grant.taskId,
-          input.grant.taskDescription,
-        );
+        .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+        .run(...itemValues(input.item));
+      this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(input.grant));
       const claimed = this.#db
         .prepare(
           `UPDATE need_items SET status = 'fulfilled', item_id = ?, grant_id = ?, fulfilled_at = ?
@@ -940,16 +888,11 @@ export class SqliteHostedStore implements VaultStore {
     }
   }
 
-  async listMembers(orgId: string): Promise<MemberRecord[]> {
-    const rows = this.#db.prepare("SELECT * FROM org_members WHERE org_id = ?").all(orgId) as Record<
-      string,
-      unknown
-    >[];
-    return rows.map((r) => ({
-      orgId: String(r.org_id),
-      userId: String(r.user_id),
-      role: r.role as MemberRecord["role"],
-    }));
+  async listMembers(orgId: string): Promise<MemberRow[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM org_members WHERE org_id = ? ORDER BY joined_at, user_id")
+      .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapMember);
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
@@ -957,20 +900,30 @@ export class SqliteHostedStore implements VaultStore {
       string,
       unknown
     >[];
-    return rows.map((r) => ({
-      orgId: String(r.org_id),
-      userId: String(r.user_id),
-      role: r.role as MemberRecord["role"],
-    }));
+    return rows.map(mapMemberRecord);
+  }
+
+  async listMemberEmails(orgId: string): Promise<string[]> {
+    const rows = this.#db
+      .prepare(
+        `SELECT u.email AS email FROM org_members m JOIN users u ON u.id = m.user_id
+         WHERE m.org_id = ? AND u.email_verified_at IS NOT NULL ORDER BY u.email`,
+      )
+      .all(orgId) as { email: string }[];
+    return rows.map((r) => String(r.email));
   }
 
   async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
+    const idx = oidcPayloadIndex(row.payload);
     this.#db
       .prepare(
-        `INSERT INTO oidc_payloads (id, kind, payload, expires_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at`,
+        `INSERT INTO oidc_payloads (id, kind, payload, expires_at, uid, user_code, grant_id, client_id, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id, kind) DO UPDATE SET payload = excluded.payload, expires_at = excluded.expires_at,
+           uid = excluded.uid, user_code = excluded.user_code, grant_id = excluded.grant_id,
+           client_id = excluded.client_id, account_id = excluded.account_id`,
       )
-      .run(row.id, row.kind, row.payload, row.expiresAt);
+      .run(row.id, row.kind, row.payload, row.expiresAt, idx.uid, idx.userCode, idx.grantId, idx.clientId, idx.accountId);
   }
 
   async getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined> {
@@ -1014,14 +967,14 @@ export class SqliteHostedStore implements VaultStore {
       );
   }
 
-  async getUser(id: string): Promise<UserRecord | undefined> {
+  async getUser(id: string): Promise<UserRow | undefined> {
     const r = this.#db.prepare("SELECT * FROM users WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
     return r ? mapUser(r) : undefined;
   }
 
-  async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+  async getUserByEmail(email: string): Promise<UserRow | undefined> {
     const r = this.#db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase()) as
       | Record<string, unknown>
       | undefined;
@@ -1096,15 +1049,15 @@ export class SqliteHostedStore implements VaultStore {
       .run(usedAt, userId, codeScrypt);
   }
 
-  async insertSession(row: OperatorSessionRecord): Promise<void> {
+  async insertSession(row: OperatorSessionRow): Promise<void> {
     this.#db
       .prepare(
-        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at, active_org_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt);
+      .run(row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt, row.activeOrgId ?? null);
   }
 
-  async getSession(idHash: string): Promise<OperatorSessionRecord | undefined> {
+  async getSession(idHash: string): Promise<OperatorSessionRow | undefined> {
     const r = this.#db.prepare("SELECT * FROM operator_sessions WHERE id_hash = ?").get(idHash) as
       | Record<string, unknown>
       | undefined;
@@ -1119,7 +1072,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("DELETE FROM operator_sessions WHERE user_id = ? AND id_hash != ?").run(userId, keepHash);
   }
 
-  async listOperatorSessions(orgId: string): Promise<OperatorSessionRecord[]> {
+  async listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]> {
     const rows = this.#db
       .prepare(
         `SELECT s.* FROM operator_sessions s
@@ -1134,6 +1087,64 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare("UPDATE operator_sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?")
       .run(lastSeenAt, expiresAt, idHash);
+  }
+
+  async updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE users SET totp_failures = ?, totp_locked_until = ?, totp_pending_wrapped_iv = ?,
+         totp_pending_wrapped_ciphertext = ?, totp_pending_wrapped_tag = ?, totp_pending_at = ? WHERE id = ?`,
+      )
+      .run(
+        patch.totpFailures,
+        patch.totpLockedUntil,
+        patch.totpPendingWrappedIv,
+        patch.totpPendingWrappedCiphertext,
+        patch.totpPendingWrappedTag,
+        patch.totpPendingAt,
+        userId,
+      );
+  }
+
+  async listUsersWithTotp(): Promise<UserRow[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM users WHERE totp_wrapped_iv IS NOT NULL OR totp_pending_wrapped_iv IS NOT NULL")
+      .all() as Record<string, unknown>[];
+    return rows.map(mapUser);
+  }
+
+  async deleteUnusedBackupCodes(userId: string): Promise<void> {
+    this.#db.prepare("DELETE FROM backup_codes WHERE user_id = ? AND used_at IS NULL").run(userId);
+  }
+
+  async deletePendingSessions(userId: string, keepHash: string): Promise<void> {
+    this.#db
+      .prepare("DELETE FROM operator_sessions WHERE user_id = ? AND mfa_at IS NULL AND id_hash != ?")
+      .run(userId, keepHash);
+  }
+
+  async getIdentityKey(id: string): Promise<IdentityKeyRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM identity_keys WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapIdentityKey(r) : undefined;
+  }
+
+  async insertIdentityKey(row: IdentityKeyRecord): Promise<void> {
+    this.#db
+      .prepare(
+        "INSERT OR IGNORE INTO identity_keys (id, wrapped_iv, wrapped_ciphertext, wrapped_tag, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(row.id, row.wrappedIv, row.wrappedCiphertext, row.wrappedTag, row.createdAt);
+  }
+
+  async updateIdentityKey(
+    id: string,
+    patch: Pick<IdentityKeyRecord, "wrappedIv" | "wrappedCiphertext" | "wrappedTag">,
+  ): Promise<void> {
+    this.#db
+      .prepare("UPDATE identity_keys SET wrapped_iv = ?, wrapped_ciphertext = ?, wrapped_tag = ? WHERE id = ?")
+      .run(patch.wrappedIv, patch.wrappedCiphertext, patch.wrappedTag, id);
   }
 
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
@@ -1179,7 +1190,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("UPDATE access_events SET revoked_at = ? WHERE jti_hash = ?").run(at, jtiHash);
   }
 
-  async setClientRevoked(id: string, at: string): Promise<void> {
+  async setClientRevoked(id: string, at: string | null): Promise<void> {
     this.#db.prepare("UPDATE clients SET revoked_at = ? WHERE id = ?").run(at, id);
   }
 
@@ -1194,94 +1205,164 @@ export class SqliteHostedStore implements VaultStore {
   async setClientLastTokenAt(id: string, at: string): Promise<void> {
     this.#db.prepare("UPDATE clients SET last_token_at = ? WHERE id = ?").run(at, id);
   }
+
+  async sweepExpired(nowIso: string): Promise<SweepCounts> {
+    const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
+    const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
+    const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const run = (sql: string, ...params: string[]): number =>
+      Number(this.#db.prepare(sql).run(...params).changes);
+    return {
+      emailOtpChallenges: run("DELETE FROM email_otp_challenges WHERE expires_at < ?", nowIso),
+      operatorSessions: run("DELETE FROM operator_sessions WHERE expires_at < ?", nowIso),
+      approvalChallenges: run("DELETE FROM approval_challenges WHERE expires_at < ?", nowIso),
+      needItems: run(
+        `DELETE FROM need_items
+         WHERE (status = 'cancelled' AND created_at < ?)
+            OR (status = 'pending' AND expires_at < ?)`,
+        dayAgo,
+        dayAgo,
+      ),
+      rateHits: run("DELETE FROM rate_hits WHERE window_start < ?", twoHoursAgo),
+      oidcPayloads: run("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < ?", nowIso),
+      orgInvites: run("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < ?", weekAgo),
+    };
+  }
+
+  async findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined> {
+    const r = this.#db
+      .prepare(
+        `SELECT id FROM clients WHERE org_id = ? AND (oauth_client_id = ? OR clerk_oauth_user_id = ?)
+         ORDER BY revoked_at IS NOT NULL, id LIMIT 1`,
+      )
+      .get(orgId, oauthClientId, oauthClientId) as { id: string } | undefined;
+    return r ? this.getClient(r.id) : undefined;
+  }
+
+  async setClientConsentedBy(id: string, userId: string): Promise<void> {
+    this.#db
+      .prepare("UPDATE clients SET consented_by_user_id = ? WHERE id = ? AND consented_by_user_id IS NULL")
+      .run(userId, id);
+  }
+
+  async findOidcPayloadByUid(kind: string, uid: string): Promise<OidcPayloadRow | undefined> {
+    const r = this.#db
+      .prepare("SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = ? AND uid = ? LIMIT 1")
+      .get(kind, uid) as Record<string, unknown> | undefined;
+    return r ? mapOidcRow(r) : undefined;
+  }
+
+  async findOidcPayloadByUserCode(kind: string, userCode: string): Promise<OidcPayloadRow | undefined> {
+    const r = this.#db
+      .prepare("SELECT id, payload, expires_at FROM oidc_payloads WHERE kind = ? AND user_code = ? LIMIT 1")
+      .get(kind, userCode) as Record<string, unknown> | undefined;
+    return r ? mapOidcRow(r) : undefined;
+  }
+
+  async deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void> {
+    this.#db.prepare("DELETE FROM oidc_payloads WHERE kind = ? AND grant_id = ?").run(kind, grantId);
+  }
+
+  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+    if (clientIds.length === 0) return;
+    const marks = clientIds.map(() => "?").join(", ");
+    this.#db
+      .prepare(
+        `DELETE FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})
+         AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)`,
+      )
+      .run(kind, ...clientIds, accountId, accountId);
+  }
+
+  async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {
+    const r = this.#db
+      .prepare("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at <= ?")
+      .run(nowIso);
+    return Number(r.changes);
+  }
+
+  /* ---- team (3.7) and plan limits (3.9) ---- */
+
+  async removeMember(orgId: string, userId: string): Promise<void> {
+    this.#db.prepare("DELETE FROM org_members WHERE org_id = ? AND user_id = ?").run(orgId, userId);
+    this.#db
+      .prepare("UPDATE operator_sessions SET active_org_id = NULL WHERE user_id = ? AND active_org_id = ?")
+      .run(userId, orgId);
+  }
+
+  async updateMemberRole(orgId: string, userId: string, role: MemberRow["role"]): Promise<void> {
+    this.#db.prepare("UPDATE org_members SET role = ? WHERE org_id = ? AND user_id = ?").run(role, orgId, userId);
+  }
+
+  async insertInvite(row: InviteRecord): Promise<void> {
+    this.#db
+      .prepare(
+        `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.id,
+        row.orgId,
+        row.email,
+        row.role,
+        row.tokenHash,
+        row.invitedBy,
+        row.createdAt,
+        row.expiresAt,
+        row.acceptedAt,
+      );
+  }
+
+  async getInvite(id: string): Promise<InviteRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM org_invites WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapInvite(r) : undefined;
+  }
+
+  async getInviteByTokenHash(tokenHash: string): Promise<InviteRecord | undefined> {
+    const r = this.#db.prepare("SELECT * FROM org_invites WHERE token_hash = ?").get(tokenHash) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? mapInvite(r) : undefined;
+  }
+
+  async listInvites(orgId: string): Promise<InviteRecord[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM org_invites WHERE org_id = ? AND accepted_at IS NULL ORDER BY created_at DESC")
+      .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapInvite);
+  }
+
+  async acceptInvite(id: string, acceptedAt: string): Promise<void> {
+    this.#db.prepare("UPDATE org_invites SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL").run(acceptedAt, id);
+  }
+
+  async deleteInvite(id: string): Promise<void> {
+    this.#db.prepare("DELETE FROM org_invites WHERE id = ?").run(id);
+  }
+
+  async setSessionActiveOrg(idHash: string, orgId: string | null): Promise<void> {
+    this.#db.prepare("UPDATE operator_sessions SET active_org_id = ? WHERE id_hash = ?").run(orgId, idHash);
+  }
+
+  async countAuditSince(orgId: string, action: string, sinceIso: string): Promise<number> {
+    const r = this.#db
+      .prepare("SELECT COUNT(*) AS n FROM audit WHERE org_id = ? AND action = ? AND at >= ?")
+      .get(orgId, action, sinceIso) as { n: number };
+    return Number(r.n);
+  }
+
+  async countItemsForOrg(orgId: string): Promise<number> {
+    const r = this.#db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM items i
+         JOIN environments e ON e.id = i.environment_id
+         JOIN vaults v ON v.id = e.vault_id
+         WHERE v.org_id = ?`,
+      )
+      .get(orgId) as { n: number };
+    return Number(r.n);
+  }
 }
 
-function mapPolicy(r: Record<string, unknown>): PolicyRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: String(r.client_id),
-    itemId: r.item_id == null ? null : String(r.item_id),
-    folderId: r.folder_id == null ? null : String(r.folder_id),
-    environmentId: String(r.environment_id),
-    kind: r.kind as PolicyRecord["kind"],
-    createdAt: String(r.created_at),
-  };
-}
-
-function mapChallenge(r: Record<string, unknown>): ApprovalChallengeRecord {
-  return {
-    id: String(r.id),
-    grantId: String(r.grant_id),
-    codeHash: String(r.code_hash),
-    expiresAt: String(r.expires_at),
-    attempts: Number(r.attempts),
-    kind: r.kind as ApprovalChallengeRecord["kind"],
-  };
-}
-
-function mapUser(r: Record<string, unknown>): UserRecord {
-  return {
-    id: String(r.id),
-    email: String(r.email),
-    emailVerifiedAt: r.email_verified_at == null ? null : String(r.email_verified_at),
-    totpWrappedIv: r.totp_wrapped_iv == null ? null : String(r.totp_wrapped_iv),
-    totpWrappedCiphertext: r.totp_wrapped_ciphertext == null ? null : String(r.totp_wrapped_ciphertext),
-    totpWrappedTag: r.totp_wrapped_tag == null ? null : String(r.totp_wrapped_tag),
-    totpLastStep: r.totp_last_step == null ? null : Number(r.totp_last_step),
-    createdAt: String(r.created_at),
-  };
-}
-
-function mapOtp(r: Record<string, unknown>): EmailOtpRecord {
-  return {
-    id: String(r.id),
-    email: String(r.email),
-    codeScrypt: String(r.code_scrypt),
-    expiresAt: String(r.expires_at),
-    attempts: Number(r.attempts),
-    sentAt: String(r.sent_at),
-  };
-}
-
-function mapSess(r: Record<string, unknown>): OperatorSessionRecord {
-  return {
-    idHash: String(r.id_hash),
-    userId: String(r.user_id),
-    createdAt: String(r.created_at),
-    lastSeenAt: String(r.last_seen_at),
-    expiresAt: String(r.expires_at),
-  };
-}
-
-function mapAccess(r: Record<string, unknown>): AccessEventRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: r.client_id == null ? null : String(r.client_id),
-    actorUserId: r.actor_user_id == null ? null : String(r.actor_user_id),
-    kind: r.kind as AccessEventRecord["kind"],
-    jtiHash: String(r.jti_hash),
-    issuedAt: String(r.issued_at),
-    expiresAt: r.expires_at == null ? null : String(r.expires_at),
-    revokedAt: r.revoked_at == null ? null : String(r.revoked_at),
-  };
-}
-
-function mapNeed(r: Record<string, unknown>): NeedItemRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: String(r.client_id),
-    environmentId: String(r.environment_id),
-    suggestedName: String(r.suggested_name),
-    host: String(r.host),
-    taskDescription: r.task_description == null ? null : String(r.task_description),
-    status: r.status as NeedItemRecord["status"],
-    itemId: r.item_id == null ? null : String(r.item_id),
-    grantId: r.grant_id == null ? null : String(r.grant_id),
-    expiresAt: String(r.expires_at),
-    createdAt: String(r.created_at),
-    fulfilledAt: r.fulfilled_at == null ? null : String(r.fulfilled_at),
-  };
-}

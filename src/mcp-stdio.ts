@@ -1,9 +1,11 @@
 import { createInterface } from "node:readline";
-import { handleMcpRpc, type JsonRpcRequest } from "./mcp.ts";
+import { handleMcpRpc, newMcpSession, type JsonRpcRequest } from "./mcp.ts";
 import type { Vault } from "./vault.ts";
 
 export async function runMcpStdio(vault: Vault): Promise<void> {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  // One process is one MCP connection: `initialize` names the agent for every later call.
+  const session = newMcpSession();
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -19,7 +21,7 @@ export async function runMcpStdio(vault: Vault): Promise<void> {
       process.stdout.write(`${JSON.stringify(err)}\n`);
       continue;
     }
-    const res = handleMcpRpc(vault, req);
+    const res = await handleMcpRpc(vault, req, session);
     if (res) process.stdout.write(`${JSON.stringify(res)}\n`);
   }
 }

@@ -40,8 +40,7 @@ test("GET / is the operator HTML without auth", async () => {
     const html = await res.text();
     assert.equal(res.status, 200);
     assert.match(html, /Botpasses/);
-    assert.match(html, /Issue Grok Bot token/);
-    assert.match(html, /Issue Grok Bot token/);
+    assert.match(html, /Issue agent token/);
     assert.match(html, /Authorization/);
   } finally {
     await ctx.http.close();

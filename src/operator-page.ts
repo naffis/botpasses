@@ -1,12 +1,18 @@
 import { PRODUCT_NAME } from "./brand.ts";
 
+/**
+ * Local loopback console for `vault serve`. Shares the hosted vocabulary (credentials, agents,
+ * approvals, activity) and never puts server data through `innerHTML`: rows are built with
+ * `createElement` and `textContent`, so a hostile credential name or agent id renders as text.
+ * Still a small single page by design; the hosted console is the full product.
+ */
 export function operatorHtml(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${PRODUCT_NAME}</title>
+  <title>${PRODUCT_NAME} local console</title>
   <style>
     :root { color-scheme: dark; --bg:#111; --fg:#eee; --muted:#9aa; --line:#333; --ok:#8fd19e; --warn:#e6c07b; }
     html, body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ui-sans-serif, system-ui, sans-serif; }
@@ -24,7 +30,7 @@ export function operatorHtml(): string {
     button.primary { background:#244024; border-color:#3a5; }
     .row { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     table { border-collapse: collapse; margin-top: 8px; }
-    th, td { text-align:left; border-bottom:1px solid var(--line); padding:8px 6px; font-size:13px; }
+    th, td { text-align:left; border-bottom:1px solid var(--line); padding:8px 6px; font-size:13px; overflow-wrap: anywhere; }
     th { color: var(--muted); font-weight: 600; }
     .ok { color: var(--ok); }
     .warn { color: var(--warn); }
@@ -34,13 +40,13 @@ export function operatorHtml(): string {
 </head>
 <body>
   <main>
-    <h1>${PRODUCT_NAME}</h1>
-    <p>Named secrets for connectors and agents. Values are stored encrypted and injected into a tool process. They are never shown here after submit, and they are never returned to the model.</p>
+    <h1>${PRODUCT_NAME} local console</h1>
+    <p>Named credentials for agents and tools. Values are stored encrypted and attached by <code>http_request</code> or injected by <code>vault run</code>. They are never shown here after submit, and never returned to the model.</p>
     <div class="banner">
       This is not a human password manager. No autofill, TOTP, passkeys, or sharing secrets with other people.
-      Chat and this console show <strong>name + last-4 / grant metadata</strong> only.
+      Chat and this console show <strong>name, last four, and approval metadata</strong> only.
     </div>
-    <p id="flash"></p>
+    <p id="flash" role="status"></p>
 
     <h2>Loopback token</h2>
     <form id="token-form" novalidate>
@@ -49,7 +55,7 @@ export function operatorHtml(): string {
       <p><button type="submit">Save token</button></p>
     </form>
 
-    <h2>Store a named secret</h2>
+    <h2>Store a credential</h2>
     <form id="store" novalidate>
       <div class="row">
         <div>
@@ -60,52 +66,65 @@ export function operatorHtml(): string {
           <label for="value">Value (cleared after submit)</label>
           <input id="value" name="value" type="password" autocomplete="new-password" />
         </div>
+        <div>
+          <label for="hosts">Allowed hosts (comma separated; only these hosts ever receive this credential)</label>
+          <input id="hosts" name="hosts" placeholder="api.stripe.com" autocomplete="off" />
+        </div>
+        <div>
+          <label for="inject">Inject</label>
+          <select id="inject" name="inject">
+            <option value="bearer">Authorization: Bearer</option>
+            <option value="basic">HTTP Basic</option>
+            <option value="header:X-API-Key">Header X-API-Key</option>
+          </select>
+        </div>
       </div>
       <p><button class="primary" type="submit">Store encrypted</button></p>
     </form>
 
-    <h2>Secrets</h2>
+    <h2>Credentials</h2>
     <table>
-      <thead><tr><th>Name</th><th>Last-4</th><th>Updated</th></tr></thead>
+      <thead><tr><th scope="col">Name</th><th scope="col">Last four</th><th scope="col">Hosts</th><th scope="col">Inject</th><th scope="col">Updated</th></tr></thead>
       <tbody id="secrets"></tbody>
     </table>
 
-    <h2>Approve a grant</h2>
+    <h2>Approve a request</h2>
+    <p>MCP <code>http_request</code> approvals use tool <code>http_request</code>; the agent is the MCP client's name.</p>
     <form id="grant" novalidate>
       <div class="row">
         <div>
-          <label for="g-secret">Secret</label>
+          <label for="g-secret">Credential</label>
           <input id="g-secret" name="secretName" placeholder="STRIPE_KEY" autocomplete="off" />
         </div>
         <div>
           <label for="g-agent">Agent</label>
-          <input id="g-agent" name="agentId" placeholder="invoicer" autocomplete="off" />
+          <input id="g-agent" name="agentId" placeholder="cursor" autocomplete="off" />
         </div>
         <div>
           <label for="g-tool">Tool</label>
-          <input id="g-tool" name="toolId" placeholder="stripe" autocomplete="off" />
+          <input id="g-tool" name="toolId" placeholder="http_request" autocomplete="off" />
         </div>
         <div>
-          <label for="g-scope">Scope</label>
+          <label for="g-scope">Approval</label>
           <select id="g-scope" name="scope">
             <option value="once">once</option>
             <option value="session">session</option>
           </select>
         </div>
       </div>
-      <p><button class="primary" type="submit">Approve grant</button></p>
+      <p><button class="primary" type="submit">Approve</button></p>
     </form>
 
-    <h2>Grants</h2>
+    <h2>Approvals</h2>
     <table>
-      <thead><tr><th>Secret</th><th>Agent</th><th>Tool</th><th>Scope</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th scope="col">Credential</th><th scope="col">Agent</th><th scope="col">Tool</th><th scope="col">Approval</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
       <tbody id="grants"></tbody>
     </table>
 
-    <h2>Audit</h2>
-    <p>Who, which secret name, which tool/agent, when, grant vs revoke. The value is never stored here.</p>
+    <h2>Activity</h2>
+    <p>Who, which credential name, which tool and agent, when, approve or revoke. The value is never stored here.</p>
     <table>
-      <thead><tr><th>When</th><th>Action</th><th>Actor</th><th>Secret</th><th>Agent</th><th>Tool</th></tr></thead>
+      <thead><tr><th scope="col">When</th><th scope="col">Action</th><th scope="col">Actor</th><th scope="col">Credential</th><th scope="col">Agent</th><th scope="col">Tool</th></tr></thead>
       <tbody id="audit"></tbody>
     </table>
   </main>
@@ -128,38 +147,68 @@ export function operatorHtml(): string {
       if (!r.ok) throw new Error(body.error || r.statusText);
       return body;
     });
+    // Every server value goes through textContent; rows are built as DOM nodes, never as markup strings.
+    const cell = (value) => {
+      const td = document.createElement("td");
+      td.textContent = value == null ? "" : String(value);
+      return td;
+    };
+    const rowOf = (cells) => {
+      const tr = document.createElement("tr");
+      for (const c of cells) tr.appendChild(c);
+      return tr;
+    };
+    const fill = (id, rows, emptyCols) => {
+      const body = document.getElementById(id);
+      body.replaceChildren();
+      if (!rows.length) {
+        const td = cell("None yet");
+        td.colSpan = emptyCols;
+        body.appendChild(rowOf([td]));
+        return;
+      }
+      for (const r of rows) body.appendChild(r);
+    };
     async function refresh() {
-      const [secrets, grants, audit] = await Promise.all([
-        j("/api/secrets"),
+      const [items, grants, audit] = await Promise.all([
+        j("/api/items"),
         j("/api/grants"),
         j("/api/audit"),
       ]);
-      document.getElementById("secrets").innerHTML = secrets.secrets.map((s) =>
-        "<tr><td>"+s.name+"</td><td>"+s.last4+"</td><td>"+s.updatedAt+"</td></tr>"
-      ).join("") || "<tr><td colspan=3>None yet</td></tr>";
-      document.getElementById("grants").innerHTML = grants.grants.map((g) =>
-        "<tr><td>"+g.secretName+"</td><td>"+g.agentId+"</td><td>"+g.toolId+"</td><td>"+g.scope+"</td><td>"+g.status+"</td><td class=actions>" +
-        (g.status === "pending" || g.status === "active"
-          ? "<button data-revoke='"+g.id+"'>Revoke</button>" : "") +
-        "</td></tr>"
-      ).join("") || "<tr><td colspan=6>None yet</td></tr>";
-      document.getElementById("audit").innerHTML = audit.audit.map((a) =>
-        "<tr><td>"+a.createdAt+"</td><td>"+a.action+"</td><td>"+a.actor+"</td><td>"+(a.secretName||"")+"</td><td>"+(a.agentId||"")+"</td><td>"+(a.toolId||"")+"</td></tr>"
-      ).join("") || "<tr><td colspan=6>None yet</td></tr>";
+      fill("secrets", items.items.map((s) => rowOf([
+        cell(s.name), cell(s.last4), cell((s.allowedHosts || []).join(", ")), cell(s.inject), cell(s.updatedAt),
+      ])), 5);
+      fill("grants", grants.grants.map((g) => {
+        const actions = document.createElement("td");
+        actions.className = "actions";
+        if (g.status === "pending" || g.status === "active") {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.dataset.revoke = g.id;
+          btn.textContent = g.status === "pending" ? "Deny" : "Revoke";
+          actions.appendChild(btn);
+        }
+        return rowOf([cell(g.secretName), cell(g.agentId), cell(g.toolId), cell(g.scope), cell(g.status), actions]);
+      }), 6);
+      fill("audit", audit.audit.map((a) => rowOf([
+        cell(a.createdAt), cell(a.action), cell(a.actor), cell(a.secretName), cell(a.agentId), cell(a.toolId),
+      ])), 6);
     }
     document.getElementById("store").addEventListener("submit", async (e) => {
       e.preventDefault();
       const name = document.getElementById("name").value.trim();
       const value = document.getElementById("value").value;
+      const hosts = document.getElementById("hosts").value.split(",").map((h) => h.trim()).filter(Boolean);
+      const inject = document.getElementById("inject").value;
       if (!name || !value) { flash("Name and value are required", false); return; }
       document.getElementById("value").value = "";
       try {
-        const res = await j("/api/secrets", {
+        const res = await j("/api/items", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, value }),
+          body: JSON.stringify({ name, value, allowed_hosts: hosts, inject }),
         });
-        flash("Stored "+res.secret.name+" "+res.secret.last4+" (value not shown again)", true);
+        flash("Stored " + res.item.name + " ending " + res.item.last4 + " (value not shown again)", true);
         await refresh();
       } catch (err) { flash(err.message, false); }
     });
@@ -167,9 +216,9 @@ export function operatorHtml(): string {
       e.preventDefault();
       const secretName = document.getElementById("g-secret").value.trim();
       const agentId = document.getElementById("g-agent").value.trim();
-      const toolId = document.getElementById("g-tool").value.trim();
-      if (!secretName || !agentId || !toolId) {
-        flash("Secret, agent, and tool are required to approve a grant", false);
+      const toolId = document.getElementById("g-tool").value.trim() || "http_request";
+      if (!secretName || !agentId) {
+        flash("Credential and agent are required to approve", false);
         return;
       }
       try {
@@ -183,16 +232,16 @@ export function operatorHtml(): string {
             scope: document.getElementById("g-scope").value,
           }),
         });
-        flash("Grant "+res.grant.status+" for "+res.grant.secretName+" → "+res.grant.toolId+" (value not shown)", true);
+        flash("Approval " + res.grant.status + " for " + res.grant.secretName + " to " + res.grant.toolId + " (value not shown)", true);
         await refresh();
       } catch (err) { flash(err.message, false); }
     });
     document.getElementById("grants").addEventListener("click", async (e) => {
-      const id = e.target.getAttribute("data-revoke");
+      const id = e.target instanceof HTMLElement ? e.target.dataset.revoke : undefined;
       if (!id) return;
       try {
-        await j("/api/grants/"+id+"/revoke", { method: "POST" });
-        flash("Revoked "+id, true);
+        await j("/api/grants/" + encodeURIComponent(id) + "/revoke", { method: "POST" });
+        flash("Revoked " + id, true);
         await refresh();
       } catch (err) { flash(err.message, false); }
     });

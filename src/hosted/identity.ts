@@ -1,11 +1,12 @@
 import type { IncomingMessage } from "node:http";
-import { importJWK, jwtVerify, type JWTPayload } from "jose";
 import type { HostedKernel } from "./kernel.ts";
 import { HttpError } from "./errors.ts";
-import { readBearer, resolveMachineToken, type AuthResolver, type Principal } from "./auth.ts";
-import { hashToken, OperatorIdentity, totpEnabled } from "./operator-identity.ts";
+import { readBearer, resolveMachineToken, type AuthResolver, type OperatorPrincipal, type Principal } from "./auth.ts";
+import { OperatorIdentity, totpEnabled } from "./operator-identity.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
-import { logVaultEvent } from "./observe.ts";
+import { principalFromAccessJwt } from "./access-jwt.ts";
+
+export { principalFromAccessJwt };
 
 export type IdentityResolverOpts = {
   identity: OperatorIdentity;
@@ -14,6 +15,19 @@ export type IdentityResolverOpts = {
   oidcJwk?: OidcPrivateJwk;
   issuer?: string;
 };
+
+/**
+ * An operator session that has not passed the authenticator step yet.
+ * `needs_totp` is true when the user is enrolled (route to `/verify-totp`), false when the
+ * user still has to enroll (route to `/enroll-totp`).
+ */
+export type PendingOperatorPrincipal = OperatorPrincipal & { ready: false; needs_totp: boolean };
+
+/** True for a pre-MFA session whose user is already enrolled and must verify, not enroll. */
+export function needsTotpVerify(p: Principal | undefined): boolean {
+  if (!p || p.channel !== "operator" || p.ready !== false) return false;
+  return "needs_totp" in p && p.needs_totp === true;
+}
 
 function requestSecure(req: IncomingMessage): boolean {
   const xf = req.headers["x-forwarded-proto"];
@@ -39,18 +53,22 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
     const secure = opts.secureCookies || requestSecure(req);
     const loaded = await opts.identity.loadSession(req.headers.cookie, secure);
     if (!loaded) return undefined;
-    const ready = totpEnabled(loaded.user);
+    const enrolled = totpEnabled(loaded.user);
+    // Ready means this session passed the authenticator step, not merely that the user has one.
+    const ready = enrolled && loaded.session.mfaAt !== null;
     if (!ready) {
-      return {
+      const pending: PendingOperatorPrincipal = {
         channel: "operator",
         userId: loaded.user.id,
         orgId: "",
         role: "owner",
         ready: false,
         sessionHash: loaded.session.idHash,
+        needs_totp: enrolled,
       };
+      return pending;
     }
-    const membership = await kernel.ensureVaultOrgForUser(loaded.user.id);
+    const membership = await kernel.ensureVaultOrgForUser(loaded.user.id, loaded.session.activeOrgId ?? null);
     const prior = await kernel.store.getAccessEventByJti(loaded.session.idHash);
     if (!prior) {
       await kernel.recordAccessEvent({
@@ -72,43 +90,5 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
       ready: true,
       sessionHash: loaded.session.idHash,
     };
-  };
-}
-
-export async function principalFromAccessJwt(
-  kernel: HostedKernel,
-  token: string,
-  jwk: OidcPrivateJwk,
-  issuer: string,
-): Promise<Principal> {
-  const origin = issuer.replace(/\/$/, "");
-  const aud = `${origin}/mcp`;
-  const { n, e, kty, alg } = jwk;
-  const key = await importJWK({ kty, n, e, alg }, "RS256");
-  let payload: JWTPayload;
-  try {
-    const verified = await jwtVerify(token, key, { issuer: origin, audience: aud });
-    payload = verified.payload;
-  } catch {
-    throw new HttpError(401, "Authentication required");
-  }
-  const jti = typeof payload.jti === "string" ? payload.jti : undefined;
-  if (!jti) throw new HttpError(401, "Authentication required");
-  const event = await kernel.store.getAccessEventByJti(hashToken(jti));
-  if (event?.revokedAt) throw new HttpError(401, "Authentication required");
-  const oauthId = typeof payload.client_id === "string" ? payload.client_id : undefined;
-  if (!oauthId) throw new HttpError(401, "Authentication required");
-  const client = await kernel.store.findClientByOauthId(oauthId);
-  if (!client || client.revokedAt) throw new HttpError(401, "Authentication required");
-  void kernel.store.touchClientLastSeen(client.id, new Date().toISOString()).catch((err: unknown) => {
-    logVaultEvent("client_last_seen_failed", {
-      message: err instanceof Error ? err.message : String(err),
-    });
-  });
-  return {
-    channel: "model",
-    orgId: client.orgId,
-    clientId: client.id,
-    environment: client.environment,
   };
 }

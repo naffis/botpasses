@@ -1,15 +1,40 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type Provider from "oidc-provider";
-import type { Principal } from "./auth.ts";
+import type { InteractionDetails } from "oidc-provider";
+import type { OperatorPrincipal, Principal } from "./auth.ts";
 import { requireOperator } from "./auth.ts";
-import { consentHtml } from "./auth-pages.ts";
+import { HttpError } from "./errors.ts";
+import { kernelForProvider, redirectHosts } from "./oauth-as.ts";
+import { consentExpiredHtml, consentHtml, type ConsentView } from "./oauth-pages.ts";
 import { sendHtml } from "./http-auth-routes.ts";
+import { needsTotpVerify } from "./identity.ts";
 import { bindSecurityHeaders } from "./security-headers.ts";
 
-type InteractionDetails = {
-  uid: string;
-  params?: Record<string, unknown>;
-};
+/** Scopes this AS issues; mirrors `scopes` in createOauthProvider. */
+const GRANTABLE_SCOPES: ReadonlySet<string> = new Set(["openid", "mcp"]);
+
+function clientIdOf(details: InteractionDetails): string {
+  const raw = details.params.client_id;
+  return typeof raw === "string" ? raw : "";
+}
+
+async function consentView(
+  provider: Provider,
+  op: OperatorPrincipal,
+  clientId: string,
+): Promise<{ name: string; view: ConsentView }> {
+  const client = clientId ? await provider.Client.find(clientId) : undefined;
+  const name = (client?.clientName?.trim() || clientId || "MCP client").slice(0, 80);
+  const view: ConsentView = { hosts: redirectHosts(client?.redirectUris) };
+  const kernel = kernelForProvider(provider);
+  if (kernel && clientId) {
+    const existing = await kernel.store.findClientByOrgAndOauthId(op.orgId, clientId);
+    view.firstTime = !existing;
+    const user = await kernel.store.getUser(op.userId);
+    if (user?.email) view.email = user.email;
+  }
+  return { name, view };
+}
 
 export async function handleConsentGet(
   provider: Provider,
@@ -25,24 +50,27 @@ export async function handleConsentGet(
     return true;
   }
   if (principal.ready === false) {
-    res.writeHead(302, { location: "/enroll-totp" });
+    res.writeHead(302, { location: needsTotpVerify(principal) ? "/verify-totp" : "/enroll-totp" });
     res.end();
     return true;
   }
-  let name = "MCP client";
-  let uid = "";
+  let details: InteractionDetails;
   try {
-    const details = (await provider.interactionDetails(req, res)) as InteractionDetails;
-    uid = details.uid;
-    const raw = details.params?.client_name ?? details.params?.client_id;
-    if (typeof raw === "string" && raw) name = raw.slice(0, 80);
+    details = await provider.interactionDetails(req, res);
   } catch {
-    uid = "";
+    res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...htmlHeaders });
+    res.end(consentExpiredHtml());
+    return true;
   }
-  sendHtml(res, consentHtml(name, uid), htmlHeaders);
+  const { name, view } = await consentView(provider, principal, clientIdOf(details));
+  sendHtml(res, consentHtml(name, details.uid, view), htmlHeaders);
   return true;
 }
 
+/**
+ * Only the literal decision "allow" grants. Anything else (deny, missing, a typo, a
+ * replayed form with a different value) is access_denied.
+ */
 export async function handleConsentPost(
   provider: Provider,
   req: IncomingMessage,
@@ -53,20 +81,27 @@ export async function handleConsentPost(
 ): Promise<void> {
   bindSecurityHeaders(res);
   const op = requireOperator(principal);
-  const decision = String(body.decision ?? "");
-  if (decision === "deny") {
+  if (body.decision !== "allow") {
     await provider.interactionFinished(req, res, { error: "access_denied", error_description: "denied" });
     return;
   }
-  const details = (await provider.interactionDetails(req, res)) as InteractionDetails;
-  const clientId = typeof details.params?.client_id === "string" ? details.params.client_id : "";
+  const details = await provider.interactionDetails(req, res);
+  if (typeof body.uid === "string" && body.uid && body.uid !== details.uid) {
+    throw new HttpError(400, "Consent form does not match the pending request");
+  }
+  const clientId = clientIdOf(details);
+  if (!clientId) throw new HttpError(400, "Pending request has no client");
   const grant = new provider.Grant({ accountId: op.userId, clientId });
-  grant.addOIDCScope("openid");
+  // `mcp` is declared as an OP scope (so it is advertised) and as the MCP resource scope;
+  // the interaction policy checks both, so grant whichever of the two were requested.
+  const requested = typeof details.params.scope === "string" ? details.params.scope.split(/\s+/) : [];
+  const granted = requested.filter((s) => GRANTABLE_SCOPES.has(s));
+  grant.addOIDCScope((granted.length > 0 ? granted : ["openid"]).join(" "));
   grant.addResourceScope(audience, "mcp");
   const grantId = await grant.save();
+  // remember: false keeps the OP login transient; Botpasses owns the durable session.
   await provider.interactionFinished(req, res, {
-    login: { accountId: op.userId },
+    login: { accountId: op.userId, remember: false },
     consent: { grantId },
   });
 }
-

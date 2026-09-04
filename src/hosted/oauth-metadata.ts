@@ -14,6 +14,12 @@ export type AuthorizationServerMetadata = {
   grant_types_supported: string[];
   token_endpoint_auth_methods_supported: string[];
   code_challenge_methods_supported: string[];
+  /** OpenID Connect Discovery 1.0 required fields; the same document is served at openid-configuration. */
+  subject_types_supported: string[];
+  id_token_signing_alg_values_supported: string[];
+  authorization_response_iss_parameter_supported: boolean;
+  /** OAuth Client ID Metadata Document (draft-02): `client_id` may be an https URL. */
+  client_id_metadata_document_supported: boolean;
   resource: string;
   resource_metadata: string;
 };
@@ -58,6 +64,10 @@ export function authorizationServerMetadata(publicUrl: string): AuthorizationSer
     ],
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
     code_challenge_methods_supported: ["S256"],
+    subject_types_supported: ["public"],
+    id_token_signing_alg_values_supported: ["RS256"],
+    authorization_response_iss_parameter_supported: true,
+    client_id_metadata_document_supported: true,
     resource,
     resource_metadata: protectedResourceMetadataUrl(origin),
   };

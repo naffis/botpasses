@@ -56,8 +56,8 @@ test("fly tomls use botpasses app names", () => {
   const prod = readFileSync(join(process.cwd(), "fly.prod.toml"), "utf8");
   assert.match(staging, /^app = "botpasses-staging"$/m);
   assert.match(prod, /^app = "botpasses-prod"$/m);
-  assert.match(staging, /^  VAULT_PUBLIC_URL = "https:\/\/staging\.botpasses\.com"$/m);
-  assert.match(prod, /^  VAULT_PUBLIC_URL = "https:\/\/botpasses\.com"$/m);
+  assert.match(staging, /^ {2}VAULT_PUBLIC_URL = "https:\/\/staging\.botpasses\.com"$/m);
+  assert.match(prod, /^ {2}VAULT_PUBLIC_URL = "https:\/\/botpasses\.com"$/m);
 });
 
 const FORBIDDEN_BRAND = /Agent Grant Vault|AgentVault|agent-grant-vault|staging\.vault\.example\.com|mail\.agent-vault\.invalid|Agent grant vault|Agent Vault/;

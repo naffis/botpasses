@@ -1,23 +1,110 @@
 ---
+import { getCollection } from "astro:content";
 import Base from "./Base.astro";
+import { SECTION_LABELS, groupBySection, neighbours, toNavItems } from "../lib/docs-nav.ts";
 
 interface Props {
   title: string;
-  description?: string;
-  crumbs: { href: string; label: string }[];
+  description: string;
+  /** Canonical path of this page, for example "/docs/start". */
+  href: string;
+  /** Short breadcrumb label. Defaults to the title. */
+  label?: string;
 }
 
-const { title, description, crumbs } = Astro.props;
+const { title, description, href, label = title } = Astro.props;
+const items = toNavItems(await getCollection("docs"));
+const groups = groupBySection(items);
+const current = items.find((i) => i.href === href);
+const { prev, next } = neighbours(items, href);
+const isIndex = href === "/docs";
+
+const crumbs = [{ href: "/docs", label: "Docs" }];
+if (!isIndex && current && SECTION_LABELS[current.section] !== label) {
+  crumbs.push({ href: `#section-${current.section}`, label: SECTION_LABELS[current.section] });
+}
+if (!isIndex) crumbs.push({ href, label });
+
+const site = Astro.site?.toString().replace(/\/$/, "") ?? "https://botpasses.com";
+const breadcrumbLd = {
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  itemListElement: crumbs
+    .filter((c) => !c.href.startsWith("#"))
+    .map((c, i) => ({ "@type": "ListItem", position: i + 1, name: c.label, item: `${site}${c.href}` })),
+};
 ---
-<Base title={title} description={description}>
-  <nav class="crumbs" aria-label="Breadcrumb">
-    {crumbs.map((c) => (
-      <a href={c.href}>{c.label}</a>
-    ))}
-  </nav>
-  <div class="search" data-testid="docs-search">
-    <label for="docs-q">Search docs</label>
-    <input id="docs-q" type="search" name="q" />
+<Base title={title} description={description} wide>
+  <Fragment slot="head">
+    <link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
+    <script type="application/ld+json" set:html={JSON.stringify(breadcrumbLd)} />
+  </Fragment>
+  <div class="docs-shell">
+    <aside class="docs-side">
+      <div class="search" data-testid="docs-search">
+        <label for="docs-q" class="search-label">Search docs</label>
+        <div id="docs-search-ui" class="search-ui"></div>
+        <noscript><input id="docs-q" type="search" name="q" placeholder="Search needs JavaScript" disabled /></noscript>
+      </div>
+      <nav class="docs-nav" aria-label="Docs">
+        <details class="docs-nav-details" open>
+          <summary>All docs</summary>
+          {groups.map((g) => (
+            <section>
+              <h2 id={`section-${g.section}`}>{g.label}</h2>
+              <ul>
+                {g.items.map((i) => (
+                  <li>
+                    <a href={i.href} aria-current={i.href === href ? "page" : undefined}>{i.label}</a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </details>
+      </nav>
+    </aside>
+    <article class="docs-body" data-pagefind-body>
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <ol>
+          {crumbs.map((c, i) => (
+            <li>
+              {i === crumbs.length - 1 && !isIndex
+                ? <a href={c.href} aria-current="page">{c.label}</a>
+                : <a href={c.href}>{c.label}</a>}
+            </li>
+          ))}
+        </ol>
+      </nav>
+      <slot />
+      {(prev || next) && (
+        <nav class="pager" aria-label="Previous and next">
+          {prev ? <a class="pager-prev" href={prev.href} rel="prev"><span>Previous</span>{prev.label}</a> : <span></span>}
+          {next ? <a class="pager-next" href={next.href} rel="next"><span>Next</span>{next.label}</a> : <span></span>}
+        </nav>
+      )}
+    </article>
   </div>
-  <slot />
+  <script is:inline src="/pagefind/pagefind-ui.js"></script>
+  <script>
+    // Pagefind UI is a classic script (loaded above, served by botpasses.com itself). This module
+    // runs after it and mounts the search box. Nothing here is inline, so the CSP holds.
+    type PagefindUiCtor = new (opts: Record<string, unknown>) => unknown;
+    // On narrow screens the sidebar list starts collapsed; the summary stays clickable.
+    const details = document.querySelector<HTMLDetailsElement>(".docs-nav-details");
+    if (details && window.matchMedia("(max-width: 900px)").matches) details.open = false;
+    const ctor = (window as unknown as { PagefindUI?: PagefindUiCtor }).PagefindUI;
+    const mount = document.getElementById("docs-search-ui");
+    if (ctor && mount) {
+      new ctor({
+        element: "#docs-search-ui",
+        showSubResults: true,
+        showImages: false,
+        excerptLength: 20,
+        translations: { placeholder: "Search docs" },
+      });
+      const input = mount.querySelector<HTMLInputElement>("input");
+      if (input) input.id = "docs-q";
+    }
+  </script>
 </Base>

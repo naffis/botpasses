@@ -1,0 +1,38 @@
+# Botpasses
+
+> Named credentials for AI agents. An operator stores an API key once. An agent (Claude, Cursor, ChatGPT, Grok, or any MCP client) calls the API through Botpasses over MCP; the key is attached inside the vault and never enters the model, the chat, or the logs. Grant-vault, not zero-knowledge: the hosted process decrypts only at an approved inject.
+
+MCP endpoint: https://botpasses.com/mcp (OAuth 2.1 with PKCE and dynamic client registration on botpasses.com, or a console-issued bearer token). Primary tool: http_request. There is no get_secret.
+
+## Docs
+
+- [Start](https://botpasses.com/docs/start): account, authenticator, first credential, first agent
+- [Install](https://botpasses.com/docs/install): hosted sign-up or the CLI from the repository
+- [Store a credential](https://botpasses.com/docs/how-to/store-a-secret)
+- [Approve a request](https://botpasses.com/docs/how-to/grant-access): policies prompt, session, item_standing, folder_standing
+- [Revoke access](https://botpasses.com/docs/how-to/revoke-access)
+- [Use an OAuth client secret](https://botpasses.com/docs/how-to/use-an-oauth-client-secret)
+- [Connect Claude](https://botpasses.com/docs/connect/claude)
+- [Connect Claude Code](https://botpasses.com/docs/connect/claude-code)
+- [Connect Cursor](https://botpasses.com/docs/connect/cursor)
+- [Connect ChatGPT](https://botpasses.com/docs/connect/chatgpt)
+- [Connect Grok](https://botpasses.com/docs/connect/grok)
+- [MCP tools](https://botpasses.com/docs/reference/mcp-tools): http_request, find_items, list_items, request_grant, list_grants
+- [HTTP API](https://botpasses.com/docs/reference/http-api)
+- [CLI](https://botpasses.com/docs/reference/cli)
+- [Rate limits](https://botpasses.com/docs/reference/rate-limits)
+- [Why the model never sees the value](https://botpasses.com/docs/explanation/why-the-model-never-sees-the-value)
+- [Troubleshooting](https://botpasses.com/docs/troubleshooting)
+- [FAQ](https://botpasses.com/docs/faq)
+- [Self-hosting](https://botpasses.com/docs/self-hosting)
+- [Security disclosure](https://botpasses.com/docs/security/disclosure)
+
+## Security
+
+- [Security](https://botpasses.com/security): trust model, encryption, connector hardening, canary tests
+- [security.txt](https://botpasses.com/.well-known/security.txt)
+
+## Source
+
+- [GitHub](https://github.com/naffis/botpasses): MIT licensed
+- [Changelog](https://botpasses.com/changelog)

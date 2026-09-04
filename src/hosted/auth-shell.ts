@@ -38,7 +38,9 @@ export function authDocument(input: {
 </head>
 <body class="auth-body">
   <a class="skip" href="#content">Skip to content</a>
-  <a class="brand auth-brand" href="/"><span class="brand-mark">${PRODUCT_NAME}</span></a>
+  <header class="auth-header">
+    <a class="brand auth-brand" href="/"><span class="brand-mark">${PRODUCT_NAME}</span></a>
+  </header>
   <main class="${cardClass}" id="content"${testid}>
     <h1>${escapeHtml(heading)}</h1>
     ${input.body}

@@ -1,20 +1,16 @@
 ---
 import Base from "../layouts/Base.astro";
+import { BRAND_FONTS, BRAND_HEX } from "../../../src/brand-visual.ts";
 
-const tokens = [
-  ["bg", "#0B0F0C"],
-  ["bg-elev", "#151C17"],
-  ["fg", "#F2F5F2"],
-  ["muted", "#C5D0C7"],
-  ["line", "#2A332C"],
-  ["accent", "#7DDA88"],
-  ["accent-dim", "#244024"],
-  ["danger", "#E07070"],
-] as const;
+const tokens = Object.entries(BRAND_HEX) as [keyof typeof BRAND_HEX, string][];
+const cssName = (key: string) => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}`;
 ---
-<Base title="Design — Botpasses" description="Botpasses visual tokens and mark.">
+<Base title="Design" description="Botpasses visual tokens, type, and mark. One source of truth shared by the marketing site and the console.">
   <h1>Design</h1>
-  <p>The living style guide. Hex is the source of truth. CSS also emits oklch twins.</p>
+  <p>
+    The living style guide. Tokens come from <code>src/brand-visual.ts</code> in the repository and are
+    rendered here and in the console from the same file. Hex is the source of truth.
+  </p>
   <h2>Mark</h2>
   <p><img src="/favicon.svg" alt="Botpasses mark" width="48" height="48" /></p>
   <h2>Tokens</h2>
@@ -22,11 +18,27 @@ const tokens = [
     {tokens.map(([name, hex]) => (
       <div class="swatch">
         <div class="chip" style={`background:${hex}`}></div>
-        <strong>{name}</strong>
-        <code>{hex}</code>
+        <strong>{cssName(name)}</strong>
+        <div><code>{hex}</code></div>
       </div>
     ))}
   </div>
   <h2>Type</h2>
-  <p>Display Fraunces. Body IBM Plex Sans. Mono IBM Plex Mono. Self-hosted OFL files. No Google Fonts runtime.</p>
+  <p>
+    Display {BRAND_FONTS.display}. Body {BRAND_FONTS.body}. Mono {BRAND_FONTS.mono}. Self-hosted OFL files,
+    no font service at runtime. Headings use the display face at 700; body text is 16 px with a 1.55 line
+    height and a 68-character measure.
+  </p>
+  <h2>Shape</h2>
+  <p>
+    Cards use a 10 px radius, a 1 px <code>--line</code> border, and the elevated background. Buttons use an
+    8 px radius and a 44 px minimum target. The primary button is the accent on the page background; other
+    buttons are outlined. Links are underlined, not colour-only.
+  </p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="#top">Primary</a>
+    <a class="btn" href="#top">Secondary</a>
+    <span class="pill">Pill</span>
+    <span class="pill pill-warn">Pending</span>
+  </div>
 </Base>

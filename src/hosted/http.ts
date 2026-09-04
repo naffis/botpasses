@@ -1,53 +1,62 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { logRequest, requestIdFrom } from "./observe.ts";
 import type { AddressInfo } from "node:net";
-import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "../brand.ts";
-import { assertSafePublicObject } from "../redact.ts";
-import type { ItemKind, VaultEnvName } from "../hosted-types.ts";
-import { defaultInjectForKind } from "./store-form-fields.ts";
+import { HEALTH_PRODUCT } from "../brand.ts";
 import {
   requireModelOrOperator,
   requireOperator,
   requireTrusted,
   testAuthResolver,
   type AuthResolver,
-  type ModelPrincipal,
   type Principal,
 } from "./auth.ts";
 import { AgentPassAuthority, agentPassEnabled } from "./agentpass.ts";
 import { type ConnectorFetch } from "./connector.ts";
-import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
+import { HttpError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
-import {
-  handleHostedMcpRpc,
-  isMcpHandshakeMethod,
-  listHostedMcpTools,
-  type JsonRpcRequest,
-} from "./mcp.ts";
+import { listHostedMcpTools } from "./mcp.ts";
 import { hostedCollectHtml, hostedCollectMissingHtml } from "./collect-page.ts";
 import { hostedOperatorHtml } from "./operator-page.ts";
 import { hostedPageHeaders, MARKETING_CSP_EXTRAS, newCspNonce, securityHeaders } from "./security-headers.ts";
-import { captureException } from "./observe.ts";
 import { isPublicSitePath, tryServeSite } from "./static-site.ts";
 import { hostedAsset } from "./hosted-assets.ts";
 import { hostedFont } from "./console-fonts.ts";
 import { handleAuthApi, tryAuthPage } from "./http-auth-routes.ts";
 import { handleAccessApi } from "./http-access-routes.ts";
+import { handleClientRoutes } from "./http-client-routes.ts";
+import { handleConnectCallback } from "./http-connect-routes.ts";
+import { handleGrantRoutes } from "./http-grant-routes.ts";
+import { handleItemRoutes } from "./http-item-routes.ts";
+import { handleMemberRoutes } from "./http-member-routes.ts";
+import { handleMcpPost, KEEPALIVE_MS, sseKeepalive } from "./http-mcp-routes.ts";
+import {
+  asEnv,
+  isLoopbackHost,
+  isPublicHtmlPath,
+  json,
+  optional,
+  originIsLoopback,
+  readJson,
+  robotsTxt,
+  sendError,
+} from "./http-util.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
-import {
-  isMcpClientSurface,
-  isOauthDiscoveryPath,
-  mcpWwwAuthenticate,
-  oauthDiscoveryDocument,
-} from "./oauth-metadata.ts";
-import { bindCors, corsHeaders, corsPath, corsPublicUrl, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
+import { isMcpClientSurface, isOauthDiscoveryPath, oauthDiscoveryDocument } from "./oauth-metadata.ts";
+import { bindCors, corsHeaders, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
 import type Provider from "oidc-provider";
 
-const BODY_CAP = 128 * 1024;
-const KEEPALIVE_MS = 25_000;
-
-export { hostAllowed } from "./http-cors.ts";
+/**
+ * Host header check. Loopback hosts are only trusted when `allowLoopback` is set (tests and
+ * local runs); a public plane never answers to `Host: localhost`.
+ */
+export function hostAllowed(hostHeader: string, allowed: string[], allowLoopback = false): boolean {
+  const host = (hostHeader.split(":")[0] ?? "").toLowerCase();
+  if (!host) return false;
+  if (isLoopbackHost(host)) return allowLoopback;
+  return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
+}
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;
@@ -70,12 +79,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const port = opts.port ?? 8788;
   const publicUrl = opts.publicUrl ?? opts.kernel.publicUrl;
   const auth = opts.authResolver ?? testAuthResolver;
-  const limiter = opts.kernel.limiter;
   const agentpass = agentPassEnabled() ? new AgentPassAuthority(opts.kernel, publicUrl) : undefined;
   const allowed = opts.allowedHosts ?? hostAllowlist(publicUrl);
   const siteRoot = opts.siteRoot;
   const deployPlane = opts.deployPlane ?? opts.kernel.deployPlane;
   const testMode = opts.authResolver === testAuthResolver || process.env.VAULT_AUTH_MODE === "test";
+  const allowLoopback = auth === testAuthResolver || testMode || !publicUrl.startsWith("https://");
   const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
   const identity = opts.identity;
   const oidcProvider = opts.oidcProvider;
@@ -90,6 +99,18 @@ export function createHostedServer(opts: HostedHttpOpts) {
   }
 
   const server = createServer((req, res) => {
+    const startedAt = process.hrtime.bigint();
+    const requestId = requestIdFrom(req.headers);
+    res.setHeader("x-request-id", requestId);
+    res.on("finish", () => {
+      logRequest({
+        method: req.method ?? "GET",
+        path: (req.url ?? "/").split("?")[0] ?? "/",
+        status: res.statusCode,
+        ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
+        requestId,
+      });
+    });
     void route(req, res).catch((err: unknown) => {
       if (!res.headersSent) sendError(res, err);
     });
@@ -192,7 +213,11 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
-    if (!originOk(req, allowed, path)) {
+    if (!originOk(req, allowed, path) || !hostAllowed(req.headers.host ?? "", allowed, allowLoopback)) {
+      json(res, 403, { error: "Origin/Host not allowed" });
+      return;
+    }
+    if (!allowLoopback && originHdr && originIsLoopback(originHdr) && !isMcpClientSurface(path)) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
     }
@@ -244,61 +269,33 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && path === "/mcp") {
-      if (principal) {
-        try {
-          requireModelOrOperator(principal);
-        } catch (err) {
-          sendError(res, err, path);
-          return;
-        }
+      try {
+        requireModelOrOperator(principal);
+      } catch (err) {
+        sendError(res, err, path);
+        return;
       }
       sseKeepalive(res);
       return;
     }
 
-    if (method === "GET" && path === "/integrations/spotify/callback") {
-      if (!principal || principal.channel !== "operator") {
-        res.writeHead(302, { location: "/sign-in" });
-        res.end();
-        return;
-      }
-      const code = url.searchParams.get("code") ?? "";
-      const state = url.searchParams.get("state") ?? "";
-      const err = url.searchParams.get("error");
-      if (err || !code || !state) {
-        res.writeHead(302, { location: "/console#vault" });
-        res.end();
-        return;
-      }
-      try {
-        await opts.kernel.finishSpotifyUserOauth({
-          orgId: principal.orgId,
-          userId: principal.userId,
-          state,
-          code,
-          fetchImpl: opts.fetchImpl,
-        });
-        res.writeHead(302, { location: "/console#vault?spotify=connected" });
-        res.end();
-      } catch {
-        res.writeHead(302, { location: "/console#vault?spotify=error" });
-        res.end();
-      }
-      return;
-    }
+    if (await handleConnectCallback(req, res, url, method, path, principal, opts.kernel, opts.fetchImpl)) return;
 
     if (method === "GET" && path === "/console/") {
       res.writeHead(308, { location: "/console" });
       res.end();
       return;
     }
-    if (method === "GET" && (path === "/console" || (!siteRoot && (path === "/" || path === "/index.html")))) {
+    if (
+      (method === "GET" || method === "HEAD") &&
+      (path === "/console" || (!siteRoot && (path === "/" || path === "/index.html")))
+    ) {
       const nonce = newCspNonce();
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         ...operatorAppHeaders(nonce),
       });
-      res.end(hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce, deployPlane }));
+      res.end(method === "HEAD" ? undefined : hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce, deployPlane }));
       return;
     }
     const collect = /^\/collect\/([^/]+)$/.exec(path);
@@ -330,50 +327,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "POST" && path === "/mcp") {
-      const body = (await readJson(req)) as JsonRpcRequest;
-      if (!principal && isMcpHandshakeMethod(body.method)) {
-        const rpc = await handleHostedMcpRpc(
-          {
-            kernel: opts.kernel,
-            principal: { channel: "model", orgId: "anon", clientId: "anon", environment: "staging" },
-            fetchImpl: opts.fetchImpl,
-            resolveAddresses: opts.resolveAddresses,
-          },
-          body,
-        );
-        if (!rpc) {
-          res.writeHead(202, securityHeaders({ html: false }));
-          res.end();
-          return;
-        }
-        json(res, 200, rpc);
-        return;
-      }
-      let model: ModelPrincipal;
-      try {
-        model = await mcpModelPrincipal(opts.kernel, principal, body);
-      } catch (err) {
-        sendError(res, err, path);
-        return;
-      }
-      if (body.method === "tools/call" && mcpToolName(body) === "request_grant") {
-        if (!(await limiter.allow(model.orgId))) throw new HttpError(429, "request_grant rate limit");
-      }
-      const rpc = await handleHostedMcpRpc(
-        {
-          kernel: opts.kernel,
-          principal: model,
-          fetchImpl: opts.fetchImpl,
-          resolveAddresses: opts.resolveAddresses,
-        },
-        body,
-      );
-      if (!rpc) {
-        res.writeHead(202, securityHeaders({ html: false }));
-        res.end();
-        return;
-      }
-      json(res, 200, rpc);
+      await handleMcpPost(req, res, path, principal, {
+        kernel: opts.kernel,
+        identity,
+        secureCookies,
+        publicUrl,
+        allowLoopback,
+        deployPlane,
+        fetchImpl: opts.fetchImpl,
+        resolveAddresses: opts.resolveAddresses,
+      });
       return;
     }
 
@@ -411,16 +374,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
         readJson,
         json,
         setCookies,
-        clientIp: (r) =>
-          identity.clientIp(
-            typeof r.headers["x-forwarded-for"] === "string" ? r.headers["x-forwarded-for"] : undefined,
-            r.socket.remoteAddress,
-          ),
+        oidcProvider,
       });
       if (handled) return;
     }
     const mutating = method === "POST" || method === "DELETE" || method === "PATCH" || method === "PUT";
-    if (identity && mutating && !path.startsWith("/api/auth/") && principal?.channel === "operator" && principal.sessionHash) {
+    if (identity && mutating && cookieCsrfApplies(path, principal)) {
       identity.assertCsrf(
         req.headers.cookie,
         typeof req.headers["x-csrf-token"] === "string" ? req.headers["x-csrf-token"] : undefined,
@@ -444,181 +403,24 @@ export function createHostedServer(opts: HostedHttpOpts) {
     ) {
       return;
     }
-    if (method === "GET" && path === "/api/items") {
-      const op = requireOperator(principal);
-      const raw = url.searchParams.get("environment");
-      if (raw === null || raw === "") {
-        json(res, 200, { items: await opts.kernel.listItemsOnPlane(op.orgId) });
-        return;
-      }
-      json(res, 200, { items: await opts.kernel.listItems(op.orgId, asEnv(raw)) });
+    if (await handleItemRoutes(req, res, url, method, path, principal, opts.kernel)) return;
+    if (await handleClientRoutes(req, res, method, path, principal, opts.kernel, publicUrl)) return;
+    if (
+      await handleMemberRoutes(req, res, url, method, path, principal, {
+        kernel: opts.kernel,
+        publicUrl,
+        htmlHeaders: (nonce) => operatorAppHeaders(nonce),
+        newCspNonce,
+      })
+    ) {
       return;
     }
-    if (method === "POST" && path === "/api/items") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const kind = asKind(body.kind);
-      const item = await opts.kernel.createItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        environment: asEnv(body.environment),
-        kind,
-        name: String(body.name ?? ""),
-        value: String(body.value ?? ""),
-        username: optional(body.username),
-        allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-        inject: String(body.inject ?? defaultInjectForKind(kind)),
-        folderName: optional(body.folder_name ?? body.folderName),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    const getNeedApi = /^\/api\/need-items\/([^/]+)$/.exec(path);
-    if (method === "GET" && getNeedApi) {
-      if (!principal || principal.channel !== "operator") {
-        json(res, 404, { error: "Unknown need" });
-        return;
-      }
-      const op = requireOperator(principal);
-      const needId = decodeURIComponent(getNeedApi[1] ?? "");
-      const row = await opts.kernel.store.getNeed(needId);
-      if (!row) {
-        json(res, 404, { error: "Unknown need" });
-        return;
-      }
-      if (row.orgId !== op.orgId) {
-        json(res, 403, { error: "Need is not in this organization" });
-        return;
-      }
-      const found = await opts.kernel.getNeed(needId);
-      if (!found) {
-        json(res, 404, { error: "Unknown need" });
-        return;
-      }
-      json(res, 200, {
-        id: found.need.id,
-        client_name: found.need.client_name,
-        suggested_name: found.need.suggested_name,
-        host: found.need.host,
-        task_description: found.need.task_description,
-        status: found.need.status,
-      });
-      return;
-    }
-    const rotateClient = /^\/api\/clients\/([^/]+)\/rotate$/.exec(path);
-    if (method === "POST" && rotateClient) {
-      const op = requireOperator(principal);
-      const out = await opts.kernel.rotateClient(
-        op.orgId,
-        op.userId,
-        decodeURIComponent(rotateClient[1] ?? ""),
-      );
-      json(res, 200, out);
-      return;
-    }
-    const fulfillNeed = /^\/api\/need-items\/([^/]+)\/fulfill$/.exec(path);
-    if (method === "POST" && fulfillNeed) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const result = await opts.kernel.fulfillNeed({
-        orgId: op.orgId,
-        actor: op.userId,
-        needId: decodeURIComponent(fulfillNeed[1] ?? ""),
-        value: String(body.value ?? ""),
-        name: optional(body.name),
-        allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-        inject: String(body.inject ?? defaultInjectForKind(body.kind === undefined ? "secret" : asKind(body.kind))),
-        kind: body.kind === undefined ? undefined : asKind(body.kind),
-        username: optional(body.username),
-      });
-      json(res, 200, { item: result.item, grant_status: result.grant_status });
-      return;
-    }
-    const itemMeta = /^\/api\/items\/([^/]+)\/meta$/.exec(path);
-    if (method === "POST" && itemMeta) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const item = await opts.kernel.updateItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        itemId: decodeURIComponent(itemMeta[1] ?? ""),
-        name: optional(body.name),
-        kind: body.kind === undefined ? undefined : asKind(body.kind),
-        environment: body.environment === undefined ? undefined : asEnv(body.environment),
-        username: optional(body.username),
-        inject: optional(body.inject),
-        allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
-          ? asHosts(body.allowed_hosts ?? body.allowedHosts)
-          : undefined,
-        value: optional(body.value),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    const itemUpdate = /^\/api\/items\/([^/]+)$/.exec(path);
-    if (method === "POST" && itemUpdate) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const item = await opts.kernel.updateItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        itemId: decodeURIComponent(itemUpdate[1] ?? ""),
-        name: optional(body.name),
-        kind: body.kind === undefined ? undefined : asKind(body.kind),
-        environment: body.environment === undefined ? undefined : asEnv(body.environment),
-        username: optional(body.username),
-        inject: optional(body.inject),
-        allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
-          ? asHosts(body.allowed_hosts ?? body.allowedHosts)
-          : undefined,
-        value: optional(body.value),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    if (method === "POST" && path === "/api/integrations/spotify/start") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const started = await opts.kernel.startSpotifyUserOauth({
-        orgId: op.orgId,
-        userId: op.userId,
-        itemName: String(body.item_name ?? body.itemName ?? ""),
-        environment: asEnv(body.environment),
-        clientId: optional(body.client_id ?? body.clientId),
-        redirectUri: optional(body.redirect_uri ?? body.redirectUri),
-      });
-      json(res, 200, started);
-      return;
-    }
-    const rotate = /^\/api\/items\/([^/]+)\/rotate$/.exec(path);
-    if (method === "POST" && rotate) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const item = await opts.kernel.rotateItem({
-        orgId: op.orgId,
-        actor: op.userId,
-        itemId: decodeURIComponent(rotate[1] ?? ""),
-        value: String(body.value ?? ""),
-      });
-      json(res, 200, { item });
-      return;
-    }
-    const del = /^\/api\/items\/([^/]+)$/.exec(path);
-    if (method === "DELETE" && del) {
-      const op = requireOperator(principal);
-      await opts.kernel.deleteItem(op.orgId, op.userId, decodeURIComponent(del[1] ?? ""));
-      json(res, 200, { ok: true });
-      return;
-    }
-    if (method === "POST" && path === "/api/folders") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const folder = await opts.kernel.createFolder(
-        op.orgId,
-        asEnv(body.environment),
-        String(body.name ?? ""),
-      );
-      json(res, 200, { folder });
+    if (
+      await handleGrantRoutes(req, res, url, method, path, principal, {
+        kernel: opts.kernel,
+        htmlHeaders: () => operatorAppHeaders(newCspNonce()),
+      })
+    ) {
       return;
     }
     if (method === "DELETE" && path === "/api/orgs") {
@@ -639,122 +441,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
       const body = await readJson(req);
       const created = await opts.kernel.createOrg(String(body.name ?? "org"), userId);
       json(res, 200, created);
-      return;
-    }
-    if (method === "POST" && path === "/api/clients/trusted") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const created = await opts.kernel.createTrustedClient({
-        orgId: op.orgId,
-        name: String(body.name ?? "trusted"),
-        environment: asEnv(body.environment),
-      });
-      json(res, 200, { client: { id: created.client.id, name: created.client.name }, token: created.plaintext });
-      return;
-    }
-    if (method === "POST" && path === "/api/clients/model") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const created = await opts.kernel.createModelClient({
-        orgId: op.orgId,
-        name: String(body.name ?? "grok"),
-        environment: asEnv(body.environment),
-        issueBearer: true,
-      });
-      json(res, 200, {
-        client: { id: created.client.id, name: created.client.name, kind: created.client.kind },
-        token: created.plaintext,
-        mcp_url: `${publicUrl.replace(/\/$/, "")}/mcp`,
-      });
-      return;
-    }
-    if (method === "POST" && path === "/api/grants/request") {
-      const actor = requireModelOrOperator(principal);
-      const orgId = actor.orgId;
-      if (!(await limiter.allow(orgId))) throw new HttpError(429, "request_grant rate limit");
-      const body = await readJson(req);
-      const clientId =
-        actor.channel === "model" ? actor.clientId : String(body.client_id ?? body.clientId ?? "");
-      const result = await opts.kernel.requestGrant({
-        orgId,
-        clientId,
-        itemName: String(body.item_name ?? body.itemName ?? ""),
-        environment: asEnv(body.environment),
-        taskId: optional(body.task_id ?? body.taskId),
-        taskDescription: optional(body.task_description ?? body.taskDescription),
-        operatorEmail: optional(body.operator_email ?? body.operatorEmail),
-      });
-      json(res, 200, {
-        grant: result.grant,
-        approval_code: result.code,
-        notify_failed: result.notifyFailed ?? false,
-      });
-      return;
-    }
-    if (method === "GET" && path === "/api/inbox") {
-      const op = requireOperator(principal);
-      const grants = await opts.kernel.inboxGrantCards(op.orgId);
-      const needs = await opts.kernel.listInboxNeeds(op.orgId);
-      const agentpass = agentPassEnabled()
-        ? (await opts.kernel.store.listAgentPasses(op.orgId)).filter((p) => p.status === "pending")
-        : [];
-      json(res, 200, { grants, needs, agentpass });
-      return;
-    }
-    if (method === "GET" && path === "/api/audit") {
-      const op = requireOperator(principal);
-      const clientId = optional(url.searchParams.get("client_id"));
-      const itemName = optional(url.searchParams.get("item_name"));
-      const filter = clientId || itemName ? { clientId, itemName } : undefined;
-      const audit = await opts.kernel.store.listAudit(op.orgId, 200, filter);
-      assertSafePublicObject("listAudit", audit);
-      json(res, 200, { audit });
-      return;
-    }
-    const approve = /^\/api\/grants\/([^/]+)\/approve$/.exec(path);
-    if (method === "POST" && approve) {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const grant = await opts.kernel.approveGrant({
-        orgId: op.orgId,
-        grantId: decodeURIComponent(approve[1] ?? ""),
-        policy: asPolicy(body.policy),
-        confirmName: optional(body.confirm_name ?? body.confirmName),
-        role: op.role,
-        actor: op.userId,
-      });
-      json(res, 200, { grant });
-      return;
-    }
-    const revoke = /^\/api\/grants\/([^/]+)\/revoke$/.exec(path);
-    if (method === "POST" && revoke) {
-      const op = requireOperator(principal);
-      const grant = await opts.kernel.revokeGrant(
-        op.orgId,
-        op.userId,
-        decodeURIComponent(revoke[1] ?? ""),
-      );
-      json(res, 200, { grant });
-      return;
-    }
-    if (method === "POST" && path === "/api/grants/approve-by-code") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const grant = await opts.kernel.approveByCode(
-        op.orgId,
-        op.userId,
-        op.role,
-        String(body.code ?? ""),
-      );
-      json(res, 200, { grant });
-      return;
-    }
-    if ((method === "GET" || method === "POST") && path === "/approve") {
-      const op = requireOperator(principal);
-      const token =
-        url.searchParams.get("token") ?? String((await readJson(req)).token ?? "");
-      const grant = await opts.kernel.approveMagic(op.orgId, op.userId, op.role, token);
-      json(res, 200, { grant });
       return;
     }
     if (method === "POST" && path === "/runtime/resolve") {
@@ -847,177 +533,17 @@ export function createHostedServer(opts: HostedHttpOpts) {
   };
 }
 
-async function mcpModelPrincipal(
-  kernel: HostedKernel,
-  principal: Principal | undefined,
-  body: JsonRpcRequest,
-): Promise<ModelPrincipal> {
-  if (principal?.channel === "model") return principal;
-  if (principal?.channel === "operator") {
-    const environment = envFromMcpRpc(body);
-    const client = await kernel.ensureModelClient({
-      orgId: principal.orgId,
-      name: `stdio:${principal.userId}`,
-      environment,
-      clerkOauthUserId: `stdio:${principal.userId}:${environment}`,
-    });
-    return {
-      channel: "model",
-      orgId: principal.orgId,
-      clientId: client.id,
-      environment,
-    };
-  }
-  throw new HttpError(401, "Model OAuth required");
-}
-
-function envFromMcpRpc(body: JsonRpcRequest): VaultEnvName {
-  const params = body.params;
-  if (!params || typeof params !== "object") return "staging";
-  const args = params.arguments;
-  if (!args || typeof args !== "object" || args === null) return "staging";
-  const env = (args as { environment?: unknown }).environment;
-  return env === "production" ? "production" : "staging";
-}
-
-function asEnv(value: unknown): VaultEnvName {
-  if (value === "production") return "production";
-  return "staging";
-}
-
-function asKind(value: unknown): ItemKind {
-  if (value === "login") return "login";
-  if (value === "client_secret") return "client_secret";
-  return "secret";
-}
-
-function asHosts(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value === "string") return value.split(",").map((s) => s.trim()).filter(Boolean);
-  return [];
-}
-
-function asPolicy(value: unknown) {
-  if (
-    value === "prompt" ||
-    value === "session" ||
-    value === "item_standing" ||
-    value === "folder_standing"
-  ) {
-    return value;
-  }
-  return "prompt" as const;
-}
-
-function optional(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function mcpToolName(body: JsonRpcRequest): string | undefined {
-  const name = body.params?.name;
-  return typeof name === "string" ? name : undefined;
-}
-
-function sseKeepalive(res: ServerResponse): void {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-  });
-  res.write(": connected\n\n");
-  const timer = setInterval(() => {
-    res.write(": keepalive\n\n");
-  }, KEEPALIVE_MS);
-  res.on("close", () => clearInterval(timer));
-}
-
-function json(res: ServerResponse, status: number, body: unknown, skipSecurity = false): void {
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    ...(skipSecurity ? {} : securityHeaders({ html: false })),
-    ...corsHeaders(res),
-  });
-  res.end(JSON.stringify(body));
-}
-
-function sendError(res: ServerResponse, err: unknown, path = ""): void {
-  void captureException(err);
-  const routePath = path || corsPath(res);
-  if (isNeedItemError(err)) {
-    const headers: Record<string, string> = {
-      "content-type": "application/json; charset=utf-8",
-      ...securityHeaders({ html: false }),
-      ...corsHeaders(res),
-    };
-    res.writeHead(err.status, headers);
-    res.end(JSON.stringify(err.payload));
-    return;
-  }
-  if (isHttpError(err)) {
-    const headers: Record<string, string> = {
-      "content-type": "application/json; charset=utf-8",
-      ...securityHeaders({ html: false }),
-      ...corsHeaders(res),
-    };
-    if (err.status === 401) {
-      headers["www-authenticate"] =
-        routePath === "/mcp" || routePath.startsWith("/mcp")
-          ? mcpWwwAuthenticate(corsPublicUrl(res), WWW_AUTHENTICATE_REALM)
-          : `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
-    }
-    res.writeHead(err.status, headers);
-    res.end(JSON.stringify({ error: err.message, ...err.extra }));
-    return;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  json(res, 400, { error: message });
-}
-
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-    size += buf.length;
-    if (size > BODY_CAP) throw new HttpError(413, "Body too large");
-    chunks.push(buf);
-  }
-  if (chunks.length === 0) return {};
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  if (!parsed || typeof parsed !== "object") return {};
-  return parsed as Record<string, unknown>;
+/**
+ * Cookie sessions need the double-submit header on every mutation. Only the email-OTP steps
+ * (no session yet) and POST /approve (protected by its HMAC token; an HTML form from an email
+ * link cannot set headers) are exempt. TOTP and logout are no longer exempt here; their handlers
+ * run first in `handleAuthApi` and enforce CSRF themselves.
+ */
+function cookieCsrfApplies(path: string, principal: Principal | undefined): boolean {
+  if (principal?.channel !== "operator" || !principal.sessionHash) return false;
+  if (path.startsWith("/api/auth/otp/")) return false;
+  if (path === "/approve") return false;
+  return true;
 }
 
 export { KEEPALIVE_MS };
-
-function isPublicHtmlPath(path: string, hosted: boolean): boolean {
-  if (!hosted) return path === "/" || path === "/index.html" || path.startsWith("/collect/");
-  return isPublicSitePath(path) || path === "/console" || path.startsWith("/collect/") ||
-    path === "/sign-in" || path === "/sign-up" || path === "/enroll-totp" || path === "/consent" ||
-    path === "/device";
-}
-
-function robotsTxt(plane: "staging" | "production"): string {
-  if (plane === "staging") {
-    return "User-agent: *\nAllow: /\n";
-  }
-  return [
-    "User-agent: *",
-    "Allow: /",
-    "Allow: /docs",
-    "Disallow: /console",
-    "Disallow: /sign-in",
-    "Disallow: /sign-up",
-    "Disallow: /enroll-totp",
-    "Disallow: /consent",
-    "Disallow: /device",
-    "Disallow: /collect",
-    "Disallow: /api",
-    "Disallow: /mcp",
-    "Disallow: /approve",
-    "Disallow: /runtime",
-    "Disallow: /oauth",
-    "Disallow: /agentpass",
-    "",
-  ].join("\n");
-}

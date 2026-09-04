@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { decrypt, encrypt, generateMasterKey, keyFingerprint, parseMasterKey } from "../src/crypto.ts";
-import { dbPath, getMeta, getSecretEnvelope, listSecretEnvelopes, openDb, setMeta, upsertSecret } from "../src/db.ts";
+import { mkdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { dbPath, getMeta, getSecretEnvelope, listSecretEnvelopes, LOCAL_SCHEMA_VERSION, openDb, setMeta, upsertSecret } from "../src/db.ts";
 import { loopbackBearer, Vault } from "../src/vault.ts";
 import { CANARY, cleanup, makeVault, tempHome } from "./helpers.ts";
 
@@ -169,6 +171,65 @@ test("name-bound AAD rejects a swapped envelope (AC-06)", () => {
     assert.match(loopbackBearer(key), /^[0-9a-f]{64}$/);
   } finally {
     vault.close();
+    cleanup(home);
+  }
+});
+
+test("allowed hosts and inject are stored with the item, kept on rotate, and validated", () => {
+  const { vault, home } = makeVault();
+  try {
+    const stored = vault.setSecret("STRIPE_KEY", CANARY, { allowedHosts: ["API.Stripe.com", "api.stripe.com"], inject: "basic" });
+    assert.deepEqual(stored.allowedHosts, ["api.stripe.com"]);
+    assert.equal(stored.inject, "basic");
+    const plain = vault.setSecret("PLAIN", CANARY);
+    assert.deepEqual(plain.allowedHosts, []);
+    assert.equal(plain.inject, "bearer");
+    const rotated = vault.setSecret("STRIPE_KEY", `${CANARY}-v2`);
+    assert.deepEqual(rotated.allowedHosts, ["api.stripe.com"], "rotate without flags keeps hosts");
+    assert.equal(rotated.inject, "basic");
+    const changed = vault.setSecret("STRIPE_KEY", CANARY, { allowedHosts: [], inject: "header:X-API-Key" });
+    assert.deepEqual(changed.allowedHosts, []);
+    assert.equal(changed.inject, "header:X-API-Key");
+    assert.deepEqual(vault.findItemsByHost("api.stripe.com"), []);
+    vault.setSecret("STRIPE_KEY", CANARY, { allowedHosts: ["api.stripe.com"] });
+    assert.equal(vault.findItemsByHost("api.stripe.com")[0]?.name, "STRIPE_KEY");
+    assert.throws(() => vault.setSecret("BAD", CANARY, { inject: "cookie" }), /inject must be/);
+    assert.throws(() => vault.setSecret("BAD", CANARY, { allowedHosts: ["10.0.0.1"] }), /IP literals/);
+    assert.throws(() => vault.setSecret("BAD", CANARY, { allowedHosts: ["*.example.com"] }), /exact hostname/);
+    assert.equal(vault.getItem("BAD"), undefined);
+    const blob = JSON.stringify(vault.listItems());
+    assert.ok(!blob.includes(CANARY));
+    assert.match(blob, /"allowedHosts":\["api.stripe.com"\]/);
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
+test("a pre-3.8 local database gains the host and inject columns on open", () => {
+  const home = tempHome();
+  mkdirSync(home, { recursive: true });
+  const legacy = new DatabaseSync(dbPath(home));
+  legacy.exec(`
+    CREATE TABLE vault_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE secrets (
+      name TEXT PRIMARY KEY, iv TEXT NOT NULL, ciphertext TEXT NOT NULL, tag TEXT NOT NULL,
+      last4 TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO secrets VALUES ('OLD_KEY', 'iv', 'ct', 'tag', 'c10b', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+  `);
+  legacy.close();
+  const db = openDb(home);
+  try {
+    assert.equal(getMeta(db, "local_schema"), LOCAL_SCHEMA_VERSION);
+    const row = getSecretEnvelope(db, "OLD_KEY");
+    assert.deepEqual(row?.allowedHosts, []);
+    assert.equal(row?.inject, "bearer");
+    const again = openDb(home);
+    assert.equal(getMeta(again, "local_schema"), LOCAL_SCHEMA_VERSION, "second open is a no-op");
+    again.close();
+  } finally {
+    db.close();
     cleanup(home);
   }
 });

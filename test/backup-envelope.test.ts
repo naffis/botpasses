@@ -50,11 +50,14 @@ test("backup object key is stamped and not a pooled host", () => {
   assert.equal(url, "https://acct.r2.cloudflarestorage.com/bkt/botpasses-20260101T000000Z.dump.enc");
 });
 
-test("README does not claim a live nightly dump without the restore runbook", () => {
-  const readme = readFileSync(join(process.cwd(), "README.md"), "utf8");
-  assert.match(readme, /docs\/ops\/restore\.md/);
-  assert.doesNotMatch(
-    readme,
-    /Nightly `backup-prod\.yml` \(`0 4 \* \* \*` UTC\) dumps via `DATABASE_URL_DIRECT`/,
-  );
+test("the envelope is versioned AES-GCM: tampering with any byte fails to open", () => {
+  const key = parseBackupKey(generateMasterKey());
+  const blob = encryptDump(Buffer.from("pg-dump-fixture"), key);
+  assert.ok(blob.length > 16 + 12, "carries a nonce and a tag beyond the ciphertext");
+  for (const offset of [0, Math.floor(blob.length / 2), blob.length - 1]) {
+    const tampered = Buffer.from(blob);
+    tampered[offset] = (tampered[offset] ?? 0) ^ 0x01;
+    assert.throws(() => decryptDump(tampered, key), `byte ${offset}`);
+  }
+  assert.throws(() => decryptDump(blob.subarray(0, blob.length - 1), key), "truncated");
 });

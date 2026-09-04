@@ -422,7 +422,7 @@ N/A — no flags. Plane env plus `VAULT_KEK_REQUIRE_KMS` is the gate.
 ### T-01: Trust model docs and ADRs
 
 - Depends on: nothing
-- Touch: `docs/adr/0003-grant-vault-trust-model.md`, `docs/adr/0004-kms-wrapped-kek.md`, `docs/security/threat-model.md`, `README.md` (threat table + encryption + "what this is not"), `.loadout/tasks/security-hardening/TASK.md` (keep in sync)
+- Touch: `docs/adr/0006-grant-vault-trust-model.md`, `docs/adr/0007-kms-wrapped-kek.md`, `docs/security/threat-model.md`, `README.md` (threat table + encryption + "what this is not"), `.loadout/tasks/security-hardening/TASK.md` (keep in sync)
 - Do: Write ADRs per `writing-an-adr`. Threat model lists actors, assets, and the hierarchy in §7. README states grant-vault and names KMS. Ban the string `zero-knowledge` in `src/` and `README.md` (test). Name expand/contract and `VAULT_KEK_REQUIRE_KMS`.
 - Acceptance: ADR 0003/0004 accepted; README threat table includes "Hosted process / KMS role" sees values at inject; "Botpasses staff without KMS+DB" does not.
 - Verify: `rg -i 'zero-knowledge' README.md src/` empty; files exist.

@@ -1,33 +1,55 @@
 ---
 import "../styles/global.css";
+import fraunces700 from "@fontsource/fraunces/files/fraunces-latin-700-normal.woff2?url";
+import { BRAND_HEX, BRAND_HEX_LIGHT, cssVariables } from "../../../src/brand-visual.ts";
 
 interface Props {
+  /** Bare page title. Base appends " · Botpasses". */
   title: string;
-  description?: string;
+  /** Unique per page. Used for meta description and social cards. */
+  description: string;
   noindex?: boolean;
+  /** Full-width pages (the homepage) opt out of the running-text column. */
+  wide?: boolean;
 }
 
-const {
-  title,
-  description = "Named credentials for agents. The model never sees the value.",
-  noindex = false,
-} = Astro.props;
-const canonical = new URL(Astro.url.pathname, Astro.site);
+const { title, description, noindex = false, wide = false } = Astro.props;
+const SITE_NAME = "Botpasses";
+const fullTitle = `${title} · ${SITE_NAME}`;
+const path = Astro.url.pathname.replace(/\.html$/, "").replace(/^\/index$/, "/");
+const canonical = new URL(path, Astro.site).toString();
+const ogImage = new URL("/og.png", Astro.site).toString();
+const GITHUB = "https://github.com/naffis/botpasses";
+// One token source for site and console: src/brand-visual.ts.
+const tokens = cssVariables().replace(/\s+/g, " ");
 ---
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title}</title>
+    <title>{fullTitle}</title>
     <meta name="description" content={description} />
+    <meta name="theme-color" content={BRAND_HEX.bg} media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content={BRAND_HEX_LIGHT.bg} media="(prefers-color-scheme: light)" />
     {noindex && <meta name="robots" content="noindex, nofollow" />}
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <meta property="og:title" content={title} />
-    <meta property="og:description" content={description} />
-    <meta property="og:image" content={new URL("/og.png", Astro.site)} />
+    <link rel="preload" href={fraunces700} as="font" type="font/woff2" crossorigin />
+    <style set:html={tokens}></style>
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={SITE_NAME} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Botpasses. Named credentials for agents. The model never sees the value." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
     <slot name="head" />
   </head>
   <body>
@@ -36,15 +58,14 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
       <div class="wrap">
         <nav class="primary" aria-label="Primary">
           <a class="brand" href="/"><img src="/favicon.svg" alt="" width="24" height="24" /> Botpasses</a>
-          <a href="/">Home</a>
           <a href="/docs">Docs</a>
           <a href="/security">Security</a>
-          <a href="/design">Design</a>
-          <a href="/sign-in">Sign in</a>
+          <a href={GITHUB} rel="noopener">GitHub</a>
+          <a class="nav-cta" href="/sign-in">Sign in</a>
         </nav>
       </div>
     </header>
-    <div class="wrap">
+    <div class:list={["wrap", { wide }]}>
       <main id="content">
         <slot />
       </main>
@@ -52,10 +73,17 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <footer class="site-footer">
       <div class="wrap">
         <nav aria-label="Footer">
+          <a href="/docs">Docs</a>
+          <a href="/security">Security</a>
+          <a href="/changelog">Changelog</a>
+          <a href="/design">Design</a>
           <a href="/privacy">Privacy</a>
           <a href="/terms">Terms</a>
-          <a href="/changelog">Changelog</a>
+          <a href={GITHUB} rel="noopener">GitHub</a>
+          <a href="mailto:support@botpasses.com">Support</a>
+          <a href="/docs/security/disclosure">Report a vulnerability</a>
         </nav>
+        <p class="footer-note">MIT licensed. Free while in beta. Hosted at botpasses.com.</p>
       </div>
     </footer>
   </body>

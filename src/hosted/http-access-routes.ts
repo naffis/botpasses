@@ -50,7 +50,11 @@ export async function handleAccessApi(
   if (method === "POST" && revSess) {
     const op = requireOperator(principal);
     if (!op.sessionHash) throw new HttpError(400, "cannot_revoke_current");
-    await kernel.revokeSession(op.orgId, op.sessionHash, decodeURIComponent(revSess[1] ?? ""));
+    await kernel.revokeSession(
+      op.orgId,
+      { userId: op.userId, role: op.role, sessionHash: op.sessionHash },
+      decodeURIComponent(revSess[1] ?? ""),
+    );
     json(res, 200, { ok: true });
     return true;
   }
