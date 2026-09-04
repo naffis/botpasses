@@ -27,6 +27,14 @@ test("login username is only for kind login or inject basic", () => {
   assert.equal(needsLoginUsername("client_secret", "client_credentials"), true);
   assert.equal(needsLoginUsername("login", "bearer"), true);
   assert.equal(needsLoginUsername("login", "basic"), true);
+  assert.equal(needsLoginUsername("secret", "sigv4"), true, "SigV4 stores the access key id as the username");
+  assert.equal(needsLoginUsername("secret", "refresh"), true, "refresh items carry the public client id");
+});
+
+test("SigV4 items label the two halves of an AWS key pair", () => {
+  assert.equal(usernameFieldLabel("secret", "sigv4"), "AWS access key ID");
+  assert.equal(valueFieldLabel("secret", "sigv4"), "AWS secret access key");
+  assert.equal(usernameFieldLabel("secret", "basic"), "HTTP Basic username");
 });
 
 test("kind picks the usual inject so operators do not choose an HTTP scheme", () => {

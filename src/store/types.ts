@@ -35,6 +35,8 @@ export type SweepCounts = {
   needItems: number;
   rateHits: number;
   oidcPayloads: number;
+  /** Unaccepted invites more than seven days past `expires_at`. */
+  orgInvites: number;
 };
 
 /**

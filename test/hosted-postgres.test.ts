@@ -120,6 +120,20 @@ test("sweepExpired on Postgres deletes expired OTP, sessions, challenges, needs,
     await store.upsertOidcPayload({ id: `p_old_${tag}`, kind: "AccessToken", payload: "{}", expiresAt: iso(-HOUR) });
     await store.upsertOidcPayload({ id: `p_live_${tag}`, kind: "AccessToken", payload: "{}", expiresAt: iso(HOUR) });
     await store.upsertOidcPayload({ id: `p_forever_${tag}`, kind: "Client", payload: "{}", expiresAt: null });
+    const DAY = 24 * HOUR;
+    const invite = (id: string, expiresAt: string) => ({
+      id,
+      orgId: `org_${tag}`,
+      email: `${id}@example.com`,
+      role: "operator" as const,
+      tokenHash: `hash_${id}`,
+      invitedBy: `u_${tag}`,
+      createdAt: iso(-30 * DAY),
+      expiresAt,
+      acceptedAt: null,
+    });
+    await store.insertInvite(invite(`inv_stale_${tag}`, iso(-8 * DAY)));
+    await store.insertInvite(invite(`inv_recent_${tag}`, iso(-2 * DAY)));
 
     const counts = await store.sweepExpired(now.toISOString());
     assert.ok(counts.emailOtpChallenges >= 1);
@@ -127,6 +141,10 @@ test("sweepExpired on Postgres deletes expired OTP, sessions, challenges, needs,
     assert.ok(counts.approvalChallenges >= 1);
     assert.ok(counts.rateHits >= 1);
     assert.ok(counts.oidcPayloads >= 1);
+    assert.ok(counts.orgInvites >= 1);
+    assert.equal(await store.getInvite(`inv_stale_${tag}`), undefined);
+    assert.ok(await store.getInvite(`inv_recent_${tag}`), "an invite expired this week is kept");
+    await store.deleteInvite(`inv_recent_${tag}`);
     assert.equal((await store.latestEmailOtp(`${tag}@x.io`))?.id, `otp_live_${tag}`);
     assert.equal(await store.getSession(`s_old_${tag}`), undefined);
     assert.ok(await store.getSession(`s_live_${tag}`));

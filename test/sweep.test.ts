@@ -52,6 +52,23 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
     await store.upsertOidcPayload({ id: "p_old", kind: "AccessToken", payload: "{}", expiresAt: iso(-HOUR) });
     await store.upsertOidcPayload({ id: "p_live", kind: "AccessToken", payload: "{}", expiresAt: iso(HOUR) });
     await store.upsertOidcPayload({ id: "p_forever", kind: "Client", payload: "{}", expiresAt: null });
+    // org invites: expired more than a week ago, expired this week, live, and accepted long ago
+    const DAY = 24 * HOUR;
+    const invite = (id: string, expiresAt: string, acceptedAt: string | null = null) => ({
+      id,
+      orgId: "org1",
+      email: `${id}@example.com`,
+      role: "operator" as const,
+      tokenHash: `hash_${id}`,
+      invitedBy: "u1",
+      createdAt: iso(-30 * DAY),
+      expiresAt,
+      acceptedAt,
+    });
+    await store.insertInvite(invite("inv_stale", iso(-8 * DAY)));
+    await store.insertInvite(invite("inv_recent", iso(-2 * DAY)));
+    await store.insertInvite(invite("inv_live", iso(5 * DAY)));
+    await store.insertInvite(invite("inv_accepted", iso(-20 * DAY), iso(-25 * DAY)));
 
     const counts = await store.sweepExpired(NOW);
     assert.deepEqual(counts, {
@@ -61,6 +78,7 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
       needItems: 2,
       rateHits: 1,
       oidcPayloads: 1,
+      orgInvites: 1,
     } satisfies SweepCounts);
 
     assert.equal((await store.latestEmailOtp("a@x.io"))?.id, "otp_live");
@@ -77,10 +95,14 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
     assert.equal(await store.getOidcPayload("p_old", "AccessToken"), undefined);
     assert.ok(await store.getOidcPayload("p_live", "AccessToken"));
     assert.ok(await store.getOidcPayload("p_forever", "Client"));
+    assert.equal(await store.getInvite("inv_stale"), undefined, "an invite a week past expiry is gone");
+    assert.ok(await store.getInvite("inv_recent"), "a recently expired invite stays listed as expired");
+    assert.ok(await store.getInvite("inv_live"));
+    assert.ok(await store.getInvite("inv_accepted"), "accepted invites are membership history");
 
     // second pass is a no-op
     const again = await store.sweepExpired(NOW);
-    assert.deepEqual(Object.values(again), [0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(Object.values(again), [0, 0, 0, 0, 0, 0, 0]);
   } finally {
     await store.close();
     cleanup(home);
@@ -100,6 +122,7 @@ test("scheduleSweeps runs at start, logs counts, swallows errors, and its timer 
     needItems: 3,
     rateHits: 0,
     oidcPayloads: 0,
+    orgInvites: 0,
   };
   const store = {
     sweepExpired: async (nowIso: string): Promise<SweepCounts> => {

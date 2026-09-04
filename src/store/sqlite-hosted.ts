@@ -1209,6 +1209,7 @@ export class SqliteHostedStore implements VaultStore {
   async sweepExpired(nowIso: string): Promise<SweepCounts> {
     const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
     const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
+    const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
     const run = (sql: string, ...params: string[]): number =>
       Number(this.#db.prepare(sql).run(...params).changes);
     return {
@@ -1224,6 +1225,7 @@ export class SqliteHostedStore implements VaultStore {
       ),
       rateHits: run("DELETE FROM rate_hits WHERE window_start < ?", twoHoursAgo),
       oidcPayloads: run("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < ?", nowIso),
+      orgInvites: run("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < ?", weekAgo),
     };
   }
 

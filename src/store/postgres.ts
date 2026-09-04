@@ -163,6 +163,7 @@ export class PostgresStore implements VaultStore {
   async sweepExpired(nowIso: string): Promise<SweepCounts> {
     const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
     const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
+    const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
     const count = async (sql: string, params: string[]): Promise<number> => {
       const res = await this.#pool.query(sql, params);
       return res.rowCount ?? 0;
@@ -181,6 +182,7 @@ export class PostgresStore implements VaultStore {
       oidcPayloads: await count("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < $1", [
         nowIso,
       ]),
+      orgInvites: await count("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < $1", [weekAgo]),
     };
   }
 
