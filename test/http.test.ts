@@ -86,8 +86,35 @@ test("HTTP operator API never returns secret values", async () => {
         params: { name: "list_secrets", arguments: {} },
       }),
     });
-    const mcpBody = await mcp.json();
+    const mcpBody = (await mcp.json()) as { result: { content: { text: string }[] } };
     assert.ok(!JSON.stringify(mcpBody).includes(CANARY));
+    assert.match(mcpBody.result.content[0]?.text ?? "", /"items"/, "list_secrets alias answers with the list_items shape");
+
+    const items = await fetch(`${base}/api/items`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ name: "GITHUB_TOKEN", value: CANARY, allowed_hosts: "api.github.com", inject: "header:Authorization" }),
+    });
+    const itemBody = (await items.json()) as { item: { name: string; allowedHosts: string[]; inject: string } };
+    assert.equal(items.status, 200, JSON.stringify(itemBody));
+    assert.deepEqual(itemBody.item.allowedHosts, ["api.github.com"]);
+    assert.equal(itemBody.item.inject, "header:Authorization");
+    assert.ok(!JSON.stringify(itemBody).includes(CANARY));
+    const listed = (await (await fetch(`${base}/api/items`, { headers: auth })).json()) as { items: { name: string }[] };
+    assert.deepEqual(listed.items.map((i) => i.name), ["GITHUB_TOKEN", "STRIPE_KEY"]);
+    assert.ok(!JSON.stringify(listed).includes(CANARY));
+
+    const tools = (await (
+      await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }),
+      })
+    ).json()) as { result: { tools: { name: string }[] } };
+    assert.deepEqual(
+      tools.result.tools.map((t) => t.name).sort(),
+      ["find_items", "http_request", "list_grants", "list_items", "request_grant"],
+    );
 
     const audit = (await (await fetch(`${base}/api/audit`, { headers: auth })).json()) as {
       audit: { action: string }[];
@@ -112,6 +139,8 @@ test("HTTP operator API never returns secret values", async () => {
     assert.equal(initBody.result?.serverInfo?.name, "botpasses");
     assert.match(initBody.result?.instructions ?? "", /Botpasses/);
     assert.match(initBody.result?.instructions ?? "", /Do not wait for the operator to name Botpasses/);
+    assert.match(initBody.result?.instructions ?? "", /call http_request in the same turn/);
+    assert.match(initBody.result?.instructions ?? "", /There is no get_secret/);
     assert.doesNotMatch(initBody.result?.instructions ?? "", /Agent grant vault/);
   } finally {
     await http.close();

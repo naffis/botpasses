@@ -377,3 +377,38 @@ ALTER TABLE policies ADD COLUMN IF NOT EXISTS max_calls INTEGER;
 ALTER TABLE policies ADD COLUMN IF NOT EXISTS calls_used INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE policies ADD COLUMN IF NOT EXISTS expires_at TEXT;
 `;
+
+/**
+ * Team (task 3.7): email invites. `token_hash` is sha256 of the 32-byte token in the accept
+ * link; the token itself is never stored. Expand-only; mirrored by migrations/009_team_invites.sql.
+ */
+export const HOSTED_SCHEMA_TEAM = `
+CREATE TABLE IF NOT EXISTS org_invites (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  invited_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  accepted_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS org_invites_token ON org_invites (token_hash);
+CREATE INDEX IF NOT EXISTS org_invites_org ON org_invites (org_id, accepted_at);
+`;
+
+/**
+ * `operator_sessions.active_org_id`: the org the session chose in the switcher; null means the
+ * user's first membership. `org_members.joined_at` is null for rows written before this column.
+ * SQLite splits on ";" and tolerates "duplicate column".
+ */
+export const HOSTED_SCHEMA_TEAM_ALTER_SQLITE = `
+ALTER TABLE operator_sessions ADD COLUMN active_org_id TEXT;
+ALTER TABLE org_members ADD COLUMN joined_at TEXT;
+`;
+
+export const HOSTED_SCHEMA_TEAM_ALTER_PG = `
+ALTER TABLE operator_sessions ADD COLUMN IF NOT EXISTS active_org_id TEXT;
+ALTER TABLE org_members ADD COLUMN IF NOT EXISTS joined_at TEXT;
+`;

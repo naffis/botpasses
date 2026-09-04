@@ -620,10 +620,10 @@ test("http.request with host requests a grant when the item exists but is not gr
   }
 });
 
-test("local MCP miss is need_item without collect_url (AC-10)", () => {
+test("local MCP miss is need_item without collect_url (AC-10)", async () => {
   const { vault, home } = makeVault();
   try {
-    const result = callMcpTool(vault, "request_grant", {
+    const result = await callMcpTool(vault, "request_grant", {
       secret_name: "MISSING_KEY",
       agent_id: "invoicer",
       tool_id: "stripe",

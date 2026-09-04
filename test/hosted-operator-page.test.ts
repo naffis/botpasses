@@ -91,6 +91,37 @@ test("staging plane shows a small label and defaults store and issue to staging"
   assert.equal(defaultEnvironmentForPlane("production"), "production");
 });
 
+test("team panel, org switcher, and plan card are in the shell and the bundle drives them", () => {
+  const html = hostedOperatorHtml();
+  assert.match(html, /<section class="panel" data-panel="team"/);
+  assert.match(html, /href="#account\/team" data-nav="team" data-testid="nav-team">Team</);
+  assert.match(html, /<label id="org-switch" class="org-switch" hidden>[^]*?<select id="org-switcher" data-testid="org-switcher">/);
+  assert.match(html, /id="team-error" class="error-box" role="alert" hidden/);
+  assert.match(html, /id="team-invite-card" data-testid="team-invite-card" hidden/);
+  assert.match(html, /<form id="invite" class="inline-form" data-testid="invite-form">/);
+  assert.match(html, /<input id="invite-email" name="email" type="email"/);
+  assert.match(html, /<select id="invite-role" name="role"><option value="operator">operator<\/option><option value="owner">owner<\/option><\/select>/);
+  assert.match(html, /id="invite-result" hidden/);
+  assert.match(html, /<code id="invite-link"><\/code> <button type="button" id="invite-copy"/);
+  assert.match(html, /id="members-list" class="access-list" data-testid="members-list"/);
+  assert.match(html, /id="invites-list" class="access-list" data-testid="invites-list"/);
+  // Plan card sits inside the Account panel, after its error box.
+  const account = /<section class="panel" data-panel="account"[^]*?<\/section>/.exec(html)?.[0] ?? "";
+  assert.match(account, /data-testid="account-error"><\/div>\s*<div class="card" id="plan-card" data-testid="plan-card">/);
+  for (const kind of ["credentials", "agents", "members", "calls"]) assert.match(account, new RegExp(`<dd id="plan-${kind}">Loading</dd>`));
+  assert.doesNotMatch(html, /—/);
+  assert.match(CONSOLE_JS, /api\("\/api\/members"\)/);
+  assert.match(CONSOLE_JS, /\/api\/members\/invite/);
+  assert.match(CONSOLE_JS, /\/api\/invites\/\$\{encodeURIComponent\(id\)\}/);
+  assert.match(CONSOLE_JS, /\/role`/);
+  assert.match(CONSOLE_JS, /api\("\/api\/plan"\)/);
+  assert.match(CONSOLE_JS, /api\("\/api\/orgs"\)/);
+  assert.match(CONSOLE_JS, /"\/api\/session\/org"/);
+  assert.match(CONSOLE_JS, /Remove member/);
+  assert.match(CONSOLE_JS, /Cancel invite/);
+  assert.match(CONSOLE_JS, /Invite link copied/);
+});
+
 test("console css: two themes, action accent, warn and success surfaces, fixed table, title size", () => {
   assert.match(CONSOLE_CSS, /\.app-shell/);
   assert.match(CONSOLE_CSS, /ibm-plex-sans-400\.woff2/);

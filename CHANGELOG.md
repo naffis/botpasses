@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Team: owners invite by email (7-day link, also copyable from the console), set roles, and remove members; the last owner cannot be demoted or removed. Invited operators accept at `/accept-invite` with the matching email. Sessions carry an active org and the rail shows a switcher when the user belongs to more than one. New Team panel under Account. Migration 009.
+- Plan limits: free tier of 25 credentials, 10 agents, 3 members, 5000 `http_request` calls per month (`VAULT_PLAN_LIMITS_JSON` overrides); exceeding one is `402 plan_limit`. `GET /api/plan` and the Account panel show usage.
+- Local plane: `vault mcp` exposes the hosted tool names and shapes, including `http_request` over the shared connector with per-item hosts and inject mode (`vault set --host … --inject …`); the agent id comes from the MCP client name. The local console no longer uses `innerHTML`.
 - Added: a provider registry (Spotify, GitHub, Google, Slack, Stripe Connect) drives OAuth token minting and refresh; every vendor hostname and rule left `connector.ts` and `mcp-http.ts`. Refresh sends `refresh_token` and `client_id` in the form body (RFC 6749 section 6) and the user-token path forwards the request body.
 - Added: inject modes `query:<param>`, `cookie:<name>`, `hmac:stripe_sig|slack_sig|github_sig`, and `sigv4`; unknown modes are refused at store time (400) and at send time (500 `inject_unsupported`) instead of falling through to Bearer.
 - Added: `http_request` returns `origin_status` and allowlisted `origin_headers`, accepts `timeout_ms` (1 to 30 s) and `dry_run`. `status` on origin results is deprecated in favour of `origin_status`. Out-of-scope calls steer the model to `request_grant` with the call it needs. MCP instructions no longer name vendors except the providers line.

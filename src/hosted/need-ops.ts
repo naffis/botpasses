@@ -36,6 +36,7 @@ export type NeedHost = {
   dekForOrg: (orgId: string) => Promise<Buffer>;
   clientInOrg: (orgId: string, clientId: string) => Promise<ClientRecord>;
   assertHosts: (hosts: string[]) => void;
+  assertPlanLimit: (orgId: string, kind: "credentials") => Promise<void>;
   assertPlane: (name: VaultEnvName) => void;
   standingFor: (
     orgId: string,
@@ -289,6 +290,7 @@ export async function fulfillNeed(
   if (need.status !== "pending") throw new HttpError(409, "Need is not pending");
   if (need.expiresAt < nowIso(host.now())) throw new HttpError(410, "Need expired");
   host.assertHosts(input.allowedHosts);
+  await host.assertPlanLimit(input.orgId, "credentials");
   const kind = input.kind ?? "secret";
   const rawName = (input.name ?? need.suggestedName).trim();
   let name: string;

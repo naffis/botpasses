@@ -238,6 +238,7 @@ export async function runHttpRequest(
     throw new HttpError(400, "http_request requires item_name or host");
   }
   const requestHost = target.host ?? (await hostForItem(deps, itemName, environment)) ?? "";
+  await deps.kernel.assertCallBudget(deps.principal.orgId);
   const prepared = await prepareOrGrant(deps, {
     itemName,
     environment,

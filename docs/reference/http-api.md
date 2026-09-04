@@ -148,6 +148,26 @@ No `/api/items`, OAuth, or Access panel on the local plane.
 
 `site/dist` (Astro) is served by [src/hosted/static-site.ts](../../src/hosted/static-site.ts) for `/`, `/design`, `/security`, `/privacy`, `/terms`, `/changelog`, `/docs/**`, `/_astro/**`, `/pagefind/**`, `/sitemap-*.xml`, `/favicon.svg`, `/og.png`, `/llms.txt`, and `/.well-known/security.txt`. `*.html` and trailing-slash forms 308 to the canonical URL (`/console/` is handled by the router, not here). Unknown paths under those prefixes return the Astro `404.html` with status 404. HTML is `no-cache` from the static layer (the router's `no-store` wins today), `_astro/*` is `public, max-age=31536000, immutable`, other assets `public, max-age=3600`.
 
+
+## Team, org switcher, plan
+
+Owner-only mutations; every member may read. All need a ready session plus `X-CSRF-Token`.
+
+| Method | Path | Body / query | Returns |
+| --- | --- | --- | --- |
+| GET | `/api/members` | | `{ members: [{ user_id, email, role, joined_at }], invites: [{ id, email, role, created_at, expires_at, expired }] }` |
+| POST | `/api/members/invite` | `{ email, role }` | `{ invite, accept_url }` (link also emailed when Resend is configured; 7-day expiry; 409 for a pending invite or existing member; 402 `plan_limit` kind `members`) |
+| POST | `/api/members/:userId/role` | `{ role }` | The last owner cannot be demoted (400) |
+| DELETE | `/api/members/:userId` | | The last owner cannot be removed (400) |
+| DELETE | `/api/invites/:id` | | Cancels a pending invite |
+| GET | `/accept-invite?token=` | | HTML: sign in first if needed; wrong account offers sign-out; accept form posts with CSRF |
+| POST | `/api/invites/accept` | `{ token }` | Joins the caller (email must match; 403 `invite_email_mismatch`; 404 bad token; 410 used or expired) and pins the joined org on the session |
+| GET | `/api/orgs` | | Orgs the caller belongs to, with roles |
+| POST | `/api/session/org` | `{ org_id }` | Pins the active org on this session (membership checked) |
+| GET | `/api/plan` | | `{ limits, usage }` for credentials, agents, members, calls (this UTC month) |
+
+Plan limits: free tier is 25 credentials, 10 agents, 3 members, 5000 `http_request` calls per month; `VAULT_PLAN_LIMITS_JSON` overrides. Exceeding one is `402 { error: "plan_limit", kind, limit }`. Audit actions: `member_invited`, `member_joined`, `member_removed`, `member_role`.
+
 ## Errors operators see
 
 Inbox grant cards (`GET /api/inbox`) carry `requested_scope`, `grant_scope`, `allowed_hosts`, `expires_at`; `GET /api/access` grants carry `policy`, `expires_at`, `grant_scope`. Audit actions: `scope_denied`, `grant_exhausted`, `client_environment`, `client_reactivated`, `inject_denied`, `inject_failed`.

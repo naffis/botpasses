@@ -43,3 +43,34 @@ export function createResendSender(
     }
   };
 }
+
+function escapeEmailHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/**
+ * Team invite (task 3.7). Every interpolation is escaped: org names and inviter emails are user
+ * input. The link carries the one-time token and expires after seven days.
+ */
+export function inviteEmail(input: {
+  orgName: string;
+  inviterEmail: string;
+  role: string;
+  acceptUrl: string;
+}): { subject: string; html: string; text: string } {
+  const org = escapeEmailHtml(input.orgName);
+  const inviter = escapeEmailHtml(input.inviterEmail);
+  const role = escapeEmailHtml(input.role);
+  const url = escapeEmailHtml(input.acceptUrl);
+  return {
+    subject: `You are invited to ${input.orgName} on Botpasses`,
+    html:
+      `<p>${inviter} invited you to join <strong>${org}</strong> on Botpasses as ${role}.</p>` +
+      `<p><a href="${url}">Accept the invite</a></p>` +
+      `<p>The link works for seven days. Sign in with this email address first if you are not signed in.</p>`,
+    text:
+      `${input.inviterEmail} invited you to join ${input.orgName} on Botpasses as ${input.role}.\n` +
+      `Accept: ${input.acceptUrl}\n` +
+      `The link works for seven days. Sign in with this email address first if you are not signed in.\n`,
+  };
+}

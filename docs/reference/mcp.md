@@ -121,13 +121,7 @@ Origin 4xx: "The request was rejected by the API; change the path, query, or bod
 
 ## Local tools
 
-| Tool | Arguments | Returns |
-| --- | --- | --- |
-| `list_secrets` | none | `{ secrets: [{ name, last4, created_at, updated_at }] }` |
-| `request_grant` | `secret_name`, `agent_id`, `tool_id`, optional `scope` (`once` \| `session`) | Public grant, or `need_item` with a store message (no `collect_url`) |
-| `list_grants` | optional `agent_id`, `tool_id` | `{ grants }` with secret_name, agent_id, tool_id, scope, status, timestamps |
-
-Local inject is `vault run`, not `http_request`. Local `need_item` is MCP `isError`.
+`vault mcp` (stdio, SQLite) exposes the same five tools as hosted: `list_items`, `find_items`, `request_grant`, `list_grants`, `http_request`, with the same argument shapes. `list_secrets` and `http.request` are accepted aliases for one release. The agent id comes from the MCP client's `initialize` `clientInfo.name`. `http_request` requires an active grant for `(item, agent, http_request)` (`vault grant --secret NAME --agent A --tool http_request`), decrypts in-process, and calls the shared connector; the result is redacted like hosted. Items get hosts and an inject mode with `vault set NAME --host api.example.com --inject bearer`. A miss returns `need_item` with a message to run `vault set`; there is no `collect_url` locally.
 
 ## Auth and isolation
 

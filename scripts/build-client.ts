@@ -28,6 +28,7 @@ export const CLIENT_BUNDLES: Record<string, string[]> = {
     "src/hosted/client/credentials.ts",
     "src/hosted/client/access.ts",
     "src/hosted/client/account.ts",
+    "src/hosted/client/team.ts",
     "src/hosted/client/console.ts",
   ],
   COLLECT_BUNDLE_JS: [

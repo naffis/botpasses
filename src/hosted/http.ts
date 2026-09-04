@@ -26,6 +26,7 @@ import { handleAccessApi } from "./http-access-routes.ts";
 import { handleClientRoutes } from "./http-client-routes.ts";
 import { handleGrantRoutes } from "./http-grant-routes.ts";
 import { handleItemRoutes } from "./http-item-routes.ts";
+import { handleMemberRoutes } from "./http-member-routes.ts";
 import { handleMcpPost, KEEPALIVE_MS, sseKeepalive } from "./http-mcp-routes.ts";
 import { asEnv, isLoopbackHost, json, optional, originIsLoopback, readJson, sendError } from "./http-util.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
@@ -422,6 +423,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
     if (await handleItemRoutes(req, res, url, method, path, principal, opts.kernel)) return;
     if (await handleClientRoutes(req, res, method, path, principal, opts.kernel, publicUrl)) return;
+    if (
+      await handleMemberRoutes(req, res, url, method, path, principal, {
+        kernel: opts.kernel,
+        publicUrl,
+        htmlHeaders: (nonce) => operatorAppHeaders(nonce),
+        newCspNonce,
+      })
+    ) {
+      return;
+    }
     if (
       await handleGrantRoutes(req, res, url, method, path, principal, {
         kernel: opts.kernel,

@@ -1,7 +1,11 @@
 /** MCP initialize instructions and tool copy. Loaded into the model client on every session. */
 
-export const MCP_INSTRUCTIONS_LOCAL =
-  "Botpasses holds named credentials. When a tool needs a secret, call request_grant. Do not wait for the operator to name Botpasses. Tools return names and grant status only. Secret values are injected into tool processes, never into this conversation. Never ask anyone to paste a secret here.";
+export const MCP_INSTRUCTIONS_LOCAL = [
+  "Botpasses holds named credentials on this machine. You never see secret values.",
+  "When the user wants data from an API, call http_request in the same turn with host (or item_name), method, and path. Do not wait for the operator to name Botpasses. Do not list_items first.",
+  "Botpasses finds the credential and attaches it. If the result is need_item, tell the operator to run the vault set command in the message. If the result has status pending, tell them to approve with the vault grant command in the message (or the local console), then retry http_request with retry.",
+  "Tools return names, last-4, and grant status only. Secret values are injected into tool processes, never into this conversation. There is no get_secret. Never ask anyone to paste a secret here.",
+].join(" ");
 
 export const MCP_INSTRUCTIONS_HOSTED = [
   "You can call third-party APIs through Botpasses. The user does not need to say Botpasses or name a tool. You never see secret values.",

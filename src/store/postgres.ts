@@ -27,6 +27,8 @@ import {
   HOSTED_SCHEMA_OAUTH_ALTER_PG,
   HOSTED_SCHEMA_SCOPE_ALTER_PG,
   HOSTED_SCHEMA_SQLITE,
+  HOSTED_SCHEMA_TEAM,
+  HOSTED_SCHEMA_TEAM_ALTER_PG,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
@@ -39,6 +41,8 @@ import {
   scopeListJson,
   type AuditListFilter,
   type IdentityKeyRecord,
+  type InviteRecord,
+  type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
   type SweepCounts,
@@ -117,6 +121,8 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_OAUTH_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_SCOPE_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
+    await this.#pool.query(HOSTED_SCHEMA_TEAM);
+    await this.#pool.query(HOSTED_SCHEMA_TEAM_ALTER_PG);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
@@ -239,6 +245,7 @@ export class PostgresStore implements VaultStore {
         [orgId],
       );
       await client.query("DELETE FROM vaults WHERE org_id = $1", [orgId]);
+      await client.query("DELETE FROM org_invites WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM org_members WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM orgs WHERE id = $1", [orgId]);
       await client.query("COMMIT");
@@ -250,11 +257,12 @@ export class PostgresStore implements VaultStore {
     }
   }
 
-  async insertMember(row: MemberRecord): Promise<void> {
-    await this.#pool.query("INSERT INTO org_members (org_id, user_id, role) VALUES ($1,$2,$3)", [
+  async insertMember(row: MemberRecord & { joinedAt?: string }): Promise<void> {
+    await this.#pool.query("INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES ($1,$2,$3,$4)", [
       row.orgId,
       row.userId,
       row.role,
+      row.joinedAt ?? null,
     ]);
   }
 
@@ -921,16 +929,9 @@ export class PostgresStore implements VaultStore {
     });
   }
 
-  async listMembers(orgId: string): Promise<MemberRecord[]> {
-    const r = await this.#pool.query("SELECT * FROM org_members WHERE org_id = $1", [orgId]);
-    return r.rows.map((row) => {
-      const rec = asRecord(row);
-      return {
-        orgId: String(rec.org_id),
-        userId: String(rec.user_id),
-        role: rec.role as MemberRecord["role"],
-      };
-    });
+  async listMembers(orgId: string): Promise<MemberRow[]> {
+    const r = await this.#pool.query("SELECT * FROM org_members WHERE org_id = $1 ORDER BY joined_at, user_id", [orgId]);
+    return r.rows.map((row) => mapMemberPg(asRecord(row)));
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
@@ -1072,8 +1073,8 @@ export class PostgresStore implements VaultStore {
 
   async insertSession(row: OperatorSessionRow): Promise<void> {
     await this.#pool.query(
-      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at) VALUES ($1,$2,$3,$4,$5,$6)",
-      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt],
+      "INSERT INTO operator_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, mfa_at, active_org_id) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+      [row.idHash, row.userId, row.createdAt, row.lastSeenAt, row.expiresAt, row.mfaAt, row.activeOrgId ?? null],
     );
   }
 
@@ -1265,6 +1266,103 @@ export class PostgresStore implements VaultStore {
     );
     return r.rowCount ?? 0;
   }
+
+  /* ---- team (3.7) and plan limits (3.9) ---- */
+
+  async removeMember(orgId: string, userId: string): Promise<void> {
+    await this.#pool.query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2", [orgId, userId]);
+    await this.#pool.query(
+      "UPDATE operator_sessions SET active_org_id = NULL WHERE user_id = $1 AND active_org_id = $2",
+      [userId, orgId],
+    );
+  }
+
+  async updateMemberRole(orgId: string, userId: string, role: MemberRow["role"]): Promise<void> {
+    await this.#pool.query("UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3", [role, orgId, userId]);
+  }
+
+  async insertInvite(row: InviteRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [row.id, row.orgId, row.email, row.role, row.tokenHash, row.invitedBy, row.createdAt, row.expiresAt, row.acceptedAt],
+    );
+  }
+
+  async getInvite(id: string): Promise<InviteRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM org_invites WHERE id = $1", [id]);
+    return r.rows[0] ? mapInvitePg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async getInviteByTokenHash(tokenHash: string): Promise<InviteRecord | undefined> {
+    const r = await this.#pool.query("SELECT * FROM org_invites WHERE token_hash = $1", [tokenHash]);
+    return r.rows[0] ? mapInvitePg(asRecord(r.rows[0])) : undefined;
+  }
+
+  async listInvites(orgId: string): Promise<InviteRecord[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM org_invites WHERE org_id = $1 AND accepted_at IS NULL ORDER BY created_at DESC",
+      [orgId],
+    );
+    return r.rows.map((row) => mapInvitePg(asRecord(row)));
+  }
+
+  async acceptInvite(id: string, acceptedAt: string): Promise<void> {
+    await this.#pool.query("UPDATE org_invites SET accepted_at = $1 WHERE id = $2 AND accepted_at IS NULL", [
+      acceptedAt,
+      id,
+    ]);
+  }
+
+  async deleteInvite(id: string): Promise<void> {
+    await this.#pool.query("DELETE FROM org_invites WHERE id = $1", [id]);
+  }
+
+  async setSessionActiveOrg(idHash: string, orgId: string | null): Promise<void> {
+    await this.#pool.query("UPDATE operator_sessions SET active_org_id = $1 WHERE id_hash = $2", [orgId, idHash]);
+  }
+
+  async countAuditSince(orgId: string, action: string, sinceIso: string): Promise<number> {
+    const r = await this.#pool.query(
+      "SELECT COUNT(*)::int AS n FROM audit WHERE org_id = $1 AND action = $2 AND at >= $3",
+      [orgId, action, sinceIso],
+    );
+    return Number(asRecord(r.rows[0] ?? { n: 0 }).n);
+  }
+
+  async countItemsForOrg(orgId: string): Promise<number> {
+    const r = await this.#pool.query(
+      `SELECT COUNT(*)::int AS n FROM items i
+       JOIN environments e ON e.id = i.environment_id
+       JOIN vaults v ON v.id = e.vault_id
+       WHERE v.org_id = $1`,
+      [orgId],
+    );
+    return Number(asRecord(r.rows[0] ?? { n: 0 }).n);
+  }
+}
+
+function mapInvitePg(rec: Record<string, unknown>): InviteRecord {
+  return {
+    id: String(rec.id),
+    orgId: String(rec.org_id),
+    email: String(rec.email),
+    role: rec.role as InviteRecord["role"],
+    tokenHash: String(rec.token_hash),
+    invitedBy: String(rec.invited_by),
+    createdAt: String(rec.created_at),
+    expiresAt: String(rec.expires_at),
+    acceptedAt: rec.accepted_at == null ? null : String(rec.accepted_at),
+  };
+}
+
+function mapMemberPg(rec: Record<string, unknown>): MemberRow {
+  return {
+    orgId: String(rec.org_id),
+    userId: String(rec.user_id),
+    role: rec.role as MemberRow["role"],
+    joinedAt: rec.joined_at == null ? null : String(rec.joined_at),
+  };
 }
 
 function mapOidcRowPg(rec: Record<string, unknown>): OidcPayloadRow {
@@ -1427,6 +1525,7 @@ function mapSessPg(rec: Record<string, unknown>): OperatorSessionRow {
     lastSeenAt: String(rec.last_seen_at),
     expiresAt: String(rec.expires_at),
     mfaAt: rec.mfa_at == null ? null : String(rec.mfa_at),
+    activeOrgId: rec.active_org_id == null ? null : String(rec.active_org_id),
   };
 }
 

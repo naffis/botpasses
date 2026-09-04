@@ -68,7 +68,7 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
       };
       return pending;
     }
-    const membership = await kernel.ensureVaultOrgForUser(loaded.user.id);
+    const membership = await kernel.ensureVaultOrgForUser(loaded.user.id, loaded.session.activeOrgId ?? null);
     const prior = await kernel.store.getAccessEventByJti(loaded.session.idHash);
     if (!prior) {
       await kernel.recordAccessEvent({

@@ -57,8 +57,35 @@ import {
   type NeedHost,
 } from "./need-ops.ts";
 import { clientUsage, grantUsage, sessionUsage } from "./access-usage.ts";
+import {
+  acceptInvite,
+  cancelInvite,
+  inviteMember,
+  listOrgsForUser,
+  listTeam,
+  previewInvite,
+  removeMember,
+  seatsInUse,
+  setActiveOrg,
+  updateMemberRole,
+  type InvitePreview,
+  type MemberHost,
+  type OrgSummary,
+  type PendingInvite,
+  type TeamMember,
+  type TeamSnapshot,
+} from "./kernel-members.ts";
 import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import { logVaultEvent } from "./observe.ts";
+import {
+  assertWithinLimit,
+  monthStartIso,
+  planLimits,
+  type PlanLimitKind,
+  type PlanLimits,
+  type PlanReport,
+  type PlanUsage,
+} from "./plan-limits.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
 import { IdentityKeyring, type IdentityRotateResult } from "./identity-keys.ts";
@@ -92,6 +119,8 @@ export type HostedKernelOpts = {
   approvalHmac?: Buffer;
   deployPlane?: "staging" | "production";
   limiter?: OrgRateLimiter;
+  /** Plan limits (3.9). Defaults to the free tier with the `VAULT_PLAN_LIMITS_JSON` override. */
+  planLimits?: PlanLimits;
 };
 
 function nowIso(d: Date): string {
@@ -130,6 +159,7 @@ export class HostedKernel {
   readonly approvalHmac: Buffer | undefined;
   readonly deployPlane: "staging" | "production";
   readonly limiter: OrgRateLimiter;
+  readonly planLimits: PlanLimits;
 
   constructor(opts: HostedKernelOpts) {
     this.store = opts.store;
@@ -137,6 +167,7 @@ export class HostedKernel {
     this.now = opts.now ?? (() => new Date());
     this.sendEmail = opts.sendEmail;
     this.approvalHmac = opts.approvalHmac;
+    this.planLimits = opts.planLimits ?? planLimits();
     this.deployPlane = opts.deployPlane ?? "production";
     this.publicUrl = resolvePublicOrigin(opts.publicUrl ?? "http://127.0.0.1:8788", {
       plane: this.deployPlane,
@@ -180,7 +211,7 @@ export class HostedKernel {
       wrappedDekTag: wrapped.tag,
       createdAt: at,
     });
-    await this.store.insertMember({ orgId, userId, role: "owner" });
+    await this.store.insertMember({ orgId, userId, role: "owner", joinedAt: at });
     const vaultId = `vlt_${randomUUID()}`;
     await this.store.insertVault({ id: vaultId, orgId, name: "default" });
     await this.store.insertEnvironment({
@@ -196,7 +227,113 @@ export class HostedKernel {
   }
 
   async addMember(orgId: string, userId: string, role: MemberRole): Promise<void> {
-    await this.store.insertMember({ orgId, userId, role });
+    await this.store.insertMember({ orgId, userId, role, joinedAt: nowIso(this.now()) });
+  }
+
+  /* ---- team (3.7) ---- */
+
+  #memberHost(): MemberHost {
+    return {
+      store: this.store,
+      now: this.now,
+      publicUrl: this.publicUrl,
+      planLimits: this.planLimits,
+      sendEmail: this.sendEmail,
+      audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),
+    };
+  }
+
+  async listTeam(orgId: string): Promise<TeamSnapshot> {
+    const snap = await listTeam(this.#memberHost(), orgId);
+    assertSafePublicObject("listTeam", snap);
+    return snap;
+  }
+
+  async inviteMember(input: {
+    orgId: string;
+    actorUserId: string;
+    actorRole: MemberRole;
+    email: string;
+    role: MemberRole;
+  }): Promise<{ invite: PendingInvite; accept_url: string; email_sent: boolean }> {
+    return inviteMember(this.#memberHost(), input);
+  }
+
+  async cancelInvite(input: { orgId: string; actorUserId: string; actorRole: MemberRole; inviteId: string }): Promise<void> {
+    return cancelInvite(this.#memberHost(), input);
+  }
+
+  async updateMemberRole(input: {
+    orgId: string;
+    actorUserId: string;
+    actorRole: MemberRole;
+    userId: string;
+    role: MemberRole;
+  }): Promise<TeamMember> {
+    return updateMemberRole(this.#memberHost(), input);
+  }
+
+  async removeMember(input: { orgId: string; actorUserId: string; actorRole: MemberRole; userId: string }): Promise<void> {
+    return removeMember(this.#memberHost(), input);
+  }
+
+  async previewInvite(token: string): Promise<InvitePreview> {
+    return previewInvite(this.#memberHost(), token);
+  }
+
+  async acceptInvite(input: { userId: string; email: string; token: string }): Promise<{ org_id: string; org_name: string; role: MemberRole }> {
+    return acceptInvite(this.#memberHost(), input);
+  }
+
+  async listOrgsForUser(userId: string, activeOrgId: string): Promise<OrgSummary[]> {
+    return listOrgsForUser(this.#memberHost(), userId, activeOrgId);
+  }
+
+  async setActiveOrg(input: { userId: string; sessionHash: string; orgId: string }): Promise<OrgSummary> {
+    return setActiveOrg(this.#memberHost(), input);
+  }
+
+  /* ---- plan limits (3.9) ---- */
+
+  /** Current usage for one limit kind. `credentials` spans every environment, not just the plane. */
+  async planUsageFor(orgId: string, kind: PlanLimitKind): Promise<number> {
+    switch (kind) {
+      case "credentials":
+        return this.store.countItemsForOrg(orgId);
+      case "agents":
+        return (await this.store.listClients(orgId)).filter((c) => !c.revokedAt).length;
+      case "members":
+        return seatsInUse(this.#memberHost(), orgId);
+      case "calls":
+        return this.store.countAuditSince(orgId, "inject", monthStartIso(this.now()));
+      default: {
+        const exhaustive: never = kind;
+        throw new Error(`Unhandled plan limit kind: ${String(exhaustive)}`);
+      }
+    }
+  }
+
+  /** 402 `plan_limit` when one more `kind` would exceed the org's plan. */
+  async assertPlanLimit(orgId: string, kind: PlanLimitKind): Promise<void> {
+    assertWithinLimit(kind, await this.planUsageFor(orgId, kind), this.planLimits);
+  }
+
+  /**
+   * Monthly `http_request` budget. Not called by the connector yet (that wiring belongs to the
+   * connector unit); exposed so `runHttpRequest` can call it before `prepareConnector`.
+   */
+  async assertCallBudget(orgId: string): Promise<void> {
+    await this.assertPlanLimit(orgId, "calls");
+  }
+
+  async planReport(orgId: string): Promise<PlanReport> {
+    const usage: PlanUsage = {
+      credentials: await this.planUsageFor(orgId, "credentials"),
+      agents: await this.planUsageFor(orgId, "agents"),
+      members: await this.planUsageFor(orgId, "members"),
+      calls: await this.planUsageFor(orgId, "calls"),
+    };
+    return { plan: "free", limits: this.planLimits, usage, period_start: monthStartIso(this.now()) };
   }
 
   async createFolder(orgId: string, environment: VaultEnvName, name: string): Promise<{ id: string; name: string }> {
@@ -321,6 +458,7 @@ export class HostedKernel {
     const env = await this.envFor(input.orgId, input.environment);
     const existing = await this.store.getItemByName(env.id, name);
     if (existing) throw new HttpError(409, "Item name already exists in this environment");
+    await this.assertPlanLimit(input.orgId, "credentials");
     let folderId: string | null = null;
     if (input.folderName) {
       const folder = await this.store.getFolderByName(env.id, input.folderName);
@@ -450,6 +588,7 @@ export class HostedKernel {
       dekForOrg: (orgId) => this.dekForOrg(orgId),
       clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
       assertHosts: (hosts) => this.#assertHosts(hosts),
+      assertPlanLimit: (orgId, kind) => this.assertPlanLimit(orgId, kind),
       assertPlane: (name) => this.#assertPlane(name),
       standingFor: (orgId, clientId, item) => standingFor(this.#grantHost(), orgId, clientId, item),
       publicItem: (environment, item) => this.#publicItem(environment, item),
@@ -521,6 +660,7 @@ export class HostedKernel {
     environment: VaultEnvName;
   }): Promise<{ client: ClientRecord; plaintext: string }> {
     this.#assertPlane(input.environment);
+    await this.assertPlanLimit(input.orgId, "agents");
     const plaintext = `avt_${randomBytes(24).toString("hex")}`;
     const id = `cli_${randomUUID()}`;
     const row: ClientRecord = {
@@ -547,6 +687,7 @@ export class HostedKernel {
     issueBearer?: boolean;
   }): Promise<{ client: ClientRecord; plaintext?: string }> {
     this.#assertPlane(input.environment);
+    await this.assertPlanLimit(input.orgId, "agents");
     const plaintext = input.issueBearer === true ? `avm_${randomBytes(24).toString("hex")}` : undefined;
     const row: ClientRecord = {
       id: `cli_${randomUUID()}`,
@@ -1140,8 +1281,17 @@ export class HostedKernel {
     return pub;
   }
 
-  async ensureVaultOrgForUser(userId: string): Promise<{ orgId: string; role: MemberRole }> {
+  /**
+   * The org an operator session acts in. `preferredOrgId` (the session's `active_org_id` from the
+   * switcher) wins when the user is still a member of it; otherwise the first membership, and a
+   * fresh personal org for a user with none.
+   */
+  async ensureVaultOrgForUser(userId: string, preferredOrgId?: string | null): Promise<{ orgId: string; role: MemberRole }> {
     const existing = await this.store.listMembershipsForUser(userId);
+    if (preferredOrgId) {
+      const preferred = existing.find((m) => m.orgId === preferredOrgId);
+      if (preferred) return { orgId: preferred.orgId, role: preferred.role };
+    }
     if (existing[0]) return { orgId: existing[0].orgId, role: existing[0].role };
     const orgId = `org_${userId.replace(/^usr_/, "")}`;
     try {
