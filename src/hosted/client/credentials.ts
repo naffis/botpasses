@@ -115,30 +115,35 @@ export function renderItems(): void {
   render(body, html`${visible.map(rowHtml)}`);
 }
 
-export async function loadItems(): Promise<void> {
+/** Resolves true when the list is fresh; false when the load failed or the session is gone. */
+export async function loadItems(): Promise<boolean> {
   const body = byId("items");
-  if (!body) return;
+  if (!body) return false;
   setHidden("items-error", true);
   try {
     const r = await api("/api/items");
     if (r.status === 401) {
       handleUnauthorized();
-      return;
+      return false;
     }
     if (!r.ok) throw new Error(errorMessage(r, "Could not load credentials"));
     items = arr(r.body.items, isItem);
     setHidden("items-empty", items.length > 0);
     setHidden("items-filters", items.length === 0);
     renderItems();
+    return true;
   } catch (err) {
     items = [];
     body.replaceChildren();
     setHidden("items-table", true);
     setHidden("items-empty", true);
     setHidden("items-filters", true);
+    // "No credentials match" belongs to a list that loaded; an error box next to it is two answers.
+    setHidden("items-none", true);
     showLoadError("items-error", loadErrorText(err, "Could not load credentials"), () => {
       void loadItems();
     });
+    return false;
   }
 }
 
@@ -154,10 +159,11 @@ function fact(label: string, value: SafeHtml | string): SafeHtml {
   return html`<dt>${label}</dt><dd>${value}</dd>`;
 }
 
-export async function openDrawer(id: string): Promise<void> {
+/** Opens the detail drawer for a loaded item. Resolves false when no loaded item has this id. */
+export async function openDrawer(id: string): Promise<boolean> {
   const item = findItem(id);
   const drawer = byId<HTMLDialogElement>("item-drawer");
-  if (!item || !drawer) return;
+  if (!item || !drawer) return false;
   const title = byId("drawer-title");
   if (title) title.textContent = item.name;
   const created = item.created_at ?? item.createdAt;
@@ -199,6 +205,7 @@ export async function openDrawer(id: string): Promise<void> {
   } catch (err) {
     render(approvals, html`<p class="hint is-err">${loadErrorText(err, "Could not load approvals")}</p>`);
   }
+  return true;
 }
 
 export function closeDrawer(): void {
@@ -236,7 +243,11 @@ export function bindCredentials(h: CredentialHandlers, onRevokeGrant: (id: strin
     credHandlers?.navigate(itemHash(item.id));
   });
   body?.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || !(e.target instanceof HTMLTableRowElement)) return;
+    if (!(e.target instanceof HTMLTableRowElement)) return;
+    if (e.key !== "Enter" && e.key !== " ") return;
+    // Without preventDefault the same Enter keypress lands on the drawer's Close button, which
+    // took focus when the dialog opened, and closes it again; Space would also scroll the page.
+    e.preventDefault();
     const id = e.target.dataset.item;
     if (id) credHandlers?.navigate(itemHash(id));
   });

@@ -143,8 +143,10 @@ function showBackupCodes(codes: string[]): void {
   text(byId("backup-live"), `${codes.length} new backup codes are shown. Copy or download them now.`);
   const copy = byId<HTMLButtonElement>("backup-copy");
   const download = byId<HTMLButtonElement>("backup-download");
-  copy?.addEventListener("click", () => copyText(codes.join("\n"), "Backup codes copied"), { once: true });
-  download?.addEventListener("click", () => downloadText("botpasses-backup-codes.txt", `${codes.join("\n")}\n`), { once: true });
+  // Assigned, not added: the buttons work on every click, and a regenerate replaces the handler
+  // instead of stacking a listener that still copies the previous codes.
+  if (copy) copy.onclick = () => copyText(codes.join("\n"), "Backup codes copied");
+  if (download) download.onclick = () => downloadText("botpasses-backup-codes.txt", `${codes.join("\n")}\n`);
   openDialog("backup-dialog");
 }
 

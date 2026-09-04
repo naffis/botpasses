@@ -27,6 +27,12 @@ async function within(page: PwPage, selector: string, width: number): Promise<vo
   assert.ok(await page.locator(selector).first().isVisible(), `${selector} not visible`);
 }
 
+/** How many times this page has fetched `path` since it loaded (resource timing entries). */
+async function loads(page: PwPage, path: string): Promise<number> {
+  // A string is evaluated as an expression (an arrow function would be created, not called).
+  return page.evaluate<number>(`performance.getEntriesByType('resource').filter((e) => new URL(e.name).pathname === '${path}').length`);
+}
+
 async function cancelCloses(page: PwPage, open: () => Promise<void>, dialog: string, cancel: string): Promise<void> {
   await open();
   await page.waitForSelector(`${dialog}[open]`);
@@ -93,7 +99,7 @@ async function startRedirectTarget(): Promise<{ redirectUri: string; hits: strin
   };
 }
 
-test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 and 390", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS }, async () => {
+test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 and 390", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS * 2 }, async () => {
   const server = await bootConsoleServer();
   const browser = await launchChromium();
   const errors: string[] = [];
@@ -104,7 +110,7 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     const email = `smoke-${Date.now()}@example.com`;
 
     // Sign up with email OTP, enroll TOTP, land in the console
-    await signUpInBrowser(page, server, email);
+    const { backupCode } = await signUpInBrowser(page, server, email);
 
     // Credentials: empty state, Cancel closes, auto-uppercase, store
     await page.waitForSelector("[data-testid=items-empty]:not([hidden])");
@@ -126,8 +132,54 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await page.click("tr[data-item] td.name");
     await page.waitForSelector("#item-drawer[open]");
     assert.match(page.url(), /#credentials\/item\//);
+    const itemUrl = page.url();
     await page.click("[data-testid=drawer-close]");
     await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+
+    // Enter on a focused row opens the drawer, and the same keypress must not close it again.
+    // Closing the drawer refreshes the list (the rows are re-rendered), so let that settle first.
+    const itemLoadsBeforeEnter = await loads(page, "/api/items");
+    // waitForFunction takes the arrow form (a bare expression is eval'd in the page, which the CSP refuses).
+    await page.waitForFunction(`() => performance.getEntriesByType('resource').filter((e) => new URL(e.name).pathname === '/api/items').length > ${itemLoadsBeforeEnter}`);
+    await page.waitForTimeout(200);
+    await page.locator("tr[data-item]").first().press("Enter");
+    assert.equal(await page.evaluate<string>("document.activeElement?.tagName || ''"), "BUTTON", "focus moved into the drawer");
+    await page.waitForSelector("#item-drawer[open]");
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator("#item-drawer[open]").count(), 1, "the drawer stays open after Enter");
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+
+    // A deep link on a fresh page load opens the drawer once the list is loaded; the list loads once.
+    // Via about:blank so this is a full document load, not a same-document hash change.
+    await page.goto("about:blank");
+    await page.goto(itemUrl);
+    try {
+      await page.waitForSelector("#item-drawer[open]", { timeout: 5_000 });
+    } catch (err) {
+      const state = await page.evaluate<string>(
+        "JSON.stringify({ hash: location.hash, open: document.getElementById('item-drawer')?.open, rows: document.querySelectorAll('tr[data-item]').length, flash: document.getElementById('flash')?.textContent })",
+      );
+      throw new Error(`deep link did not open the drawer: ${state}; page errors: ${JSON.stringify(errors)}`, { cause: err });
+    }
+    assert.equal(((await page.locator("#drawer-title").textContent()) ?? "").trim(), "GITHUB_TOKEN");
+    await page.waitForTimeout(500);
+    assert.equal(await loads(page, "/api/items"), 1, "boot loads the credential list once");
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+
+    // An id no credential has says so and returns to the list
+    await page.goto(`${server.base}/console#credentials/item/itm_missing`);
+    await page.waitForSelector("#flash.is-err");
+    await page.waitForFunction("() => location.hash === '#credentials'");
+    assert.equal(await page.locator("#item-drawer[open]").count(), 0);
+
+    // Navigating by hash loads the panel once (hashchange only; popstate used to fire a second load)
+    const accessBefore = await loads(page, "/api/access");
+    await page.click("[data-testid=nav-agents]");
+    await page.waitForSelector("[data-panel=agents].is-active");
+    await page.waitForTimeout(500);
+    assert.equal((await loads(page, "/api/access")) - accessBefore, 1, "one load per navigation");
 
     // Agents: issue a token, shown once in a modal
     await page.click("[data-testid=nav-agents]");
@@ -158,6 +210,11 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await page.click("[data-testid=grant-revoke]");
     await page.waitForSelector("#confirm[open]");
     assert.equal(await page.locator("#confirm-title").textContent(), "Revoke cursor's approval for GITHUB_TOKEN?");
+    assert.equal(
+      await page.evaluate<string>("document.activeElement?.getAttribute('data-testid') || ''"),
+      "confirm-cancel",
+      "the confirm dialog focuses Cancel, not the destructive button",
+    );
     await page.click("#confirm-yes");
     await page.waitForSelector("#confirm:not([open])", { state: "attached" });
     await page.waitForSelector("[data-testid=grant-row] .pill:has-text('revoked')");
@@ -189,6 +246,36 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await page.goBack();
     await page.waitForSelector("#tabpanel-activity:not([hidden])");
     assert.match(page.url(), /#agents\/activity$/);
+
+    // Account: backup-code Copy works on every click, and a regenerate copies the new codes, not the old
+    await page.goto(`${server.base}/console#account`);
+    await page.waitForSelector("[data-testid=account-regen]");
+    await page.evaluate("(window.__copied = [], navigator.clipboard.writeText = (t) => { window.__copied.push(t); return Promise.resolve(); }, 0)");
+    await page.click("[data-testid=account-regen]");
+    await page.waitForSelector("#code-dialog[open]");
+    await page.fill("#code-dialog-input", backupCode);
+    await page.locator("#code-dialog-input").press("Enter");
+    await page.waitForSelector("#backup-dialog[open]");
+    const firstCodes = ((await page.locator("#backup-codes").textContent()) ?? "").trim();
+    assert.match(firstCodes, /^[A-Z2-9]{10}(\n[A-Z2-9]{10})+$/);
+    await page.click("#backup-copy");
+    await page.click("#backup-copy");
+    assert.equal(await page.evaluate<number>("window.__copied.length"), 2, "Copy works on the second click too");
+    await page.click("#backup-dialog [data-close]");
+    await page.waitForSelector("#backup-dialog:not([open])", { state: "attached" });
+    await page.click("[data-testid=account-regen]");
+    await page.waitForSelector("#code-dialog[open]");
+    await page.fill("#code-dialog-input", firstCodes.split("\n")[0] ?? "");
+    await page.locator("#code-dialog-input").press("Enter");
+    await page.waitForSelector("#backup-dialog[open]");
+    const secondCodes = ((await page.locator("#backup-codes").textContent()) ?? "").trim();
+    assert.notEqual(secondCodes, firstCodes);
+    await page.click("#backup-copy");
+    const copied = await page.evaluate<string[]>("window.__copied");
+    assert.equal(copied.length, 3, "no stale handler from the first dialog fires");
+    assert.equal(copied[2], secondCodes, "the second dialog copies the new codes");
+    await page.click("#backup-dialog [data-close]");
+    await page.waitForSelector("#backup-dialog:not([open])", { state: "attached" });
 
     // 390 px: Actions visible, Cancel closes
     await page.setViewportSize({ width: 390, height: 844 });

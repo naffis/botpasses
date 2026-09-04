@@ -60,7 +60,7 @@ Point a desktop MCP client at the local vault:
 }
 ```
 
-The local server exposes `list_secrets`, `request_grant`, and `list_grants`. It has no `http_request` tool; inject on the local plane is `vault run`.
+The local server exposes the same five tools as hosted: `list_items`, `find_items`, `request_grant`, `list_grants`, and `http_request`. `http_request` calls an allowlisted API with a stored credential once you approve the agent (`vault grant --secret NAME --agent AGENT --tool http_request`); `vault run` is the other inject path, for a child process. Details: [MCP tools](/docs/reference/mcp-tools#local-mcp-sqlite).
 
 ## Hosted MCP over stdio
 

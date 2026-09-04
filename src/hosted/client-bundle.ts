@@ -302,7 +302,21 @@ const PROVIDERS                      = [
     tokenAuth: "post_body",
     grantTypes: ["authorization_code", "refresh_token"],
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    // Google refuses an authorize request without \`scope\`. \`openid email\` names the account; the
+    // rest are the narrowest scopes for each API host above (Gmail read, Sheets read, Drive
+    // limited to files the app opened or created).
     scopesParam: "scope",
+    scopesRequired: true,
+    defaultScopes: [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      "https://www.googleapis.com/auth/drive.file",
+    ],
+    // A refresh token comes only with offline access, and after the first consent only when the
+    // user is asked again; a re-connect must be able to rotate the stored refresh token.
+    authorizeParams: { access_type: "offline", prompt: "consent" },
     pkce: true,
     redactKeys: OAUTH_TOKEN_KEYS,
     docsUrl: "https://developers.google.com/identity/protocols/oauth2/web-server",
@@ -316,7 +330,12 @@ const PROVIDERS                      = [
     tokenAuth: "basic",
     grantTypes: ["authorization_code", "refresh_token"],
     authorizeUrl: "https://slack.com/oauth/v2/authorize",
-    scopesParam: "scope",
+    // A user token (xoxp) is requested with \`user_scope\`; \`scope\` asks for a bot token instead.
+    // Slack joins scopes with commas and refuses an authorize request that names none.
+    scopesParam: "user_scope",
+    scopesDelimiter: ",",
+    scopesRequired: true,
+    defaultScopes: ["users:read", "channels:read", "chat:write"],
     pkce: false,
     redactKeys: OAUTH_TOKEN_KEYS,
     docsUrl: "https://api.slack.com/authentication/oauth-v2",
@@ -661,11 +680,15 @@ function relativeTime(iso                           , now         = Date.now()) 
   const abs = Math.abs(diff);
   const future = diff > 0;
   const unit = (n        , word        )         => \`\${n} \${word}\${n === 1 ? "" : "s"}\`;
+  // The unit is chosen from the rounded count, so 59.6 minutes reads "1 hour", never "60 min".
+  const minutes = Math.round(abs / 60_000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
   let phrase        ;
   if (abs < 45_000) return future ? "in under a minute" : "just now";
-  else if (abs < 3_600_000) phrase = unit(Math.round(abs / 60_000), "min");
-  else if (abs < 86_400_000) phrase = unit(Math.round(abs / 3_600_000), "hour");
-  else if (abs < 30 * 86_400_000) phrase = unit(Math.round(abs / 86_400_000), "day");
+  else if (minutes < 60) phrase = unit(minutes, "min");
+  else if (hours < 24) phrase = unit(hours, "hour");
+  else if (days < 30) phrase = unit(days, "day");
   else phrase = unit(Math.round(abs / (30 * 86_400_000)), "month");
   return future ? \`in \${phrase}\` : \`\${phrase} ago\`;
 }
@@ -1183,17 +1206,21 @@ async function approveWithLimits(id        , form                 )             
   await postApprove(id, body, form);
 }
 
-async function deny(id        , button                   )                {
-  await busy(button, async () => {
+/** Outcome of an operator action; the confirm dialog shows \`message\` and stays open when \`ok\` is false. */
+
+async function deny(id        , button                   )                        {
+  return busy(button, async () => {
     try {
       const r = await api(\`/api/grants/\${encodeURIComponent(id)}/revoke\`, { method: "POST", body: "{}" });
-      flash(r.ok ? "Denied. The agent gets no access to this credential." : errorMessage(r, "Deny failed"), r.ok);
+      if (!r.ok) return { ok: false, message: errorMessage(r, "Deny failed") };
     } catch (err) {
-      flash(loadErrorText(err, "Deny failed"), false);
+      return { ok: false, message: loadErrorText(err, "Deny failed") };
     }
+    flash("Denied. The agent gets no access to this credential.", true);
+    await loadInbox({ force: true });
+    listeners.onChanged();
+    return { ok: true, message: "" };
   });
-  await loadInbox({ force: true });
-  listeners.onChanged();
 }
 
 /** \`force\` re-renders even while a limits form is open (after an approve or deny). */
@@ -1283,10 +1310,12 @@ function bindInbox(on                )       {
 }
 
 /** Console wires this to the confirm dialog so the copy is specific. */
-let denyHandler                                                                                         = (id, _client, _name, button) =>
-  deny(id, button);
+let denyHandler                                                                                         = async (id, _client, _name, button) => {
+  const result = await deny(id, button);
+  if (!result.ok) flash(result.message, false);
+};
 
-function onDeny(fn                                                                                       )       {
+function onDeny(fn                                                                                               )       {
   denyHandler = (id, client, name, button) => fn(id, client, name, () => deny(id, button));
 }
 
@@ -1378,30 +1407,35 @@ function renderItems()       {
   render(body, html\`\${visible.map(rowHtml)}\`);
 }
 
-async function loadItems()                {
+/** Resolves true when the list is fresh; false when the load failed or the session is gone. */
+async function loadItems()                   {
   const body = byId("items");
-  if (!body) return;
+  if (!body) return false;
   setHidden("items-error", true);
   try {
     const r = await api("/api/items");
     if (r.status === 401) {
       handleUnauthorized();
-      return;
+      return false;
     }
     if (!r.ok) throw new Error(errorMessage(r, "Could not load credentials"));
     items = arr(r.body.items, isItem);
     setHidden("items-empty", items.length > 0);
     setHidden("items-filters", items.length === 0);
     renderItems();
+    return true;
   } catch (err) {
     items = [];
     body.replaceChildren();
     setHidden("items-table", true);
     setHidden("items-empty", true);
     setHidden("items-filters", true);
+    // "No credentials match" belongs to a list that loaded; an error box next to it is two answers.
+    setHidden("items-none", true);
     showLoadError("items-error", loadErrorText(err, "Could not load credentials"), () => {
       void loadItems();
     });
+    return false;
   }
 }
 
@@ -1417,10 +1451,11 @@ function fact(label        , value                   )           {
   return html\`<dt>\${label}</dt><dd>\${value}</dd>\`;
 }
 
-async function openDrawer(id        )                {
+/** Opens the detail drawer for a loaded item. Resolves false when no loaded item has this id. */
+async function openDrawer(id        )                   {
   const item = findItem(id);
   const drawer = byId                   ("item-drawer");
-  if (!item || !drawer) return;
+  if (!item || !drawer) return false;
   const title = byId("drawer-title");
   if (title) title.textContent = item.name;
   const created = item.created_at ?? item.createdAt;
@@ -1462,6 +1497,7 @@ async function openDrawer(id        )                {
   } catch (err) {
     render(approvals, html\`<p class="hint is-err">\${loadErrorText(err, "Could not load approvals")}</p>\`);
   }
+  return true;
 }
 
 function closeDrawer()       {
@@ -1499,7 +1535,11 @@ function bindCredentials(h                    , onRevokeGrant                   
     credHandlers?.navigate(itemHash(item.id));
   });
   body?.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || !(e.target instanceof HTMLTableRowElement)) return;
+    if (!(e.target instanceof HTMLTableRowElement)) return;
+    if (e.key !== "Enter" && e.key !== " ") return;
+    // Without preventDefault the same Enter keypress lands on the drawer's Close button, which
+    // took focus when the dialog opened, and closes it again; Space would also scroll the page.
+    e.preventDefault();
     const id = e.target.dataset.item;
     if (id) credHandlers?.navigate(itemHash(id));
   });
@@ -1699,8 +1739,17 @@ function setAgentsTab(tab           )       {
   }
 }
 
+/** Pure: a new filter starts at the first page; a refresh with the same filter keeps the operator's place. */
+function pageAfterFilter(current                , next                , page        )         {
+  return current.agent === next.agent && current.credential === next.credential ? page : 0;
+}
+
 async function loadAccess(route        )                {
-  if (route) state.filter = { agent: route.agent, credential: route.credential };
+  if (route) {
+    const next = { agent: route.agent, credential: route.credential };
+    state.page = pageAfterFilter(state.filter, next, state.page);
+    state.filter = next;
+  }
   setHidden("access-error", true);
   try {
     const snap = await api("/api/access");
@@ -1712,7 +1761,6 @@ async function loadAccess(route        )                {
     state.clients = arr(snap.body.clients, isClient);
     state.grants = arr(snap.body.grants, isAccessGrant);
     state.sessions = arr(snap.body.sessions, isSession);
-    state.page = 0;
     try {
       const audit = await api(\`/api/audit\${qs({ client_id: state.filter.agent, item_name: state.filter.credential })}\`);
       state.audit = audit.ok ? arr(audit.body.audit, isAudit) : [];
@@ -1937,8 +1985,10 @@ function showBackupCodes(codes          )       {
   text(byId("backup-live"), \`\${codes.length} new backup codes are shown. Copy or download them now.\`);
   const copy = byId                   ("backup-copy");
   const download = byId                   ("backup-download");
-  copy?.addEventListener("click", () => copyText(codes.join("\\n"), "Backup codes copied"), { once: true });
-  download?.addEventListener("click", () => downloadText("botpasses-backup-codes.txt", \`\${codes.join("\\n")}\\n\`), { once: true });
+  // Assigned, not added: the buttons work on every click, and a regenerate replaces the handler
+  // instead of stacking a listener that still copies the previous codes.
+  if (copy) copy.onclick = () => copyText(codes.join("\\n"), "Backup codes copied");
+  if (download) download.onclick = () => downloadText("botpasses-backup-codes.txt", \`\${codes.join("\\n")}\\n\`);
   openDialog("backup-dialog");
 }
 
@@ -2270,8 +2320,8 @@ function applyRoute(route       )       {
   if (storeBtn) storeBtn.hidden = signedOut || panel !== "credentials";
   setHidden("breakglass", !route.breakglass);
   if (panel === "agents") setAgentsTab(route.tab);
-  if (panel === "credentials" && route.itemId) void openDrawer(route.itemId);
-  else closeDrawer();
+  // The drawer opens from loadCredentials, once the item list it reads from is loaded.
+  if (panel !== "credentials" || !route.itemId) closeDrawer();
 }
 
 /** Programmatic navigation: push a history entry then render. */
@@ -2288,10 +2338,31 @@ async function loadForRoute(route       )                {
   else if (teamShown(route)) await loadTeam();
   else if (route.panel === "account") await loadAccount();
   else if (route.panel === "inbox") await loadInbox();
-  else await loadItems();
+  else await loadCredentials(route);
 }
 
-function onHashOrPop()       {
+/**
+ * The credentials panel, and the drawer when the route names an item. A row click opens the
+ * drawer at once from the loaded list; a deep link on a fresh page waits for the list first.
+ * An id no loaded item has (deleted, or from another org) says so and returns to the list.
+ */
+async function loadCredentials(route       )                {
+  if (!route.itemId) {
+    await loadItems();
+    return;
+  }
+  if (findItem(route.itemId)) {
+    void openDrawer(route.itemId);
+    await loadItems();
+    return;
+  }
+  const loaded = await loadItems();
+  if (!loaded || (await openDrawer(route.itemId))) return;
+  flash("That credential was not found. It may have been deleted.", false);
+  navigate("#credentials");
+}
+
+function onHashChange()       {
   const route = parseRoute(location.hash);
   applyRoute(route);
   void loadForRoute(route);
@@ -2655,10 +2726,8 @@ document.addEventListener("DOMContentLoaded", () => {
       title: \`Deny \${client}'s request for \${name}?\`,
       body: "The agent gets no access to this credential. It can ask again later.",
       button: "Deny request",
-      run: async () => {
-        await run();
-        return { ok: true, message: "" };
-      },
+      // A failed deny keeps the dialog open with the server's message, like every other confirm.
+      run,
     });
   });
   const revokeGrant = (id        , client        , name        )       =>
@@ -2729,14 +2798,14 @@ document.addEventListener("DOMContentLoaded", () => {
       }),
     navigate,
   });
-  window.addEventListener("hashchange", onHashOrPop);
-  window.addEventListener("popstate", onHashOrPop);
+  // hashchange alone: browsers fire popstate for every hash navigation too, so binding both
+  // loaded each panel twice. Boot loads the route's panel once, plus the inbox for its badge.
+  window.addEventListener("hashchange", onHashChange);
   const initial = parseRoute(location.hash);
   applyRoute(initial);
-  void loadItems();
-  void loadInbox();
-  void loadOrgs();
   void loadForRoute(initial);
+  if (initial.panel !== "inbox") void loadInbox();
+  void loadOrgs();
 });
 })();
 `;
@@ -3251,11 +3320,15 @@ function relativeTime(iso                           , now         = Date.now()) 
   const abs = Math.abs(diff);
   const future = diff > 0;
   const unit = (n        , word        )         => \`\${n} \${word}\${n === 1 ? "" : "s"}\`;
+  // The unit is chosen from the rounded count, so 59.6 minutes reads "1 hour", never "60 min".
+  const minutes = Math.round(abs / 60_000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
   let phrase        ;
   if (abs < 45_000) return future ? "in under a minute" : "just now";
-  else if (abs < 3_600_000) phrase = unit(Math.round(abs / 60_000), "min");
-  else if (abs < 86_400_000) phrase = unit(Math.round(abs / 3_600_000), "hour");
-  else if (abs < 30 * 86_400_000) phrase = unit(Math.round(abs / 86_400_000), "day");
+  else if (minutes < 60) phrase = unit(minutes, "min");
+  else if (hours < 24) phrase = unit(hours, "hour");
+  else if (days < 30) phrase = unit(days, "day");
   else phrase = unit(Math.round(abs / (30 * 86_400_000)), "month");
   return future ? \`in \${phrase}\` : \`\${phrase} ago\`;
 }

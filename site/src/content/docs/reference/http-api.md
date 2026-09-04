@@ -127,8 +127,10 @@ PKCE S256 is required. Clients are public (`token_endpoint_auth_method` `none`; 
 | --- | --- |
 | `GET /` | Local operator console |
 | `GET /health` | `{ ok, product }` |
-| `GET /api/secrets` | Names and last-4 |
-| `POST /api/secrets` | Store `{ name, value }` |
+| `GET /api/secrets` | Names, last-4, hosts, inject mode, username as `{ secrets }` |
+| `GET /api/items` | The same list as `{ items }`, the hosted key |
+| `POST /api/secrets` | Store `{ name, value, allowed_hosts?, inject? }`, answered as `{ secret }` |
+| `POST /api/items` | The same store, answered as `{ item }` |
 | `GET /api/grants` | Grant metadata |
 | `POST /api/grants/request` | Request a pending grant |
 | `POST /api/grants` | Approve (`scope` is `once` or `session`; `tool_id` is `http_request` for agent calls) |
@@ -136,7 +138,7 @@ PKCE S256 is required. Clients are public (`token_endpoint_auth_method` `none`; 
 | `GET /api/audit` | Events, no values |
 | `POST /mcp` | Local MCP JSON-RPC, the same five tools as hosted |
 
-There is no `/api/items`, OAuth, or Access panel on the local plane.
+There is no OAuth, provider connect, item edit or rotate route, or Access panel on the local plane; `/api/items` only lists and stores.
 
 ## Status codes
 

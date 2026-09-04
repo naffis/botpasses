@@ -125,7 +125,7 @@ npx vault serve --host 127.0.0.1 --port 8788
 ```
 
 - Console: `http://127.0.0.1:8788/` — store, approve, revoke, audit.
-- JSON: `/api/secrets`, `/api/grants`, `/api/audit` — metadata only.
+- JSON: `/api/secrets` (also as `/api/items`), `/api/grants`, `/api/audit`: metadata only.
 - MCP JSON-RPC: `POST /mcp`
 - `GET /health` — `{ ok, product: "botpasses" }` with **no** key fingerprint
 
@@ -150,9 +150,11 @@ npx vault serve --host 127.0.0.1 --port 8788
 
 | Tool (local) | Returns |
 | --- | --- |
-| `list_secrets` | names, last-4, timestamps |
+| `list_items` | names, last-4, hosts, inject mode, username (`list_secrets` accepted as an alias for one release) |
+| `find_items` | one item by exact name or API host, or `need_item` |
 | `request_grant` | pending grant metadata |
-| `list_grants` | grant status |
+| `list_grants` | grant status for this agent |
+| `http_request` | redacted origin response after an active grant for `(item, agent, http_request)`; never the value |
 
 There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and revoke are operator surfaces.
 
@@ -163,7 +165,7 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 | `vault init` | Create `$VAULT_HOME` + SQLite schema; generate key if needed |
 | `vault set NAME [--host H]... [--inject MODE] [--username USER]` | Encrypt and store. Reads the value from stdin, or prompts without echo on a terminal; there is no `--value` (argv is visible in `ps`). Hosts, inject mode (hosted vocabulary), and username drive `http_request`. Prints name + last-4 |
 | `vault list` | Names + last-4 |
-| `vault grant --secret NAME --agent A --tool T [--once\|--session] [--ttl 8h]` | Human approval |
+| `vault grant --secret NAME --agent A --tool T [--once\|--session [--ttl 8h]]` | Human approval. `--ttl` applies to `--session` only; `--once` and `--session` exclude each other |
 | `vault revoke --id GRANT_ID` | Stop future injects |
 | `vault audit` | Grant/revoke/store/inject events, no values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject into child env without printing |

@@ -76,7 +76,7 @@ function confirmDialog(): string {
     <p id="confirm-error" class="flash" role="alert" data-testid="confirm-error"></p>
     <div class="dialog-actions">
       <button type="button" id="confirm-yes" class="btn-danger">Confirm</button>
-      <button type="button" class="btn-ghost" data-close data-testid="confirm-cancel">Cancel</button>
+      <button type="button" class="btn-ghost" data-close data-testid="confirm-cancel" autofocus>Cancel</button>
     </div>
   </dialog>`;
 }

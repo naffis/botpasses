@@ -132,8 +132,10 @@ Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenCl
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/health` | `{ ok, product }` |
-| GET | `/api/secrets` | Names + last-4 |
-| POST | `/api/secrets` | `{ name, value }` store |
+| GET | `/api/secrets` | `{ secrets }`: name, last-4, hosts, inject, username. No values |
+| GET | `/api/items` | The same list as `{ items }` (hosted key) |
+| POST | `/api/secrets` | `{ name, value, allowed_hosts?, inject? }` store; answers `{ secret }` |
+| POST | `/api/items` | The same store; answers `{ item }` |
 | GET | `/api/grants` | Grant metadata |
 | POST | `/api/grants/request` | Request pending grant |
 | POST | `/api/grants` | Approve (`scope` once\|session) |
@@ -141,7 +143,7 @@ Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenCl
 | GET | `/api/audit` | Events, no values |
 | POST | `/mcp` | Local MCP JSON-RPC |
 
-No `/api/items`, OAuth, or Access panel on the local plane.
+No OAuth, provider connect, `/api/items/:id` edit or rotate routes, or Access panel on the local plane; `/api/items` only lists and stores (router: `src/server.ts`).
 
 ## Static site
 

@@ -27,9 +27,15 @@ export type Provider = {
   grantTypes: OauthGrantType[];
   /** Absolute authorize URL for the user connect flow (authorization_code). */
   authorizeUrl?: string;
-  /** Name of the query parameter that carries scopes on `authorizeUrl`. */
+  /** Name of the query parameter that carries scopes on `authorizeUrl` (`scope`; Slack user tokens use `user_scope`). */
   scopesParam?: string;
+  /** How scopes are joined on the wire. RFC 6749 says space; Slack joins with commas. Default space. */
+  scopesDelimiter?: string;
   defaultScopes?: string[];
+  /** The authorize endpoint rejects a request without scopes, so `authorizeUrl` refuses to build one (400). */
+  scopesRequired?: boolean;
+  /** Fixed extra query parameters on `authorizeUrl` (Google needs `access_type=offline` to issue a refresh token). */
+  authorizeParams?: Record<string, string>;
   /** Whether the user connect flow sends a PKCE challenge (RFC 7636). */
   pkce?: boolean;
   /** JSON keys in token-endpoint bodies that must read `[redacted]` in tool results. */
