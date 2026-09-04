@@ -1,26 +1,73 @@
-/** Invented dark visual tokens. Hex is the test source of truth. CSS also emits oklch twins. */
+/**
+ * Visual tokens. Hex is the test source of truth for both themes.
+ * Dark is the brand default; light follows `prefers-color-scheme` or `data-theme="light"`.
+ * Roles: `accent` is for actions only. `ok` is a success surface, `warn` is pending or
+ * once-shown state, `info` is neutral guidance, `danger` is destructive.
+ */
 
-export const BRAND_HEX = {
+export type BrandTheme = "dark" | "light";
+
+export type BrandPalette = {
+  bg: string;
+  bgElev: string;
+  fg: string;
+  muted: string;
+  line: string;
+  accent: string;
+  accentFg: string;
+  accentDim: string;
+  danger: string;
+  dangerDim: string;
+  warn: string;
+  warnDim: string;
+  info: string;
+  infoDim: string;
+  ok: string;
+  okDim: string;
+};
+
+export const BRAND_HEX: BrandPalette = {
   bg: "#0B0F0C",
   bgElev: "#151C17",
   fg: "#F2F5F2",
   muted: "#C5D0C7",
   line: "#2A332C",
   accent: "#7DDA88",
+  accentFg: "#0B0F0C",
   accentDim: "#244024",
   danger: "#E07070",
-} as const;
+  dangerDim: "#3A1C1C",
+  warn: "#E9B857",
+  warnDim: "#3A2E12",
+  info: "#8CC4EE",
+  infoDim: "#17303F",
+  ok: "#A6E4AD",
+  okDim: "#17331E",
+};
 
-export const BRAND_OKLCH = {
-  bg: "oklch(13.2% 0.012 145)",
-  bgElev: "oklch(18.4% 0.014 145)",
-  fg: "oklch(96.1% 0.005 145)",
-  muted: "oklch(82.4% 0.016 145)",
-  line: "oklch(27.6% 0.014 145)",
-  accent: "oklch(82.1% 0.142 145)",
-  accentDim: "oklch(30.2% 0.058 145)",
-  danger: "oklch(67.8% 0.142 25)",
-} as const;
+export const BRAND_HEX_LIGHT: BrandPalette = {
+  bg: "#F4F7F4",
+  bgElev: "#FFFFFF",
+  fg: "#121A14",
+  muted: "#4B5A4F",
+  line: "#D3DCD5",
+  accent: "#1F7A34",
+  accentFg: "#FFFFFF",
+  accentDim: "#DDF2E0",
+  danger: "#B3261E",
+  dangerDim: "#FBE3E1",
+  warn: "#8A5A00",
+  warnDim: "#FBEFD3",
+  info: "#1B5E8F",
+  infoDim: "#DDEBF7",
+  ok: "#1B6B2C",
+  okDim: "#E1F3E4",
+};
+
+export const BRAND_THEMES: Record<BrandTheme, BrandPalette> = {
+  dark: BRAND_HEX,
+  light: BRAND_HEX_LIGHT,
+};
 
 export const BRAND_FONTS = {
   display: "Fraunces",
@@ -30,7 +77,27 @@ export const BRAND_FONTS = {
 
 export const MARK_SIZE = 24;
 
-export type BrandHexKey = keyof typeof BRAND_HEX;
+export type BrandHexKey = keyof BrandPalette;
+
+/** CSS custom property name for each palette key. */
+export const CSS_VAR_NAMES: Record<BrandHexKey, string> = {
+  bg: "--bg",
+  bgElev: "--bg-elev",
+  fg: "--fg",
+  muted: "--muted",
+  line: "--line",
+  accent: "--accent",
+  accentFg: "--accent-fg",
+  accentDim: "--accent-dim",
+  danger: "--danger",
+  dangerDim: "--danger-dim",
+  warn: "--warn",
+  warnDim: "--warn-dim",
+  info: "--info",
+  infoDim: "--info-dim",
+  ok: "--ok",
+  okDim: "--ok-dim",
+};
 
 export function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const m = /^#([0-9A-Fa-f]{6})$/.exec(hex);
@@ -57,23 +124,46 @@ export function contrastRatio(fg: string, bg: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/** Text-on-surface pairs every theme must keep at WCAG AA (4.5:1). */
+export const CONTRAST_PAIRS: ReadonlyArray<readonly [BrandHexKey, BrandHexKey]> = [
+  ["fg", "bg"],
+  ["fg", "bgElev"],
+  ["muted", "bg"],
+  ["muted", "bgElev"],
+  ["danger", "bg"],
+  ["danger", "bgElev"],
+  ["danger", "dangerDim"],
+  ["accentFg", "accent"],
+  ["accent", "bg"],
+  ["warn", "bg"],
+  ["warn", "warnDim"],
+  ["info", "bg"],
+  ["info", "infoDim"],
+  ["ok", "bg"],
+  ["ok", "okDim"],
+  ["fg", "accentDim"],
+];
+
+/** `--name: #hex;` lines for one theme, indented for a rule body. */
+export function cssTokenLines(theme: BrandTheme): string {
+  const palette = BRAND_THEMES[theme];
+  return (Object.keys(CSS_VAR_NAMES) as BrandHexKey[])
+    .map((key) => `${CSS_VAR_NAMES[key]}: ${palette[key]};`)
+    .join("\n  ");
+}
+
+/**
+ * Complete token rules for both themes. Light sits on bare `:root`; dark applies under
+ * `prefers-color-scheme: dark` (unless the page opts into light) and under an explicit
+ * `data-theme="dark"`, so a toggle wins in both directions.
+ */
 export function cssVariables(): string {
+  const light = cssTokenLines("light");
+  const dark = cssTokenLines("dark");
+  const darkNested = dark.replace(/\n  /g, "\n    ");
   return [
-    `--bg: ${BRAND_HEX.bg};`,
-    `--bg-oklch: ${BRAND_OKLCH.bg};`,
-    `--bg-elev: ${BRAND_HEX.bgElev};`,
-    `--bg-elev-oklch: ${BRAND_OKLCH.bgElev};`,
-    `--fg: ${BRAND_HEX.fg};`,
-    `--fg-oklch: ${BRAND_OKLCH.fg};`,
-    `--muted: ${BRAND_HEX.muted};`,
-    `--muted-oklch: ${BRAND_OKLCH.muted};`,
-    `--line: ${BRAND_HEX.line};`,
-    `--line-oklch: ${BRAND_OKLCH.line};`,
-    `--accent: ${BRAND_HEX.accent};`,
-    `--accent-oklch: ${BRAND_OKLCH.accent};`,
-    `--accent-dim: ${BRAND_HEX.accentDim};`,
-    `--accent-dim-oklch: ${BRAND_OKLCH.accentDim};`,
-    `--danger: ${BRAND_HEX.danger};`,
-    `--danger-oklch: ${BRAND_OKLCH.danger};`,
-  ].join("\n  ");
+    `:root {\n  color-scheme: light dark;\n  ${light}\n}`,
+    `@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {\n    ${darkNested}\n  }\n}`,
+    `:root[data-theme="dark"] {\n  ${dark}\n}`,
+  ].join("\n");
 }
