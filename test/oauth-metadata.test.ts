@@ -23,6 +23,15 @@ test("AS metadata has RFC 8414 required fields and S256 only", () => {
   assert.doesNotMatch(JSON.stringify(doc), /clerk\./);
 });
 
+test("openid-configuration carries the OIDC Discovery required fields and advertises CIMD", () => {
+  const doc = authorizationServerMetadata(ORIGIN);
+  assert.deepEqual(doc.subject_types_supported, ["public"]);
+  assert.deepEqual(doc.id_token_signing_alg_values_supported, ["RS256"]);
+  assert.equal(doc.authorization_response_iss_parameter_supported, true);
+  assert.equal(doc.client_id_metadata_document_supported, true);
+  assert.deepEqual(oauthDiscoveryDocument("/.well-known/openid-configuration", ORIGIN), doc);
+});
+
 test("PRM names MCP resource and header bearer", () => {
   const doc = protectedResourceMetadata(`${ORIGIN}/`);
   assert.equal(doc.resource, `${ORIGIN}/mcp`);

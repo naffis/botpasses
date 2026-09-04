@@ -1,91 +1,119 @@
+import { hkdfSync } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import Provider, { errors as oidcErrors } from "oidc-provider";
+import Provider, { errors as oidcErrors, type ProviderContext } from "oidc-provider";
+import type { VaultEnvName } from "../hosted-types.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
 import { createStoreAdapter } from "./oidc-adapter.ts";
 import { IpWindowLimiter } from "./operator-identity.ts";
-import { hashToken } from "./operator-identity.ts";
 import { HttpError } from "./errors.ts";
-import { fetchCimdDocument } from "./cimd-fetch.ts";
-import { deviceHtml } from "./auth-pages.ts";
+import { createPinnedFetch, type PinnedFetch } from "./cimd-fetch.ts";
+import { deviceConfirmHtml, deviceHtml, deviceSuccessHtml, oauthErrorHtml } from "./oauth-pages.ts";
 import { bindSecurityHeaders } from "./security-headers.ts";
 import { logVaultEvent } from "./observe.ts";
+import {
+  asTokenRef,
+  clientMetadataValidator,
+  logLedgerPersistFailure,
+  persistIssuedAccess,
+  persistIssuedRefresh,
+  persistRevokedToken,
+} from "./oauth-clients.ts";
+
+export {
+  assertRedirectUri,
+  DESKTOP_REDIRECT_SCHEMES,
+  isDesktopRedirect,
+  persistIssuedAccess,
+  persistIssuedRefresh,
+  persistRevokedToken,
+  redirectHosts,
+} from "./oauth-clients.ts";
 
 export type OauthAsOpts = {
   issuer: string;
   kernel: HostedKernel;
   sessionSecret: string;
   jwk: OidcPrivateJwk;
+  /** Hosted: cookies are Secure and the provider trusts X-Forwarded-Proto from the edge. */
   secureCookies: boolean;
+  /** Vault environment new OAuth clients are bound to. Defaults to `kernel.deployPlane`. */
+  deployPlane?: VaultEnvName;
+  /** Outbound fetch for CIMD, jwks_uri, sector_identifier_uri. Defaults to the SSRF-pinned fetch. */
+  fetchImpl?: PinnedFetch;
 };
 
-const dcrLimiter = new IpWindowLimiter();
+/** Per-provider state that request handlers outside this module need (consent page, logout). */
+type ProviderBinding = { kernel: HostedKernel; secureCookies: boolean };
+const bindings = new WeakMap<Provider, ProviderBinding>();
 
-function logLedgerPersistFailure(kind: string, err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err);
-  logVaultEvent("ledger_persist_failed", { kind, message: message.slice(0, 200) });
+/** The kernel a provider was built with, so interaction handlers can read the store. */
+export function kernelForProvider(provider: Provider): HostedKernel | undefined {
+  return bindings.get(provider)?.kernel;
+}
+
+const dcrLimiter = new IpWindowLimiter();
+const cimdLimiter = new IpWindowLimiter();
+const CIMD_FETCHES_PER_HOST_PER_HOUR = 30;
+
+const OIDC_COOKIE_KEY_INFO = "botpasses/oidc-provider/cookie-keys/v1";
+const OP_SESSION_TTL_S = 3600;
+
+/**
+ * oidc-provider signs its cookies with these keys. They are HKDF-derived from
+ * VAULT_SESSION_SECRET with a purpose string so the raw secret stays the CSRF HMAC
+ * key only; a leak of one derived key does not hand over the other purpose.
+ */
+export function deriveOidcCookieKeys(sessionSecret: string): string[] {
+  const derived = hkdfSync("sha256", sessionSecret, "", OIDC_COOKIE_KEY_INFO, 32);
+  return [Buffer.from(derived).toString("base64url")];
 }
 
 function mcpAud(issuer: string): string {
   return `${issuer.replace(/\/$/, "")}/mcp`;
 }
 
-const BLOCKED_REDIRECT_SCHEMES = new Set(["javascript:", "data:", "file:", "vbscript:"]);
+function formSecret(ctx: ProviderContext): string | undefined {
+  return ctx.oidc?.session?.state?.secret;
+}
 
-/** Grok / Cursor desktop MCP OAuth uses a custom scheme, not https or loopback http. */
-const DESKTOP_REDIRECT_SCHEMES = new Set([
-  "cursor:",
-  "cursor-mcp:",
-  "vscode:",
-  "vscode-insiders:",
-  "grok:",
-  "xai:",
-  "xai-grok:",
-]);
-
-export function isDesktopRedirect(uri: string): boolean {
-  try {
-    const parsed = new URL(uri);
-    if (BLOCKED_REDIRECT_SCHEMES.has(parsed.protocol)) return false;
-    if (parsed.protocol === "https:" || parsed.protocol === "http:") return false;
-    return true;
-  } catch {
-    return false;
+function deviceErrorMessage(err: (Error & { userCode?: string }) | undefined): string | undefined {
+  if (!err) return undefined;
+  switch (err.name) {
+    case "NoCodeError":
+    case "NotFoundError":
+      return "That code did not work. Check it and try again.";
+    case "ExpiredError":
+      return "That code has expired. Start again on your device.";
+    case "AlreadyUsedError":
+      return "That code was already used. Start again on your device.";
+    case "AbortedError":
+      return "The device sign-in was cancelled.";
+    default:
+      return err.userCode ? "That code did not work. Check it and try again." : "Something went wrong. Try again.";
   }
 }
 
-export function assertRedirectUri(uri: string): void {
-  let parsed: URL;
+function cimdHostKey(clientId: string): string {
   try {
-    parsed = new URL(uri);
+    return `cimd:${new URL(clientId).host}`;
   } catch {
-    throw new Error("invalid redirect_uri");
+    return "cimd:invalid";
   }
-  if (BLOCKED_REDIRECT_SCHEMES.has(parsed.protocol)) {
-    throw new Error("redirect_uri scheme is not allowed");
-  }
-  const host = parsed.hostname.toLowerCase();
-  const loopbackHttp =
-    parsed.protocol === "http:" &&
-    (host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1");
-  if (parsed.protocol === "https:" || loopbackHttp) return;
-  if (DESKTOP_REDIRECT_SCHEMES.has(parsed.protocol)) return;
-  // Private-use URI scheme (RFC 7595): cursor://, grok://, com.example.app://
-  if (/^[a-z][a-z0-9+.-]*:$/.test(parsed.protocol) && parsed.protocol !== "http:") return;
-  throw new Error("redirect_uri must be https, loopback http, or a desktop app scheme");
 }
 
 export function createOauthProvider(opts: OauthAsOpts): Provider {
   const issuer = opts.issuer.replace(/\/$/, "");
   const audience = mcpAud(issuer);
+  const environment = opts.deployPlane ?? opts.kernel.deployPlane;
   const Adapter = createStoreAdapter(opts.kernel.store);
   const provider = new Provider(issuer, {
     adapter: Adapter,
     clients: [],
     cookies: {
-      keys: [opts.sessionSecret],
-      short: { sameSite: "lax", secure: opts.secureCookies },
-      long: { sameSite: "lax", secure: opts.secureCookies },
+      keys: deriveOidcCookieKeys(opts.sessionSecret),
+      short: { httpOnly: true, sameSite: "lax", secure: opts.secureCookies },
+      long: { httpOnly: true, sameSite: "lax", secure: opts.secureCookies },
     },
     pkce: {
       required: () => true,
@@ -104,14 +132,14 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
       resourceIndicators: {
         enabled: true,
         defaultResource: () => audience,
-        getResourceServerInfo(_ctx: unknown, resourceIndicator: string) {
+        getResourceServerInfo(_ctx, resourceIndicator) {
           if (resourceIndicator !== audience) {
             throw new oidcErrors.InvalidTarget("resource must be the MCP origin");
           }
           return {
             scope: "mcp",
             audience,
-            accessTokenFormat: "jwt" as const,
+            accessTokenFormat: "jwt",
             accessTokenTTL: 600,
           };
         },
@@ -125,13 +153,34 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
       deviceFlow: {
         enabled: true,
         charset: "digits",
-        userCodeInputSource(ctx: { body?: string }, _form: string, _out: unknown, err: unknown) {
-          ctx.body = deviceHtml(err ? "That code did not work. Try again." : undefined);
+        userCodeInputSource(ctx, _form, _out, err) {
+          ctx.type = "html";
+          ctx.body = deviceHtml(deviceErrorMessage(err), { xsrf: formSecret(ctx) });
+        },
+        userCodeConfirmSource(ctx, _form, client, _deviceInfo, userCode) {
+          ctx.type = "html";
+          ctx.body = deviceConfirmHtml({
+            clientName: client.clientName || client.clientId,
+            userCode,
+            xsrf: formSecret(ctx) ?? "",
+          });
+        },
+        successSource(ctx) {
+          ctx.type = "html";
+          ctx.body = deviceSuccessHtml(ctx.oidc?.client?.clientName);
         },
       },
       revocation: { enabled: true },
+      clientIdMetadataDocument: {
+        enabled: true,
+        ack: "draft-02",
+        allowFetch: (_ctx, clientId) =>
+          cimdLimiter.allow(cimdHostKey(clientId), CIMD_FETCHES_PER_HOST_PER_HOUR, 60 * 60 * 1000, Date.now()),
+        cacheDuration: { min: 60, max: 3600 },
+      },
     },
-    findAccount(_ctx: unknown, id: string) {
+    fetch: opts.fetchImpl ?? createPinnedFetch(),
+    findAccount(_ctx, id) {
       return {
         accountId: id,
         async claims() {
@@ -140,49 +189,30 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
       };
     },
     interactions: {
-      url(_ctx: unknown, interaction: { uid: string }) {
+      url(_ctx, interaction) {
         return `/consent?uid=${encodeURIComponent(interaction.uid)}`;
       },
     },
     extraClientMetadata: {
       properties: ["client_name"],
-      validator(_ctx: unknown, key: string, value: unknown, metadata: Record<string, unknown>) {
-        if (key === "client_name" && typeof value === "string" && value.length > 80) {
-          throw new Error("client_name too long");
-        }
-        delete metadata.logo_uri;
-        delete metadata.policy_uri;
-        const uris = metadata.redirect_uris;
-        if (Array.isArray(uris)) {
-          for (const uri of uris) {
-            if (typeof uri !== "string") {
-              throw new oidcErrors.InvalidClientMetadata("invalid redirect_uri");
-            }
-            try {
-              assertRedirectUri(uri);
-            } catch (err) {
-              throw new oidcErrors.InvalidClientMetadata(
-                err instanceof Error ? err.message : "invalid redirect_uri",
-              );
-            }
-          }
-          if (uris.some((uri) => typeof uri === "string" && isDesktopRedirect(uri))) {
-            metadata.application_type = "native";
-          }
-        }
-      },
+      validator: clientMetadataValidator,
     },
-    extraTokenClaims: async (_ctx: unknown, token: { kind?: string; jti?: string; clientId?: string; accountId?: string; exp?: number }) => {
+    extraTokenClaims: async (ctx, token) => {
       if (token.kind !== "AccessToken" && token.kind !== "access_token") {
         return undefined;
       }
       if (!token.jti || !token.clientId) throw new Error("token missing jti");
-      await persistIssuedAccess(opts.kernel, {
-        jti: token.jti,
-        oauthClientId: token.clientId,
-        accountId: typeof token.accountId === "string" ? token.accountId : undefined,
-        exp: token.exp,
-      });
+      await persistIssuedAccess(
+        opts.kernel,
+        {
+          jti: token.jti,
+          oauthClientId: token.clientId,
+          accountId: typeof token.accountId === "string" ? token.accountId : undefined,
+          exp: token.exp,
+          clientName: ctx.oidc?.client?.clientName,
+        },
+        environment,
+      );
       return undefined;
     },
     jwks: {
@@ -204,34 +234,58 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
       DeviceCode: 600,
       RefreshToken: 14 * 24 * 3600,
       Interaction: 3600,
-      Session: 14 * 24 * 3600,
+      IdToken: 3600,
+      // The OP's own login must not outlive a Botpasses session by much: a consent
+      // given an hour ago is re-prompted, and logout destroys it (endOidcSession).
+      Session: OP_SESSION_TTL_S,
+      Grant: 14 * 24 * 3600,
     },
-    renderError(_ctx: unknown, out: unknown) {
-      void out;
-      return undefined;
+    renderError(ctx, out) {
+      ctx.type = "html";
+      ctx.body = oauthErrorHtml(out);
     },
   });
+  // Fly terminates TLS. Without this Koa sees plain http, `ctx.secure` is false, and
+  // the cookie library refuses to set a Secure cookie on /oauth/authorize and /device.
+  provider.proxy = opts.secureCookies;
+  bindings.set(provider, { kernel: opts.kernel, secureCookies: opts.secureCookies });
+
+  const clientNameFor = async (clientId: string): Promise<string | undefined> => {
+    try {
+      return (await provider.Client.find(clientId))?.clientName;
+    } catch {
+      return undefined;
+    }
+  };
 
   provider.on("access_token.issued", (...args: unknown[]) => {
     const token = asTokenRef(args[0]);
     if (!token?.jti || !token.clientId) return;
-    void persistIssuedAccess(opts.kernel, {
-      jti: token.jti,
-      oauthClientId: token.clientId,
-      accountId: token.accountId,
-      exp: token.exp,
-    }).catch((err: unknown) => logLedgerPersistFailure("access_issued", err));
+    const { jti, clientId } = token;
+    void clientNameFor(clientId)
+      .then((clientName) =>
+        persistIssuedAccess(
+          opts.kernel,
+          { jti, oauthClientId: clientId, accountId: token.accountId, exp: token.exp, clientName },
+          environment,
+        ),
+      )
+      .catch((err: unknown) => logLedgerPersistFailure("access_issued", err));
   });
 
   provider.on("refresh_token.saved", (...args: unknown[]) => {
     const token = asTokenRef(args[0]);
     if (!token?.jti || !token.clientId) return;
-    void persistIssuedRefresh(opts.kernel, {
-      jti: token.jti,
-      oauthClientId: token.clientId,
-      accountId: token.accountId,
-      exp: token.exp,
-    }).catch((err: unknown) => logLedgerPersistFailure("refresh_saved", err));
+    const { jti, clientId } = token;
+    void clientNameFor(clientId)
+      .then((clientName) =>
+        persistIssuedRefresh(
+          opts.kernel,
+          { jti, oauthClientId: clientId, accountId: token.accountId, exp: token.exp, clientName },
+          environment,
+        ),
+      )
+      .catch((err: unknown) => logLedgerPersistFailure("refresh_saved", err));
   });
 
   const onDestroyed = (...args: unknown[]) => {
@@ -251,78 +305,31 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
   return provider;
 }
 
-export async function persistRevokedToken(kernel: HostedKernel, jti: string): Promise<void> {
-  const existing = await kernel.store.getAccessEventByJti(hashToken(jti));
-  if (!existing || existing.revokedAt) return;
-  const at = new Date().toISOString();
-  await kernel.store.revokeAccessEvent(existing.jtiHash, at);
-  await kernel.writeAudit(
-    existing.orgId,
-    "token_revoked",
-    existing.actorUserId ?? existing.clientId ?? "oauth",
-    null,
-    existing.clientId,
-  );
+/**
+ * Destroys the OP's own browser session so a later authorize request cannot reuse a
+ * login that Botpasses has already ended. Returns Set-Cookie headers that clear the OP
+ * session cookie; the caller (`POST /api/auth/logout`) appends them to its own.
+ */
+export async function endOidcSession(
+  provider: Provider,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<string[]> {
+  const ctx = provider.createContext(req, res);
+  const session = await provider.Session.get(ctx);
+  if (!session.new) await session.destroy();
+  const secure = bindings.get(provider)?.secureCookies ?? false;
+  const name = provider.cookieName("session");
+  const attrs = `Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
+  return [`${name}=; ${attrs}`, `${name}.sig=; ${attrs}`];
 }
 
-async function persistIssuedOauth(
-  kernel: HostedKernel,
-  kind: "oauth_access" | "oauth_refresh",
-  input: { jti: string; oauthClientId: string; accountId?: string; exp?: number },
-): Promise<void> {
-  const existing = await kernel.store.getAccessEventByJti(hashToken(input.jti));
-  if (existing) return;
-  const orgUser = input.accountId ? await kernel.ensureVaultOrgForUser(input.accountId) : undefined;
-  if (!orgUser) throw new Error("token missing account");
-  const client = await kernel.ensureModelClient({
-    orgId: orgUser.orgId,
-    name: input.oauthClientId.slice(0, 80),
-    environment: "staging",
-    clerkOauthUserId: input.oauthClientId,
-  });
-  const at = new Date().toISOString();
-  await kernel.recordAccessEvent({
-    orgId: orgUser.orgId,
-    clientId: client.id,
-    actorUserId: input.accountId ?? null,
-    kind,
-    jtiHash: hashToken(input.jti),
-    issuedAt: at,
-    expiresAt: input.exp ? new Date(input.exp * 1000).toISOString() : null,
-  });
-  await kernel.store.setClientLastTokenAt(client.id, at);
-  await kernel.writeAudit(orgUser.orgId, "token_issued", input.accountId ?? client.id, null, client.id);
-}
-
-export async function persistIssuedAccess(
-  kernel: HostedKernel,
-  input: { jti: string; oauthClientId: string; accountId?: string; exp?: number },
-): Promise<void> {
-  return persistIssuedOauth(kernel, "oauth_access", input);
-}
-
-export async function persistIssuedRefresh(
-  kernel: HostedKernel,
-  input: { jti: string; oauthClientId: string; accountId?: string; exp?: number },
-): Promise<void> {
-  return persistIssuedOauth(kernel, "oauth_refresh", input);
-}
-
-function asTokenRef(value: unknown): { jti?: string; clientId?: string; accountId?: string; exp?: number } | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const rec = value as Record<string, unknown>;
-  return {
-    jti: typeof rec.jti === "string" ? rec.jti : undefined,
-    clientId: typeof rec.clientId === "string" ? rec.clientId : undefined,
-    accountId: typeof rec.accountId === "string" ? rec.accountId : undefined,
-    exp: typeof rec.exp === "number" ? rec.exp : undefined,
-  };
-}
-
+/** Paths oidc-provider owns. `/device/:uid` is the device-flow resume route. */
 export function isOauthPath(path: string): boolean {
   return (
     path.startsWith("/oauth/") ||
     path === "/device" ||
+    path.startsWith("/device/") ||
     path === "/.well-known/openid-configuration" ||
     path === "/.well-known/oauth-authorization-server"
   );
@@ -333,32 +340,6 @@ export function assertDcrIp(req: IncomingMessage): void {
   if (!dcrLimiter.allow(`dcr:${ip}`, 20, 60 * 60 * 1000, Date.now())) {
     throw new HttpError(429, "Too many registrations");
   }
-}
-
-export function assertDcrRequest(req: IncomingMessage, body: Record<string, unknown>): void {
-  assertDcrIp(req);
-  const uris = body.redirect_uris;
-  if (!Array.isArray(uris) || uris.length === 0) throw new HttpError(400, "redirect_uris required");
-  for (const uri of uris) {
-    if (typeof uri !== "string") throw new HttpError(400, "invalid redirect_uri");
-    try {
-      assertRedirectUri(uri);
-    } catch (err) {
-      throw new HttpError(400, err instanceof Error ? err.message : "invalid redirect_uri");
-    }
-  }
-  if (typeof body.client_name === "string" && body.client_name.length > 80) {
-    throw new HttpError(400, "client_name too long");
-  }
-}
-
-export async function maybeLoadCimd(clientId: string): Promise<unknown | undefined> {
-  if (!clientId.startsWith("https://")) return undefined;
-  return fetchCimdDocument(clientId);
-}
-
-export function oauthCallback(provider: Provider) {
-  return provider.callback();
 }
 
 export function handleOauth(
