@@ -10,10 +10,11 @@
 set -u
 attempts="${AUDIT_ATTEMPTS:-3}"
 for attempt in $(seq 1 "$attempts"); do
-  if npm "$@" audit --omit=dev --audit-level=high --fetch-timeout=90000 --fetch-retries=0; then
+  status=0
+  npm "$@" audit --omit=dev --audit-level=high --fetch-timeout=90000 --fetch-retries=0 || status=$?
+  if [ "$status" -eq 0 ]; then
     exit 0
   fi
-  status=$?
   if [ "$attempt" -lt "$attempts" ]; then
     echo "npm audit attempt $attempt failed (exit $status); retrying in 15s" >&2
     sleep 15
