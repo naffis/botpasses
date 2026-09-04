@@ -37,7 +37,7 @@ test("S1: enrolled user signing in gets a pending session; operator API is 403 u
     assert.equal(denied.status, 403);
     const deniedBody = await readJson<{ error: string; enroll_url?: string; verify_url?: string }>(denied);
     assert.equal(deniedBody.error, "mfa_required");
-    assert.ok(deniedBody.verify_url === "/verify-totp" || deniedBody.enroll_url === "/enroll-totp");
+    assert.equal(deniedBody.verify_url, "/verify-totp");
 
     const me = await api(ctx, "/api/auth/me", { jar: second.jar });
     assert.equal(me.status, 403);

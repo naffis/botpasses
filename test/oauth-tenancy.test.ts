@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SignJWT, importJWK } from "jose";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { parseOidcPrivateJwk, type OidcPrivateJwk } from "../src/hosted/boot.ts";
+import { parseOidcPrivateJwk } from "../src/hosted/boot.ts";
 import { principalFromAccessJwt } from "../src/hosted/access-jwt.ts";
 import { HttpError } from "../src/hosted/errors.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
@@ -35,7 +35,7 @@ async function ctx(deployPlane: VaultEnvName) {
   return {
     store,
     kernel,
-    jwk: jwk as OidcPrivateJwk,
+    jwk,
     jwt,
     async done() {
       await store.close();

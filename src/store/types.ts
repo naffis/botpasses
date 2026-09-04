@@ -243,7 +243,8 @@ export type VaultStore = {
   getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined>;
   revokeAccessEventsForClient(clientId: string, at: string): Promise<void>;
   revokeAccessEvent(jtiHash: string, at: string): Promise<void>;
-  setClientRevoked(id: string, at: string): Promise<void>;
+  /** `at` null clears the revocation (re-consent through OAuth reactivates the same row). */
+  setClientRevoked(id: string, at: string | null): Promise<void>;
   touchClientLastSeen(id: string, at: string): Promise<void>;
   setClientLastTokenAt(id: string, at: string): Promise<void>;
 
@@ -297,7 +298,7 @@ export function oidcPayloadIndex(payload: string): OidcPayloadIndex {
   }
   if (!parsed || typeof parsed !== "object") return empty;
   const rec = parsed as Record<string, unknown>;
-  const str = (key: string): string | null => (typeof rec[key] === "string" && rec[key] ? (rec[key] as string) : null);
+  const str = (key: string): string | null => (typeof rec[key] === "string" && rec[key] ? rec[key] : null);
   return {
     uid: str("uid"),
     userCode: str("userCode"),

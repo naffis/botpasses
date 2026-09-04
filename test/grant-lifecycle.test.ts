@@ -406,7 +406,7 @@ test("model bearer cannot approve: approve-by-code, /approve, /api/grants/:id/ap
       fetch(`${ctx.base}/api/grants/approve-by-code`, { method: "POST", headers: ctx.modelH, body: JSON.stringify({ code: asked.approval_code }) }),
       fetch(`${ctx.base}/approve?token=${encodeURIComponent(token)}`, { headers: ctx.modelH }),
       fetch(`${ctx.base}/approve`, { method: "POST", headers: ctx.modelH, body: JSON.stringify({ token }) }),
-      fetch(`${ctx.base}/api/grants/${asked.grant_id}/approve`, { method: "POST", headers: ctx.modelH, body: JSON.stringify({ policy: "prompt" }) }),
+      fetch(`${ctx.base}/api/grants/${String(asked.grant_id)}/approve`, { method: "POST", headers: ctx.modelH, body: JSON.stringify({ policy: "prompt" }) }),
     ];
     for (const res of await Promise.all(attempts)) {
       assert.equal(res.status, 403);
@@ -417,7 +417,7 @@ test("model bearer cannot approve: approve-by-code, /approve, /api/grants/:id/ap
   }
 });
 
-test("ensureModelClient does not resurrect a revoked client (S15)", async () => {
+test("ensureModelClient reactivates a revoked OAuth client on re-consent instead of duplicating the unique pair (S15)", async () => {
   const ctx = await setup();
   try {
     const first = await ctx.kernel.ensureModelClient({
@@ -433,7 +433,7 @@ test("ensureModelClient does not resurrect a revoked client (S15)", async () => 
       environment: "staging",
       clerkOauthUserId: "dcr_shared",
     });
-    assert.notEqual(second.id, first.id);
+    assert.equal(second.id, first.id);
     assert.equal(second.revokedAt, null);
   } finally {
     await ctx.close();
@@ -449,7 +449,7 @@ test("revokeSession needs a 12+ char id and owner role for another member's sess
     const at = new Date().toISOString();
     const later = new Date(Date.now() + 3_600_000).toISOString();
     for (const [idHash, userId] of [[ownerHash, "user_owner"], [opHash, "user_op"], [opOther, "user_op"]] as const) {
-      await ctx.store.insertSession({ idHash, userId, createdAt: at, lastSeenAt: at, expiresAt: later });
+      await ctx.store.insertSession({ idHash, userId, createdAt: at, lastSeenAt: at, expiresAt: later, mfaAt: at });
     }
     const asOp = { userId: "user_op", role: "operator" as const, sessionHash: opHash };
     const asOwner = { userId: "user_owner", role: "owner" as const, sessionHash: ownerHash };

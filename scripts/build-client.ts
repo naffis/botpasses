@@ -105,7 +105,7 @@ export function renderBundleModule(bundles: Record<string, string[]> = CLIENT_BU
 function main(argv: string[]): void {
   const next = renderBundleModule();
   if (argv.includes("--check")) {
-    let current = "";
+    let current: string;
     try {
       current = readFileSync(OUT, "utf8");
     } catch {

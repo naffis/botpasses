@@ -3,6 +3,7 @@
  * Never returns secret values. There is no get_secret.
  */
 import { MCP_SERVER_NAME } from "../brand.ts";
+import { packageVersion } from "./observe.ts";
 import {
   HOSTED_TOOL_DESCRIPTIONS,
   HOSTED_TOOL_PARAM_DESCRIPTIONS,
@@ -19,7 +20,7 @@ import { attachMcpNext } from "./mcp-steer.ts";
 
 export const HOSTED_MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
-  version: "0.3.4",
+  version: packageVersion(),
 } as const;
 
 export const HOSTED_MCP_PROTOCOL = "2024-11-05";
@@ -297,7 +298,7 @@ function optional(value: unknown): string | undefined {
 function mcpPayloadResult(payload: unknown): McpCallResult {
   const status =
     payload && typeof payload === "object" && "status" in payload
-      ? (payload as { status: unknown }).status
+      ? payload.status
       : undefined;
   const blocking = status === "host_mismatch";
   return {

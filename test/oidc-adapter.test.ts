@@ -10,17 +10,17 @@ import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { oidcPayloadIndex, type VaultStore } from "../src/store/types.ts";
 import { cleanup, tempHome } from "./helpers.ts";
 
-type Backend = { name: string; open(): Promise<{ store: VaultStore; done(): Promise<void> }> };
+type Backend = { name: string; open: () => Promise<{ store: VaultStore; done: () => Promise<void> }> };
 
 const backends: Backend[] = [
   {
     name: "sqlite",
-    async open() {
+    open: async () => {
       const home = tempHome();
       const store = openHostedSqlite(join(home, "oidc.sqlite"));
       return {
         store,
-        async done() {
+        done: async () => {
           await store.close();
           cleanup(home);
         },
@@ -32,7 +32,7 @@ if (process.env.DATABASE_URL) {
   const url = process.env.DATABASE_URL;
   backends.push({
     name: "postgres",
-    async open() {
+    open: async () => {
       const store = await PostgresStore.open(url);
       return { store, done: () => store.close() };
     },

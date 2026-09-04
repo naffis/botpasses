@@ -11,6 +11,8 @@ export type OperatorPrincipal = {
   role: MemberRole;
   ready?: boolean;
   sessionHash?: string;
+  /** Enrolled, but this session has not passed the authenticator step yet. */
+  needs_totp?: boolean;
 };
 
 export type ModelPrincipal = {
@@ -146,7 +148,11 @@ export function requireOperator(p: Principal | undefined): OperatorPrincipal {
   if (!p) throw new HttpError(401, "Authentication required");
   if (p.channel !== "operator") throw new HttpError(403, "Operator session required");
   if (p.ready === false) {
-    throw new HttpError(403, "mfa_required", { enroll_url: "/enroll-totp" });
+    throw new HttpError(
+      403,
+      "mfa_required",
+      p.needs_totp ? { verify_url: "/verify-totp" } : { enroll_url: "/enroll-totp" },
+    );
   }
   if (!p.orgId) throw new HttpError(403, "Organization required");
   return p;

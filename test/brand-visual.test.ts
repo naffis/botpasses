@@ -51,9 +51,9 @@ test("light theme is light and dark theme is dark", () => {
 
 test("css variables emit light on :root and dark under both guards", () => {
   const css = cssVariables();
-  assert.match(css, /^:root \{\n  color-scheme: light dark;\n  --bg: #F4F7F4;/);
-  assert.match(css, /@media \(prefers-color-scheme: dark\) \{\n  :root:not\(\[data-theme="light"\]\) \{\n {4}--bg: #0B0F0C;/);
-  assert.match(css, /:root\[data-theme="dark"\] \{\n  --bg: #0B0F0C;/);
+  assert.match(css, /^:root \{\n {2}color-scheme: light dark;\n {2}--bg: #F4F7F4;/);
+  assert.match(css, /@media \(prefers-color-scheme: dark\) \{\n {2}:root:not\(\[data-theme="light"\]\) \{\n {4}--bg: #0B0F0C;/);
+  assert.match(css, /:root\[data-theme="dark"\] \{\n {2}--bg: #0B0F0C;/);
   assert.doesNotMatch(css, /oklch/);
   for (const name of Object.values(CSS_VAR_NAMES)) {
     assert.equal(css.split(`${name}:`).length - 1, 3, `${name} defined in all three blocks`);

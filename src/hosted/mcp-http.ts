@@ -335,7 +335,7 @@ async function tryUserSpotify(
   target: ConnectorTarget,
   environment: VaultEnvName,
   host: string,
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   const refreshName = refreshItemName(item.name);
   const stored = await deps.kernel.findStoredItem(deps.principal.orgId, environment, refreshName);
   if (!stored) return undefined;

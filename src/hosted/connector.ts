@@ -123,7 +123,7 @@ export function redactConnectorBody(body: string, item: ConnectorItem, extra: re
 /** Human-readable transport failure without the request (which carries the credential). */
 export function describeOriginFailure(err: unknown, host: string, aborted: boolean): string {
   if (aborted) return `Origin request failed: ${host} did not respond within ${ORIGIN_TIMEOUT_MS / 1000}s`;
-  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+  const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
   if (code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "EAI_NODATA") {
     return `Origin request failed: DNS lookup for ${host} failed (${code})`;
   }

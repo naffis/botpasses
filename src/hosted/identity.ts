@@ -4,7 +4,6 @@ import { HttpError } from "./errors.ts";
 import { readBearer, resolveMachineToken, type AuthResolver, type OperatorPrincipal, type Principal } from "./auth.ts";
 import { OperatorIdentity, totpEnabled } from "./operator-identity.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
-import { logVaultEvent } from "./observe.ts";
 import { principalFromAccessJwt } from "./access-jwt.ts";
 
 export { principalFromAccessJwt };

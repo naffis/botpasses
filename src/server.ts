@@ -16,13 +16,11 @@ export function createVaultServer(opts: ServerOptions) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8788;
 
-  const server = createServer(async (req, res) => {
-    try {
-      await route(opts.vault, req, res);
-    } catch (err) {
+  const server = createServer((req, res) => {
+    void route(opts.vault, req, res).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       if (!res.headersSent) json(res, 400, { error: message });
-    }
+    });
   });
 
   return {

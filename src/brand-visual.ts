@@ -160,7 +160,7 @@ export function cssTokenLines(theme: BrandTheme): string {
 export function cssVariables(): string {
   const light = cssTokenLines("light");
   const dark = cssTokenLines("dark");
-  const darkNested = dark.replace(/\n  /g, "\n    ");
+  const darkNested = dark.replace(/\n {2}/g, "\n    ");
   return [
     `:root {\n  color-scheme: light dark;\n  ${light}\n}`,
     `@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {\n    ${darkNested}\n  }\n}`,

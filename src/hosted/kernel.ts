@@ -45,6 +45,7 @@ import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import { logVaultEvent } from "./observe.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
+import { IdentityKeyring, type IdentityRotateResult } from "./identity-keys.ts";
 import { itemStoresLoginPayload, storedItemUsername } from "./store-form-fields.ts";
 import {
   chooseSpotifyRedirect,
@@ -241,7 +242,7 @@ export class HostedKernel {
   async rotateKek(
     oldKek: Buffer,
     newKek: Buffer,
-  ): Promise<{ rewrapped: number; skipped: number }> {
+  ): Promise<{ rewrapped: number; skipped: number; identity: IdentityRotateResult }> {
     const orgs = await this.store.listOrgs();
     let rewrapped = 0;
     let skipped = 0;
@@ -267,7 +268,8 @@ export class HostedKernel {
       });
       rewrapped += 1;
     }
-    return { rewrapped, skipped };
+    const identity = await new IdentityKeyring(this.store, oldKek, this.now).rotateKek(oldKek, newKek);
+    return { rewrapped, skipped, identity };
   }
 
   async rotateClient(
@@ -566,13 +568,22 @@ export class HostedKernel {
     clerkOauthUserId: string;
   }): Promise<ClientRecord> {
     const clients = await this.store.listClients(input.orgId);
-    const existing = clients.find(
+    const matches = clients.filter(
       (c) =>
         c.kind === "model" &&
-        !c.revokedAt &&
         (c.oauthClientId === input.clerkOauthUserId || c.clerkOauthUserId === input.clerkOauthUserId),
     );
-    if (existing) return existing;
+    const active = matches.find((c) => !c.revokedAt);
+    if (active) return active;
+    // (org_id, oauth_client_id) is unique, so a revoked row is reactivated by a fresh consent
+    // rather than duplicated. Its refresh tokens were destroyed at revoke; new ones are issued now.
+    const revoked = matches[0];
+    if (revoked) {
+      await this.store.setClientRevoked(revoked.id, null);
+      await this.#audit(input.orgId, "client_reactivated", "oauth", null, revoked.id);
+      const fresh = await this.store.getClient(revoked.id);
+      if (fresh) return fresh;
+    }
     const created = await this.createModelClient(input);
     return created.client;
   }
@@ -1272,7 +1283,7 @@ export class HostedKernel {
     const envName = opened.environment === "production" ? "production" : "staging";
     const env = await this.envFor(input.orgId, envName);
     const existing = await this.store.getItemByName(env.id, name);
-    let last = "";
+    let last: string;
     let refreshId = existing?.id ?? "";
     if (existing) {
       const rotated = await this.rotateItem({

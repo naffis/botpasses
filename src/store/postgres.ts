@@ -1183,7 +1183,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query("UPDATE access_events SET revoked_at = $1 WHERE jti_hash = $2", [at, jtiHash]);
   }
 
-  async setClientRevoked(id: string, at: string): Promise<void> {
+  async setClientRevoked(id: string, at: string | null): Promise<void> {
     await this.#pool.query("UPDATE clients SET revoked_at = $1 WHERE id = $2", [at, id]);
   }
 

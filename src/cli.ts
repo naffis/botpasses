@@ -455,7 +455,7 @@ async function cmdKekRotate(io: Io): Promise<number> {
   try {
     const kernel = new HostedKernel({ store, kek: oldKek });
     const result = await kernel.rotateKek(oldKek, newKek);
-    io.error(`rewrapped=${result.rewrapped} skipped=${result.skipped}`);
+    io.error(`rewrapped=${result.rewrapped} skipped=${result.skipped} identity=${JSON.stringify(result.identity)}`);
     const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
     const plane = process.env.VAULT_DEPLOY_PLANE;
     const app = process.env.FLY_APP_NAME?.trim() ?? "";

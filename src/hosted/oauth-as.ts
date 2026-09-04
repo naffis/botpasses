@@ -352,7 +352,7 @@ export function handleOauth(
   return new Promise((resolve, reject) => {
     const cb = provider.callback();
     cb(req, res, (err?: unknown) => {
-      if (err) reject(err);
+      if (err) reject(err instanceof Error ? err : new Error(String(err)));
       else resolve();
     });
   });

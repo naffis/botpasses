@@ -100,7 +100,7 @@ test("fetchPinned dials the pinned IP with the hostname as SNI and Host, and ver
           port,
         }),
       (err: unknown) => {
-        const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+        const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
         return code === "DEPTH_ZERO_SELF_SIGNED_CERT" || code === "SELF_SIGNED_CERT_IN_CHAIN";
       },
       "without the CA the self-signed certificate is rejected",

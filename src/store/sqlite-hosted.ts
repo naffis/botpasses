@@ -1301,7 +1301,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("UPDATE access_events SET revoked_at = ? WHERE jti_hash = ?").run(at, jtiHash);
   }
 
-  async setClientRevoked(id: string, at: string): Promise<void> {
+  async setClientRevoked(id: string, at: string | null): Promise<void> {
     this.#db.prepare("UPDATE clients SET revoked_at = ? WHERE id = ?").run(at, id);
   }
 

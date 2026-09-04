@@ -3,6 +3,7 @@
  * must produce no diff, the strip is structural, and the pure client modules behave.
  */
 import assert from "node:assert/strict";
+import { Script } from "node:vm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -24,7 +25,7 @@ test("bundles are plain JS with no leftover module syntax and parse cleanly", ()
     assert.doesNotMatch(js, /^\s*import\s/m);
     assert.doesNotMatch(js, /^\s*export\s/m);
     assert.doesNotMatch(js, /<reference/);
-    assert.doesNotThrow(() => new Function(js));
+    assert.doesNotThrow(() => new Script(js));
   }
   assert.match(COLLECT_JS, /loadNeed\(\);/);
   assert.equal(hostedAsset("/assets/console.js")?.body, CONSOLE_JS);

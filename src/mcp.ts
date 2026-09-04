@@ -118,7 +118,7 @@ export function callMcpTool(
     assertSafePublicObject(`mcp:${name}`, payload);
     const status =
       payload && typeof payload === "object" && "status" in payload
-        ? (payload as { status: unknown }).status
+        ? payload.status
         : undefined;
     return {
       content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],

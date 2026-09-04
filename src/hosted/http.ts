@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { logRequest, requestIdFrom } from "./observe.ts";
 import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT } from "../brand.ts";
 import {
@@ -86,6 +87,18 @@ export function createHostedServer(opts: HostedHttpOpts) {
   }
 
   const server = createServer((req, res) => {
+    const startedAt = process.hrtime.bigint();
+    const requestId = requestIdFrom(req.headers);
+    res.setHeader("x-request-id", requestId);
+    res.on("finish", () => {
+      logRequest({
+        method: req.method ?? "GET",
+        path: (req.url ?? "/").split("?")[0] ?? "/",
+        status: res.statusCode,
+        ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
+        requestId,
+      });
+    });
     void route(req, res).catch((err: unknown) => {
       if (!res.headersSent) sendError(res, err);
     });
@@ -378,11 +391,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         readJson,
         json,
         setCookies,
-        clientIp: (r) =>
-          identity.clientIp(
-            typeof r.headers["x-forwarded-for"] === "string" ? r.headers["x-forwarded-for"] : undefined,
-            r.socket.remoteAddress,
-          ),
+        oidcProvider,
       });
       if (handled) return;
     }
@@ -549,7 +558,7 @@ export { KEEPALIVE_MS };
 function isPublicHtmlPath(path: string, hosted: boolean): boolean {
   if (!hosted) return path === "/" || path === "/index.html" || path.startsWith("/collect/");
   return isPublicSitePath(path) || path === "/console" || path.startsWith("/collect/") ||
-    path === "/sign-in" || path === "/sign-up" || path === "/enroll-totp" || path === "/consent" ||
+    path === "/sign-in" || path === "/sign-up" || path === "/enroll-totp" || path === "/verify-totp" || path === "/consent" ||
     path === "/device";
 }
 
@@ -566,6 +575,7 @@ function robotsTxt(plane: "staging" | "production"): string {
     "Disallow: /sign-in",
     "Disallow: /sign-up",
     "Disallow: /enroll-totp",
+    "Disallow: /verify-totp",
     "Disallow: /consent",
     "Disallow: /device",
     "Disallow: /collect",
