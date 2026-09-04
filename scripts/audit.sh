@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Runs `npm audit` for runtime dependencies with a bounded fetch timeout and retries.
-# Each attempt gives the registry 45 s; four attempts bound the step to about four minutes.
+# Each attempt gives the bulk endpoint and then npm's quick-endpoint fallback 90 s each,
+# so three attempts bound the step to about nine minutes; a healthy registry answers in under a minute.
 # The registry's bulk advisory endpoint sometimes hangs for minutes and the fallback
 # "quick" endpoint then answers 400; neither says anything about the lockfile. A real
 # advisory still fails every attempt and so fails the step.
 #
 # Usage: scripts/audit.sh [npm --prefix args...]   e.g. scripts/audit.sh --prefix site
 set -u
-attempts="${AUDIT_ATTEMPTS:-4}"
+attempts="${AUDIT_ATTEMPTS:-3}"
 for attempt in $(seq 1 "$attempts"); do
-  if npm "$@" audit --omit=dev --audit-level=high --fetch-timeout=45000 --fetch-retries=0; then
+  if npm "$@" audit --omit=dev --audit-level=high --fetch-timeout=90000 --fetch-retries=0; then
     exit 0
   fi
   status=$?
