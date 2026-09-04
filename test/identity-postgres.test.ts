@@ -1,6 +1,7 @@
 /** Identity queries against a real Postgres. Skips without DATABASE_URL, like hosted-postgres.test.ts. */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 import { test } from "node:test";
 import * as OTPAuth from "otpauth";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
@@ -36,6 +37,14 @@ test("identity on Postgres: enroll, pending session rotation, lockout, backup co
     return;
   }
   const store = await PostgresStore.open(dbUrl);
+  // The identity DEK is a singleton row; each run uses a fresh random KEK, so a row left by a
+  // previous run on a shared database cannot unwrap. Clearing it here mirrors a first boot.
+  {
+    const admin = new Client({ connectionString: dbUrl });
+    await admin.connect();
+    await admin.query("DELETE FROM identity_keys WHERE id = 'identity'");
+    await admin.end();
+  }
   await store.migrate(); // the ALTER2 statements must be idempotent
   const clock = { now: Date.now() };
   const now = (): Date => new Date(clock.now);
