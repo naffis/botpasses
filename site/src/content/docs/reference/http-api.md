@@ -14,7 +14,7 @@ Operator JSON never includes secret values after submit. Model tokens cannot res
 | Who | Credential | May call |
 | --- | --- | --- |
 | Operator | HttpOnly session cookie after email code and authenticator. Send `X-CSRF-Token` on POST and DELETE | `/api/*` operator routes, Inbox, Access, approve, revoke |
-| Model (agent) | OAuth access JWT (`aud` is `https://botpasses.com/mcp`) or a console-issued `avm_...` bearer | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
+| Model (agent) | OAuth access JWT (`aud` is `https://botpasses.com/mcp`; its `org_id` is the organisation the operator consented in, and the operator must still be a member) or a console-issued `avm_...` bearer | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
 | Trusted runtime | `avt_...` bearer | `POST /runtime/resolve` only |
 
 A session that has not completed the authenticator step gets 403 `{ "error": "mfa_required", "enroll_url": "/enroll-totp" }` when no authenticator is enrolled, or `{ "error": "mfa_required", "verify_url": "/verify-totp" }` when one is and this session has not passed it yet. Ids from another organisation are 404. A foreign browser `Origin` on `/api` is 403 with no CORS allow header; `/mcp`, the well-known documents, and `/oauth` reflect the caller's Origin so browser-based MCP hosts can connect. Invalid bearer on public HTML is ignored (the page loads); the same bearer on `/api` or `POST /mcp` is 401.
@@ -107,16 +107,16 @@ Policies: `prompt` (one successful call, then consumed; a failed call keeps it u
 
 ## OAuth (botpasses.com is the authorization server)
 
-PKCE S256 is required. Access tokens are RS256 JWTs with audience `https://botpasses.com/mcp` and a 600 second lifetime. Refresh tokens rotate.
+PKCE S256 is required. Clients are public (`token_endpoint_auth_method` `none`; a registration that asks for a client secret is refused) and use the `code` response type. Access tokens are RS256 JWTs with audience `https://botpasses.com/mcp`, a 600 second lifetime, and an `org_id` claim naming the organisation the operator consented in. Refresh tokens rotate.
 
 | Path | Role |
 | --- | --- |
-| `/oauth/authorize` | Authorization code. The operator signs in and consents in the browser |
-| `/oauth/token` | Code or refresh token to JWT |
-| `/oauth/jwks` | RS256 public keys |
+| `/oauth/authorize` | Authorization code. The operator signs in and consents in the browser; the consent is bound to the organisation their session is acting in |
+| `/oauth/token` | Code or refresh token to JWT. A refresh for an agent that was revoked in the console is `invalid_grant`; only a new consent brings the agent back |
+| `/oauth/jwks` | RS256 public keys. Two are listed while a key rotation is in progress; new tokens are signed with the first |
 | `/oauth/register` | Dynamic client registration. `redirect_uris` may be `https`, loopback `http`, or a desktop scheme such as `cursor://`. `javascript:`, `data:`, and `file:` are rejected. 20 per IP per hour |
-| `/oauth/device/auth` | RFC 8628 device code. The operator finishes at `/device` |
-| `/oauth/revoke` | RFC 7009. Marks the token revoked in the Access ledger |
+| `/oauth/device/auth` | RFC 8628 device code. The operator finishes at `/device` (10 code attempts per 15 minutes per IP) |
+| `/oauth/revoke` | RFC 7009. Revoking a refresh token also revokes every access token issued with it; a JWT access token is revoked by its `jti`. Marked in the Access ledger |
 | `/consent`, `/device` | HTML pages for the two flows above. The consent page's script posts `{ "uid", "decision" }` with `Accept: application/json` and gets `200 { "location" }` to navigate to; other callers get a 303 to the same resume URL |
 
 ## Local vault serve (loopback)

@@ -13,6 +13,8 @@ export type IdentityResolverOpts = {
   kernel: HostedKernel;
   secureCookies: boolean;
   oidcJwk?: OidcPrivateJwk;
+  /** Key being rotated out: still verifies access tokens it signed. See docs/ops/oidc-key-rotation.md. */
+  oidcPreviousJwk?: OidcPrivateJwk;
   issuer?: string;
 };
 
@@ -48,7 +50,7 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
     }
     const bearer = readBearer(req);
     if (bearer && opts.oidcJwk && opts.issuer) {
-      return principalFromAccessJwt(kernel, bearer, opts.oidcJwk, opts.issuer);
+      return principalFromAccessJwt(kernel, bearer, opts.oidcJwk, opts.issuer, opts.oidcPreviousJwk);
     }
     // Secure cookies are `__Host-` names only and are honoured only on a TLS request: a plain
     // `bp_session` cookie tossed onto an HTTPS origin, or a session replayed over HTTP, is ignored.

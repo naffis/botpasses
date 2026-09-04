@@ -4,6 +4,7 @@
  */
 import { errors as oidcErrors, type ProviderContext } from "oidc-provider";
 import type { VaultEnvName } from "../hosted-types.ts";
+import { HttpError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { hashToken } from "./operator-identity.ts";
 import { logVaultEvent } from "./observe.ts";
@@ -102,6 +103,68 @@ export function clientMetadataValidator(
   }
 }
 
+/* ---- org binding: the consenting org travels in the Grant, then in the access JWT ---- */
+
+const ORG_SCOPE_PREFIX = "org:";
+
+/** Resource scope token that pins a Grant to the org the operator consented in. */
+export function orgScope(orgId: string): string {
+  return `${ORG_SCOPE_PREFIX}${orgId}`;
+}
+
+/** The `org:<id>` marker in a Grant's resource scopes, whichever resource carries it. */
+export function orgFromGrantResources(resources: Record<string, unknown> | undefined): string | undefined {
+  if (!resources) return undefined;
+  for (const scopes of Object.values(resources)) {
+    if (typeof scopes !== "string") continue;
+    for (const scope of scopes.split(/\s+/)) {
+      if (scope.startsWith(ORG_SCOPE_PREFIX) && scope.length > ORG_SCOPE_PREFIX.length) {
+        return scope.slice(ORG_SCOPE_PREFIX.length);
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The org an issuance belongs to: the marker bound into the Grant at consent, else (grants
+ * written before the marker existed) the account's first membership. Only issuance reads
+ * the fallback; verification never provisions or guesses an org.
+ */
+export async function orgForIssuance(
+  kernel: HostedKernel,
+  grant: { resources?: Record<string, string> } | undefined,
+  accountId: string,
+): Promise<string> {
+  const bound = orgFromGrantResources(grant?.resources);
+  if (bound) return bound;
+  return (await kernel.ensureVaultOrgForUser(accountId)).orgId;
+}
+
+/** Which grant produced a token. Anything unrecognised is treated like a refresh: it never reactivates. */
+export type IssuanceKind = "authorization_code" | "device_code" | "refresh_token" | "unknown";
+
+const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+
+export function issuanceKind(grantType: string): IssuanceKind {
+  switch (grantType) {
+    case "authorization_code":
+      return "authorization_code";
+    case DEVICE_CODE_GRANT:
+      return "device_code";
+    case "refresh_token":
+      return "refresh_token";
+    default:
+      return "unknown";
+  }
+}
+
+/** oidc-provider's `gty` is a chain (`authorization_code refresh_token`); the last link is what issued this token. */
+export function issuanceFromGty(gty: string | undefined): IssuanceKind {
+  const last = gty?.trim().split(/\s+/).at(-1);
+  return issuanceKind(last ?? "");
+}
+
 export type IssuedTokenInput = {
   jti: string;
   oauthClientId: string;
@@ -109,6 +172,12 @@ export type IssuedTokenInput = {
   exp?: number;
   /** DCR or CIMD `client_name`; the vault client is named after it on first issue. */
   clientName?: string;
+  /** Org bound at consent. Omitted only by legacy callers; the account's first membership is used then. */
+  orgId?: string;
+  /** oidc-provider grant id, so a grant-wide revoke can mark every token it issued. */
+  grantId?: string;
+  /** Defaults to `unknown`, which never reactivates a revoked client. */
+  issuance?: IssuanceKind;
 };
 
 export function logLedgerPersistFailure(kind: string, err: unknown): void {
@@ -130,16 +199,30 @@ export async function persistRevokedToken(kernel: HostedKernel, jti: string): Pr
   );
 }
 
+/** Marks every live ledger row issued under `grantId` (refresh revoked or reused: its access tokens die too). */
+export async function persistRevokedGrant(kernel: HostedKernel, grantId: string): Promise<void> {
+  const at = new Date().toISOString();
+  const rows = await kernel.store.revokeAccessEventsForGrant(grantId, at);
+  for (const row of rows) {
+    await kernel.writeAudit(row.orgId, "token_revoked", row.actorUserId ?? row.clientId ?? "oauth", null, row.clientId);
+  }
+}
+
 function vaultClientName(input: IssuedTokenInput): string {
   const name = input.clientName?.trim();
   return (name || input.oauthClientId).slice(0, 80);
 }
 
+function isRevokedClientConflict(err: unknown): boolean {
+  return err instanceof HttpError && err.status === 409;
+}
+
 /**
- * Records an issued OAuth token on the access ledger and makes sure the operator's
- * org has a vault client for this OAuth client id. The vault client lives in the
- * plane's default environment (`environment`), never a hard-coded one, and remembers
- * which account consented so revocation can stay inside that account.
+ * Records an issued OAuth token on the access ledger and makes sure the consented org
+ * has a vault client for this OAuth client id. The vault client lives in the plane's
+ * default environment (`environment`), never a hard-coded one, and remembers which
+ * account consented. Only a fresh consent may bring a revoked vault client back; a
+ * refresh for a revoked client fails the grant.
  */
 async function persistIssuedOauth(
   kernel: HostedKernel,
@@ -150,28 +233,40 @@ async function persistIssuedOauth(
   const existing = await kernel.store.getAccessEventByJti(hashToken(input.jti));
   if (existing) return;
   if (!input.accountId) throw new Error("token missing account");
-  const orgUser = await kernel.ensureVaultOrgForUser(input.accountId);
-  const client = await kernel.ensureModelClient({
-    orgId: orgUser.orgId,
-    name: vaultClientName(input),
-    environment,
-    clerkOauthUserId: input.oauthClientId,
-  });
+  const orgId = input.orgId ?? (await kernel.ensureVaultOrgForUser(input.accountId)).orgId;
+  if (!(await kernel.store.getMember(orgId, input.accountId))) {
+    throw new oidcErrors.InvalidGrant("account is no longer a member of the consented org");
+  }
+  const issuance = input.issuance ?? "unknown";
+  let client;
+  try {
+    client = await kernel.ensureModelClient({
+      orgId,
+      name: vaultClientName(input),
+      environment,
+      clerkOauthUserId: input.oauthClientId,
+      reactivateRevoked: issuance === "authorization_code" || issuance === "device_code",
+    });
+  } catch (err) {
+    if (isRevokedClientConflict(err)) throw new oidcErrors.InvalidGrant("client is revoked");
+    throw err;
+  }
   if (!client.consentedByUserId) {
     await kernel.store.setClientConsentedBy(client.id, input.accountId);
   }
   const at = new Date().toISOString();
   await kernel.recordAccessEvent({
-    orgId: orgUser.orgId,
+    orgId,
     clientId: client.id,
     actorUserId: input.accountId,
     kind,
     jtiHash: hashToken(input.jti),
     issuedAt: at,
     expiresAt: input.exp ? new Date(input.exp * 1000).toISOString() : null,
+    grantId: input.grantId ?? null,
   });
   await kernel.store.setClientLastTokenAt(client.id, at);
-  await kernel.writeAudit(orgUser.orgId, "token_issued", input.accountId, null, client.id);
+  await kernel.writeAudit(orgId, "token_issued", input.accountId, null, client.id);
 }
 
 export async function persistIssuedAccess(
@@ -190,7 +285,14 @@ export async function persistIssuedRefresh(
   return persistIssuedOauth(kernel, "oauth_refresh", input, environment);
 }
 
-export type TokenRefView = { jti?: string; clientId?: string; accountId?: string; exp?: number };
+export type TokenRefView = {
+  jti?: string;
+  clientId?: string;
+  accountId?: string;
+  grantId?: string;
+  gty?: string;
+  exp?: number;
+};
 
 export function asTokenRef(value: unknown): TokenRefView | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -199,6 +301,8 @@ export function asTokenRef(value: unknown): TokenRefView | undefined {
     jti: typeof rec.jti === "string" ? rec.jti : undefined,
     clientId: typeof rec.clientId === "string" ? rec.clientId : undefined,
     accountId: typeof rec.accountId === "string" ? rec.accountId : undefined,
+    grantId: typeof rec.grantId === "string" ? rec.grantId : undefined,
+    gty: typeof rec.gty === "string" ? rec.gty : undefined,
     exp: typeof rec.exp === "number" ? rec.exp : undefined,
   };
 }

@@ -57,6 +57,11 @@ export type EnsureModelClientInput = {
   name: string;
   environment: VaultEnvName;
   clerkOauthUserId: string;
+  /**
+   * True only when an operator has just consented again (authorization code or device code
+   * issuance). A refresh, or anything else, must never bring a revoked client back.
+   */
+  reactivateRevoked?: boolean;
 };
 
 export type SessionActor = { userId: string; role: MemberRole; sessionHash: string };
@@ -99,6 +104,7 @@ export async function rotateClient(
   clientId: string,
 ): Promise<{ token: string; client_id: string }> {
   const client = await host.clientInOrg(orgId, clientId);
+  if (client.revokedAt) throw new HttpError(409, "Client is revoked");
   const prefix = client.kind === "trusted" ? "avt_" : "avm_";
   const plaintext = `${prefix}${randomBytes(24).toString("hex")}`;
   await host.store.updateClientHashedSecret(client.id, hashSecret(plaintext), last4(plaintext));
@@ -153,7 +159,11 @@ export async function createModelClient(
   return { client: row, plaintext };
 }
 
-/** Reuses the live model client for this OAuth id. Revoked clients are never resurrected. */
+/**
+ * Reuses the live model client for this OAuth id. A revoked row is reactivated only for a
+ * fresh consent (`reactivateRevoked`); any other caller gets 409 so a refresh token held by
+ * another member of the org cannot undo an owner's revoke.
+ */
 export async function ensureModelClient(host: ClientHost, input: EnsureModelClientInput): Promise<ClientRecord> {
   const clients = await host.store.listClients(input.orgId);
   const matches = clients.filter(
@@ -167,6 +177,7 @@ export async function ensureModelClient(host: ClientHost, input: EnsureModelClie
   // rather than duplicated. Its refresh tokens were destroyed at revoke; new ones are issued now.
   const revoked = matches[0];
   if (revoked) {
+    if (input.reactivateRevoked !== true) throw new HttpError(409, "Client is revoked");
     await host.store.setClientRevoked(revoked.id, null);
     await host.audit(input.orgId, "client_reactivated", "oauth", null, revoked.id);
     const fresh = await host.store.getClient(revoked.id);
@@ -210,7 +221,13 @@ export async function revokeClient(host: ClientHost, orgId: string, actor: strin
       await host.store.updateGrant({ ...g, status: "revoked" });
     }
   }
-  await destroyOidcPayloadsForClient(host.store, client);
+  // Every consent this org's members gave for the client id dies with it, not only the
+  // first consenter's: a surviving member refresh token would otherwise re-issue access.
+  const members = await host.store.listMembers(orgId);
+  await destroyOidcPayloadsForClient(host.store, client, {
+    orgId,
+    memberUserIds: members.map((m) => m.userId),
+  });
   await host.audit(orgId, "client_revoked", actor, null, clientId);
 }
 

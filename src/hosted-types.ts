@@ -165,6 +165,8 @@ export type AccessEventRecord = {
   issuedAt: string;
   expiresAt: string | null;
   revokedAt: string | null;
+  /** oidc-provider grant id for OAuth tokens, so revoking a refresh token also marks its siblings. */
+  grantId?: string | null;
 };
 
 /**

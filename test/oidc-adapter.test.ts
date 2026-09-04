@@ -126,7 +126,84 @@ for (const backend of backends) {
       const payload = (await codes.find(id("ac"))) as { consumed?: unknown; grantId?: string };
       assert.equal(typeof payload.consumed, "number");
       assert.equal(payload.grantId, id("g"));
-      await codes.consume(id("never-stored"));
+      await assert.rejects(codes.consume(id("never-stored")), (err: unknown) => err instanceof Error && err.name === "InvalidGrant");
+    } finally {
+      await done();
+    }
+  });
+
+  test(`[${backend.name}] O7 consume is one conditional write: of concurrent exchanges exactly one wins`, async () => {
+    const { store, done } = await backend.open();
+    const id = ids("race");
+    try {
+      const Adapter = createStoreAdapter(store);
+      const codes = new Adapter("AuthorizationCode");
+      await codes.upsert(id("ac"), { grantId: id("g"), clientId: "c", jti: id("ac"), nested: { keep: true } }, 60);
+      const outcomes = await Promise.allSettled([codes.consume(id("ac")), codes.consume(id("ac")), codes.consume(id("ac"))]);
+      assert.equal(outcomes.filter((o) => o.status === "fulfilled").length, 1, "one consumer wins");
+      assert.equal(outcomes.filter((o) => o.status === "rejected").length, 2, "the others fail the grant");
+      for (const o of outcomes) {
+        if (o.status === "rejected") assert.equal((o.reason as Error).name, "InvalidGrant");
+      }
+      // A second, later consume of an already consumed row is refused too.
+      await assert.rejects(codes.consume(id("ac")));
+      const payload = (await codes.find(id("ac"))) as { consumed?: unknown; nested?: { keep?: boolean }; jti?: string };
+      assert.equal(typeof payload.consumed, "number");
+      assert.deepEqual(payload.nested, { keep: true }, "the rest of the payload survives the JSON update");
+      assert.equal(payload.jti, id("ac"));
+      assert.equal(await store.consumeOidcPayload(id("ac"), "AuthorizationCode", 1), false);
+    } finally {
+      await done();
+    }
+  });
+
+  test(`[${backend.name}] O1 revoke sweeps every grant this org's members gave for the client id, and no other org's`, async () => {
+    const { store, done } = await backend.open();
+    const id = ids("sweep");
+    try {
+      const AUD = "http://127.0.0.1:8788/mcp";
+      const orgA = id("org_a");
+      const orgB = id("org_b");
+      const dcr = id("dcr_shared");
+      const grants = [
+        // owner's grant in A, member's grant in A, member's grant in B (same account, other org),
+        // a legacy grant (no org marker) by a member of A, and a legacy grant by a stranger.
+        { g: id("g_owner_a"), account: id("owner"), org: orgA },
+        { g: id("g_member_a"), account: id("member"), org: orgA },
+        { g: id("g_member_b"), account: id("member"), org: orgB },
+        { g: id("g_legacy_member"), account: id("member"), org: undefined },
+        { g: id("g_legacy_stranger"), account: id("stranger"), org: undefined },
+      ];
+      for (const row of grants) {
+        await store.upsertOidcPayload({
+          id: row.g,
+          kind: "Grant",
+          payload: JSON.stringify({
+            jti: row.g,
+            clientId: dcr,
+            accountId: row.account,
+            resources: { [AUD]: row.org ? `mcp org:${row.org}` : "mcp" },
+          }),
+          expiresAt: null,
+        });
+        await store.upsertOidcPayload({
+          id: `rt_${row.g}`,
+          kind: "RefreshToken",
+          payload: JSON.stringify({ jti: `rt_${row.g}`, clientId: dcr, accountId: row.account, grantId: row.g }),
+          expiresAt: null,
+        });
+      }
+      await destroyOidcPayloadsForClient(
+        store,
+        { id: id("cli_a"), oauthClientId: dcr, clerkOauthUserId: null, consentedByUserId: id("owner") },
+        { orgId: orgA, memberUserIds: [id("owner"), id("member")] },
+      );
+      const alive = async (g: string) => (await store.getOidcPayload(g, "Grant")) !== undefined || (await store.getOidcPayload(`rt_${g}`, "RefreshToken")) !== undefined;
+      assert.equal(await alive(id("g_owner_a")), false, "owner's consent in A gone");
+      assert.equal(await alive(id("g_member_a")), false, "member's consent in A gone (was the reactivation hole)");
+      assert.equal(await alive(id("g_legacy_member")), false, "member's legacy grant gone");
+      assert.equal(await alive(id("g_member_b")), true, "the same member's consent in org B survives");
+      assert.equal(await alive(id("g_legacy_stranger")), true, "a non-member's legacy grant survives");
     } finally {
       await done();
     }

@@ -10,7 +10,6 @@ import {
   type AuthResolver,
   type Principal,
 } from "./auth.ts";
-import { AgentPassAuthority, agentPassEnabled } from "./agentpass.ts";
 import { type ConnectorFetch } from "./connector.ts";
 import { HttpError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
@@ -36,7 +35,6 @@ import {
   isLoopbackHost,
   isPublicHtmlPath,
   json,
-  optional,
   originIsLoopback,
   readJson,
   readJsonOrForm,
@@ -44,7 +42,7 @@ import {
   sendError,
 } from "./http-util.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
-import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
+import { assertDcrIp, assertDeviceAttempt, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
 import { isMcpClientSurface, isOauthDiscoveryPath, oauthDiscoveryDocument } from "./oauth-metadata.ts";
 import { bindCors, corsHeaders, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
@@ -98,7 +96,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const port = opts.port ?? 8788;
   const publicUrl = opts.publicUrl ?? opts.kernel.publicUrl;
   const auth = opts.authResolver ?? anonymousAuthResolver;
-  const agentpass = agentPassEnabled() ? new AgentPassAuthority(opts.kernel, publicUrl) : undefined;
   const allowed = opts.allowedHosts ?? hostAllowlist(publicUrl);
   const siteRoot = opts.siteRoot;
   const deployPlane = opts.deployPlane ?? opts.kernel.deployPlane;
@@ -242,15 +239,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
       res.end(robotsTxt(deployPlane));
       return;
     }
-    if (agentpass && method === "GET" && path === "/agentpass/configuration") {
-      json(res, 200, agentpass.configuration());
-      return;
-    }
-    if (agentpass && method === "GET" && path === "/agentpass/jwks") {
-      json(res, 200, agentpass.jwks());
-      return;
-    }
-
     if (!originOk(req, allowed, path) || !hostAllowed(req.headers.host ?? "", allowed, allowLoopback)) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
@@ -278,6 +266,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
 
     if (oidcProvider && isOauthPath(path) && !path.startsWith("/.well-known/")) {
       if (method === "POST" && path === "/oauth/register") assertDcrIp(req);
+      if (method === "POST" && path === "/device") assertDeviceAttempt(req);
       await handleOauth(oidcProvider, req, res);
       return;
     }
@@ -410,7 +399,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     try {
-      await api(req, res, url, method, path, principal, agentpass);
+      await api(req, res, url, method, path, principal);
     } catch (err) {
       sendError(res, err);
     }
@@ -433,7 +422,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
     method: string,
     path: string,
     principal: Principal | undefined,
-    authority: AgentPassAuthority | undefined,
   ): Promise<void> {
     if (identity) {
       const handled = await handleAuthApi(req, res, method, path, principal, {
@@ -521,55 +509,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
         environment: asEnv(body.environment ?? trusted.environment),
       });
       json(res, 200, resolved);
-      return;
-    }
-    if (authority && method === "POST" && path === "/agentpass/requests") {
-      const op = requireOperator(principal);
-      const body = await readJson(req);
-      const created = await authority.createRequest({
-        orgId: op.orgId,
-        holderCnf: String(body.holder_cnf ?? body.holderCnf ?? ""),
-        scope: Array.isArray(body.scope) ? body.scope.map(String) : [],
-        taskId: optional(body.task_id),
-      });
-      json(res, 200, created);
-      return;
-    }
-    const apGet = /^\/agentpass\/requests\/([^/]+)$/.exec(path);
-    if (authority && method === "GET" && apGet) {
-      const op = requireOperator(principal);
-      json(res, 200, await authority.getRequest(op.orgId, decodePathSegment(apGet[1] ?? "")));
-      return;
-    }
-    const apApprove = /^\/agentpass\/requests\/([^/]+)\/approve$/.exec(path);
-    if (authority && method === "POST" && apApprove) {
-      const op = requireOperator(principal);
-      await authority.approve(op.orgId, decodePathSegment(apApprove[1] ?? ""));
-      json(res, 200, { ok: true });
-      return;
-    }
-    if (authority && method === "POST" && path === "/agentpass/validate") {
-      const body = await readJson(req);
-      json(
-        res,
-        200,
-        await authority.validate({
-          id: String(body.id ?? ""),
-          holderProof: body.holder_proof ?? body.holderProof,
-        }),
-      );
-      return;
-    }
-    if (authority && method === "POST" && path === "/agentpass/authorization-check") {
-      const body = await readJson(req);
-      json(
-        res,
-        200,
-        await authority.authorizationCheck({
-          id: String(body.id ?? ""),
-          holderProof: body.holder_proof ?? body.holderProof,
-        }),
-      );
       return;
     }
     if (method === "GET" && path === "/mcp/tools") {

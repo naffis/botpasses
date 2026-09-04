@@ -1,4 +1,6 @@
+import { errors as oidcErrors } from "oidc-provider";
 import type { OidcPayloadRow, VaultStore } from "../store/types.ts";
+import { orgFromGrantResources } from "./oauth-clients.ts";
 
 type Payload = Record<string, unknown>;
 
@@ -14,11 +16,31 @@ const CLIENT_OWNED_OIDC_KINDS = [
   "Grant",
 ] as const;
 
+/** Kinds that carry a `grantId` and die with their grant. */
+const GRANT_BOUND_OIDC_KINDS = ["RefreshToken", "AuthorizationCode", "DeviceCode", "AccessToken"] as const;
+
+export type RevokedClientScope = {
+  /** The org whose vault client is being revoked. */
+  orgId: string;
+  /** Members of that org: legacy grants (no org marker) are matched by account. */
+  memberUserIds: readonly string[];
+};
+
+function grantOrg(payload: Payload): string | undefined {
+  const resources = payload.resources;
+  if (!resources || typeof resources !== "object") return undefined;
+  return orgFromGrantResources(resources as Record<string, unknown>);
+}
+
 /**
- * Destroy adapter rows owned by this vault client for the account that consented to it.
- * Two orgs can share one DCR client id, so the account scope is what keeps org A's
- * revoke from killing org B's refresh tokens. A client with no recorded consenting
- * account only loses rows that carry no account either.
+ * Destroy adapter rows owned by this vault client for the org that revoked it.
+ *
+ * Two orgs can share one DCR client id, so rows are matched by the org bound into the
+ * Grant at consent (`org:<id>` resource scope); every token under such a grant goes with
+ * it, whichever org member consented. Grants written before the org marker existed are
+ * matched by account: any org member's grant for this client id. The account-scoped
+ * sweep for the recorded consenting account (rows with no grant id) is kept as before;
+ * a client with no recorded consenting account only loses rows that carry no account.
  */
 export async function destroyOidcPayloadsForClient(
   store: VaultStore,
@@ -28,10 +50,27 @@ export async function destroyOidcPayloadsForClient(
     clerkOauthUserId: string | null;
     consentedByUserId: string | null;
   },
+  scope?: RevokedClientScope,
 ): Promise<void> {
   const ids = [client.id, client.oauthClientId, client.clerkOauthUserId].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
+  if (scope) {
+    const members = new Set<string>(scope.memberUserIds);
+    if (client.consentedByUserId) members.add(client.consentedByUserId);
+    const grants = await store.listOidcPayloadsForClient("Grant", ids);
+    for (const row of grants) {
+      const payload = parsePayload(row.payload);
+      const org = grantOrg(payload);
+      const account = typeof payload.accountId === "string" ? payload.accountId : undefined;
+      const owned = org ? org === scope.orgId : account !== undefined && members.has(account);
+      if (!owned) continue;
+      for (const kind of GRANT_BOUND_OIDC_KINDS) {
+        await store.deleteOidcPayloadsByGrantId(kind, row.id);
+      }
+      await store.deleteOidcPayload(row.id, "Grant");
+    }
+  }
   for (const kind of CLIENT_OWNED_OIDC_KINDS) {
     await store.deleteOidcPayloadsForClient(kind, ids, client.consentedByUserId);
   }
@@ -100,18 +139,14 @@ export function createStoreAdapter(store: VaultStore) {
       await store.deleteOidcPayloadsByGrantId(this.#kind, grantId);
     }
 
-    /** Marks the row consumed without extending its life: the original expiry is kept. */
+    /**
+     * Marks the row consumed without extending its life: the original expiry is kept.
+     * The stamp is one conditional UPDATE, so of two concurrent exchanges of the same
+     * code exactly one wins; the loser (and a row that is already gone) fails the grant.
+     */
     async consume(id: string): Promise<void> {
-      const row = await store.getOidcPayload(id, this.#kind);
-      if (!row) return;
-      const payload = parsePayload(row.payload);
-      payload.consumed = epochSeconds();
-      await store.upsertOidcPayload({
-        id,
-        kind: this.#kind,
-        payload: JSON.stringify(payload),
-        expiresAt: row.expiresAt,
-      });
+      const consumed = await store.consumeOidcPayload(id, this.#kind, epochSeconds());
+      if (!consumed) throw new oidcErrors.InvalidGrant("grant source already consumed");
     }
 
     /** Returns the payload unless the row has expired, in which case the row is deleted. */

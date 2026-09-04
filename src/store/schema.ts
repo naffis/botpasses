@@ -442,3 +442,20 @@ CREATE INDEX IF NOT EXISTS orgs_created_by ON orgs (created_by) WHERE created_by
 CREATE INDEX IF NOT EXISTS items_aad_legacy ON items (aad_version) WHERE aad_version = 0;
 CREATE INDEX IF NOT EXISTS grants_status_settled ON grants (status, created_at);
 `;
+
+/**
+ * `access_events.grant_id`: the oidc-provider grant an OAuth token was issued under, so
+ * revoking a refresh token (RFC 7009, or reuse detection) marks its sibling access tokens.
+ * Null for machine bearers and operator sessions. Mirrored by migrations/012_access_events_grant_id.sql.
+ */
+export const HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE = `
+ALTER TABLE access_events ADD COLUMN grant_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG = `
+ALTER TABLE access_events ADD COLUMN IF NOT EXISTS grant_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_LEDGER_GRANT_INDEXES = `
+CREATE INDEX IF NOT EXISTS access_events_grant ON access_events (grant_id) WHERE grant_id IS NOT NULL;
+`;

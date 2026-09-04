@@ -1,7 +1,6 @@
 /** Grant routes: request, approve, revoke, approve-by-code, magic link, inbox, audit. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { assertSafePublicObject } from "../redact.ts";
-import { agentPassEnabled } from "./agentpass.ts";
 import { requireModelOrOperator, requireOperator, type Principal } from "./auth.ts";
 import { approveConfirmHtml, approveDoneHtml, approveErrorHtml } from "./approve-page.ts";
 import { HttpError, isHttpError } from "./errors.ts";
@@ -58,10 +57,7 @@ export async function handleGrantRoutes(
     const op = requireOperator(principal);
     const grants = await kernel.inboxGrantCards(op.orgId);
     const needs = await kernel.listInboxNeeds(op.orgId);
-    const agentpass = agentPassEnabled()
-      ? (await kernel.store.listAgentPasses(op.orgId)).filter((p) => p.status === "pending")
-      : [];
-    json(res, 200, { grants, needs, agentpass });
+    json(res, 200, { grants, needs });
     return true;
   }
   if (method === "GET" && path === "/api/audit") {

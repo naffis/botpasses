@@ -419,7 +419,7 @@ test("model bearer cannot approve: approve-by-code, /approve, /api/grants/:id/ap
   }
 });
 
-test("ensureModelClient reactivates a revoked OAuth client on re-consent instead of duplicating the unique pair (S15)", async () => {
+test("ensureModelClient reactivates a revoked OAuth client only on re-consent, never duplicating the unique pair (S15, O1)", async () => {
   const ctx = await setup();
   try {
     const first = await ctx.kernel.ensureModelClient({
@@ -429,14 +429,36 @@ test("ensureModelClient reactivates a revoked OAuth client on re-consent instead
       clerkOauthUserId: "dcr_shared",
     });
     await ctx.kernel.revokeClient(ctx.orgId, "user_owner", first.id);
+    await assert.rejects(
+      ctx.kernel.ensureModelClient({ orgId: ctx.orgId, name: "dcr", environment: "staging", clerkOauthUserId: "dcr_shared" }),
+      (err: unknown) => isHttpError(err) && err.status === 409,
+      "a caller that is not a fresh consent gets 409",
+    );
+    assert.ok((await ctx.store.getClient(first.id))?.revokedAt, "still revoked");
     const second = await ctx.kernel.ensureModelClient({
       orgId: ctx.orgId,
       name: "dcr",
       environment: "staging",
       clerkOauthUserId: "dcr_shared",
+      reactivateRevoked: true,
     });
     assert.equal(second.id, first.id);
     assert.equal(second.revokedAt, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("O8 rotateClient refuses a revoked client with 409", async () => {
+  const ctx = await setup();
+  try {
+    const { client } = await ctx.kernel.createModelClient({ orgId: ctx.orgId, name: "rot", environment: "staging", issueBearer: true });
+    await ctx.kernel.revokeClient(ctx.orgId, "user_owner", client.id);
+    await assert.rejects(
+      ctx.kernel.rotateClient(ctx.orgId, "user_owner", client.id),
+      (err: unknown) => isHttpError(err) && err.status === 409,
+    );
+    assert.ok(!(await ctx.store.listAudit(ctx.orgId, 50)).some((a) => a.action === "client_rotate"), "no rotate audit row");
   } finally {
     await ctx.close();
   }

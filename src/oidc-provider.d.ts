@@ -14,6 +14,7 @@ declare module "oidc-provider" {
   }
   export class InvalidTarget extends OIDCProviderError {}
   export class InvalidClient extends OIDCProviderError {}
+  export class InvalidGrant extends OIDCProviderError {}
   export class InvalidRequest extends OIDCProviderError {}
   export class InvalidClientMetadata extends OIDCProviderError {}
   export class SessionNotFound extends InvalidRequest {}
@@ -21,6 +22,7 @@ declare module "oidc-provider" {
   export const errors: {
     InvalidTarget: typeof InvalidTarget;
     InvalidClient: typeof InvalidClient;
+    InvalidGrant: typeof InvalidGrant;
     InvalidRequest: typeof InvalidRequest;
     InvalidClientMetadata: typeof InvalidClientMetadata;
     SessionNotFound: typeof SessionNotFound;
@@ -57,9 +59,13 @@ declare module "oidc-provider" {
       set(name: string, value: string | null, attrs?: CookieAttributes): void;
     };
     oidc?: {
+      /** Router name of the matched route (`token`, `revocation`, `authorization`, ...). */
+      route?: string;
       session?: { state?: { secret?: string } };
       client?: ClientView;
       params?: Record<string, unknown>;
+      /** Models the current action has bound with `ctx.oidc.entity(...)`. */
+      entities?: { Grant?: Grant; RefreshToken?: TokenRef; AccessToken?: TokenRef };
     };
   };
 
@@ -69,6 +75,8 @@ declare module "oidc-provider" {
     clientId?: string;
     accountId?: string;
     grantId?: string;
+    /** Grant type chain, e.g. `authorization_code` or `authorization_code refresh_token`. */
+    gty?: string;
     exp?: number;
   };
 
@@ -99,6 +107,8 @@ declare module "oidc-provider" {
     audience: string;
     accessTokenFormat: "jwt" | "opaque";
     accessTokenTTL?: number;
+    /** Pins the signing key (by `kid`) used for JWT access tokens. */
+    jwt?: { sign?: { alg?: string; kid?: string } };
   };
 
   export type AdapterPayload = Record<string, unknown>;
@@ -159,6 +169,7 @@ declare module "oidc-provider" {
       registrationManagement: { enabled: boolean };
       deviceFlow: DeviceFlowFeature;
       revocation: { enabled: boolean };
+      dPoP?: { enabled: boolean };
       clientIdMetadataDocument?: {
         enabled: boolean;
         ack: string;
@@ -181,6 +192,10 @@ declare module "oidc-provider" {
     issueRefreshToken(ctx: ProviderContext, client: ClientView, code: TokenRef): boolean | Promise<boolean>;
     rotateRefreshToken(ctx: ProviderContext): boolean | Promise<boolean>;
     scopes: string[];
+    /** Token endpoint client authentication methods a client may register. */
+    clientAuthMethods?: string[];
+    /** Response types the authorization endpoint accepts. */
+    responseTypes?: string[];
     clientDefaults: Record<string, unknown>;
     ttl: Record<string, number>;
     renderError(ctx: ProviderContext, out: Record<string, unknown>, err: Error): void | Promise<void>;
@@ -189,10 +204,18 @@ declare module "oidc-provider" {
 
   export class Grant {
     constructor(opts: { accountId: string; clientId: string });
+    static find(id: string, opts?: { ignoreExpiration?: boolean }): Promise<Grant | undefined>;
+    readonly jti?: string;
+    readonly accountId?: string;
+    readonly clientId?: string;
+    /** Resource indicator to space-separated granted scope. */
+    readonly resources?: Record<string, string>;
     addOIDCScope(scope: string): void;
     addResourceScope(resource: string, scope: string): void;
     save(): Promise<string>;
   }
+
+  export type KoaMiddleware = (ctx: ProviderContext, next: () => Promise<void>) => Promise<void>;
 
   export class AuthorizationCode {
     constructor(opts: Record<string, unknown>);
@@ -211,11 +234,8 @@ declare module "oidc-provider" {
     find(id: string): Promise<ClientView | undefined>;
   };
 
-  export type ProviderCallback = (
-    req: IncomingMessage,
-    res: ServerResponse,
-    next?: (err?: unknown) => void,
-  ) => void;
+  /** Koa's `app.callback()`: settles once the response has been written. */
+  export type ProviderCallback = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
   export default class Provider {
     constructor(issuer: string, config: ProviderConfiguration);
@@ -229,6 +249,8 @@ declare module "oidc-provider" {
     createContext(req: IncomingMessage, res: ServerResponse): ProviderContext;
     cookieName(type: "session" | "interaction" | "resume"): string;
     callback(): ProviderCallback;
+    /** Registers Koa middleware that runs before the provider's router. */
+    use(middleware: KoaMiddleware): void;
     on(event: string, listener: (...args: unknown[]) => void): this;
     interactionDetails(req: IncomingMessage, res: ServerResponse): Promise<InteractionDetails>;
     interactionFinished(

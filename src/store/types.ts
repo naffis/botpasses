@@ -254,31 +254,6 @@ export type VaultStore = {
   refreshNeedExpires(id: string, expiresAt: string): Promise<void>;
   persistFulfill(input: PersistFulfillInput): Promise<void>;
 
-  insertAgentPass(row: {
-    id: string;
-    orgId: string;
-    status: string;
-    holderCnf: string | null;
-    scopeJson: string;
-    taskId: string | null;
-    createdAt: string;
-    consumedAt: string | null;
-  }): Promise<void>;
-  getAgentPass(id: string): Promise<
-    | {
-        id: string;
-        orgId: string;
-        status: string;
-        holderCnf: string | null;
-        scopeJson: string;
-        taskId: string | null;
-        createdAt: string;
-        consumedAt: string | null;
-      }
-    | undefined
-  >;
-  updateAgentPassStatus(id: string, status: string): Promise<void>;
-  consumeAgentPass(id: string, consumedAt: string): Promise<boolean>;
   insertUser(row: UserRecord): Promise<void>;
   getUser(id: string): Promise<UserRow | undefined>;
   getUserByEmail(email: string): Promise<UserRow | undefined>;
@@ -336,23 +311,15 @@ export type VaultStore = {
   getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined>;
   revokeAccessEventsForClient(clientId: string, at: string): Promise<void>;
   revokeAccessEvent(jtiHash: string, at: string): Promise<void>;
+  /**
+   * Marks every unrevoked ledger row issued under an OAuth grant. Returns the rows it changed
+   * so the caller can audit each one.
+   */
+  revokeAccessEventsForGrant(grantId: string, at: string): Promise<AccessEventRecord[]>;
   /** `at` null clears the revocation (re-consent through OAuth reactivates the same row). */
   setClientRevoked(id: string, at: string | null): Promise<void>;
   touchClientLastSeen(id: string, at: string): Promise<void>;
   setClientLastTokenAt(id: string, at: string): Promise<void>;
-
-  listAgentPasses(orgId: string): Promise<
-    {
-      id: string;
-      orgId: string;
-      status: string;
-      holderCnf: string | null;
-      scopeJson: string;
-      taskId: string | null;
-      createdAt: string;
-      consumedAt: string | null;
-    }[]
-  >;
 
   /** Tenant-scoped OAuth client lookup: the DCR id is shared across orgs, the pair is unique. */
   findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined>;
@@ -366,6 +333,14 @@ export type VaultStore = {
    * accountId is `accountId` (or absent). Rows bound to another account survive.
    */
   deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void>;
+  /** Rows of `kind` whose payload clientId is one of `clientIds` (used to find an org's grants at revoke). */
+  listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]>;
+  /**
+   * Atomically stamps `consumed` (epoch seconds) into the payload JSON of a row that has not been
+   * consumed yet. Returns false when the row is missing or already consumed, so two concurrent
+   * exchanges of one code cannot both succeed.
+   */
+  consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean>;
   /** Removes rows whose expires_at is at or before `nowIso`. Returns the count. */
   purgeExpiredOidcPayloads(nowIso: string): Promise<number>;
 

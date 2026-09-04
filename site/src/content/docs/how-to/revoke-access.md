@@ -20,7 +20,7 @@ Open **Audit log** on an agent row to see only that agent's activity.
 
 | Action | Effect |
 | --- | --- |
-| Revoke an agent | Its bearer token and any OAuth access tokens stop working on the next request (401). Its approvals are revoked. |
+| Revoke an agent | Its bearer token and any OAuth access tokens stop working on the next request (401). Every OAuth connection any member of the organisation made for that agent is ended, so a refresh cannot bring it back; only a new sign-in and consent can. Its approvals are revoked. |
 | Revoke an approval | That agent can no longer use that credential. Other approvals stay. |
 | Revoke a session | That browser or CLI is signed out. You cannot revoke the session you are using; sign out instead. |
 | Revoke other sessions | Signs out everything except the current session. |

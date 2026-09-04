@@ -24,6 +24,8 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER_PG,
   HOSTED_SCHEMA_IDENTITY_ALTER2_PG,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG,
+  HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
   HOSTED_SCHEMA_OAUTH_ALTER_PG,
   HOSTED_SCHEMA_SCOPE_ALTER_PG,
   HOSTED_SCHEMA_SQLITE,
@@ -162,6 +164,8 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_TEAM_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_V10_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_V10_INDEXES);
+    await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
@@ -264,7 +268,6 @@ export class PostgresStore implements VaultStore {
       await client.query("DELETE FROM policies WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM clients WHERE org_id = $1", [orgId]);
       await client.query("DELETE FROM audit WHERE org_id = $1", [orgId]);
-      await client.query("DELETE FROM agentpass_passes WHERE org_id = $1", [orgId]);
       await client.query(
         `DELETE FROM items WHERE environment_id IN (
            SELECT e.id FROM environments e JOIN vaults v ON v.id = e.vault_id WHERE v.org_id = $1
@@ -919,80 +922,6 @@ export class PostgresStore implements VaultStore {
     }
   }
 
-  async insertAgentPass(row: {
-    id: string;
-    orgId: string;
-    status: string;
-    holderCnf: string | null;
-    scopeJson: string;
-    taskId: string | null;
-    createdAt: string;
-    consumedAt: string | null;
-  }): Promise<void> {
-    await this.#pool.query(
-      `INSERT INTO agentpass_passes (id, org_id, status, holder_cnf, scope_json, task_id, created_at, consumed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        row.id,
-        row.orgId,
-        row.status,
-        row.holderCnf,
-        row.scopeJson,
-        row.taskId,
-        row.createdAt,
-        row.consumedAt,
-      ],
-    );
-  }
-
-  async getAgentPass(id: string) {
-    const r = await this.#pool.query("SELECT * FROM agentpass_passes WHERE id=$1", [id]);
-    const rec = r.rows[0] ? asRecord(r.rows[0]) : undefined;
-    if (!rec) return undefined;
-    return {
-      id: String(rec.id),
-      orgId: String(rec.org_id),
-      status: String(rec.status),
-      holderCnf: rec.holder_cnf == null ? null : String(rec.holder_cnf),
-      scopeJson: String(rec.scope_json),
-      taskId: rec.task_id == null ? null : String(rec.task_id),
-      createdAt: String(rec.created_at),
-      consumedAt: rec.consumed_at == null ? null : String(rec.consumed_at),
-    };
-  }
-
-  async updateAgentPassStatus(id: string, status: string): Promise<void> {
-    await this.#pool.query("UPDATE agentpass_passes SET status=$1 WHERE id=$2", [status, id]);
-  }
-
-  async consumeAgentPass(id: string, consumedAt: string): Promise<boolean> {
-    const r = await this.#pool.query(
-      "UPDATE agentpass_passes SET status='consumed', consumed_at=$1 WHERE id=$2 AND status='approved'",
-      [consumedAt, id],
-    );
-    return r.rowCount === 1;
-  }
-
-  async listAgentPasses(orgId: string) {
-    const r = await this.#pool.query(
-      "SELECT * FROM agentpass_passes WHERE org_id=$1 ORDER BY created_at DESC",
-      [orgId],
-    );
-    return r.rows.map((row) => {
-      const rec = asRecord(row);
-      return {
-        id: String(rec.id),
-        orgId: String(rec.org_id),
-        status: String(rec.status),
-        holderCnf: rec.holder_cnf == null ? null : String(rec.holder_cnf),
-        scopeJson: String(rec.scope_json),
-        taskId: rec.task_id == null ? null : String(rec.task_id),
-        createdAt: String(rec.created_at),
-        consumedAt: rec.consumed_at == null ? null : String(rec.consumed_at),
-      };
-    });
-  }
-
   async listMembers(orgId: string): Promise<MemberRow[]> {
     const r = await this.#pool.query("SELECT * FROM org_members WHERE org_id = $1 ORDER BY joined_at, user_id", [orgId]);
     return r.rows.map((row) => mapMember(asRecord(row)));
@@ -1281,11 +1210,11 @@ export class PostgresStore implements VaultStore {
 
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at, grant_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         row.id, row.orgId, row.clientId, row.actorUserId, row.kind, row.jtiHash,
-        row.issuedAt, row.expiresAt, row.revokedAt,
+        row.issuedAt, row.expiresAt, row.revokedAt, row.grantId ?? null,
       ],
     );
   }
@@ -1312,6 +1241,14 @@ export class PostgresStore implements VaultStore {
 
   async revokeAccessEvent(jtiHash: string, at: string): Promise<void> {
     await this.#pool.query("UPDATE access_events SET revoked_at = $1 WHERE jti_hash = $2", [at, jtiHash]);
+  }
+
+  async revokeAccessEventsForGrant(grantId: string, at: string): Promise<AccessEventRecord[]> {
+    const r = await this.#pool.query(
+      "UPDATE access_events SET revoked_at = $1 WHERE grant_id = $2 AND revoked_at IS NULL RETURNING *",
+      [at, grantId],
+    );
+    return r.rows.map((row) => mapAccess(asRecord(row)));
   }
 
   async setClientRevoked(id: string, at: string | null): Promise<void> {
@@ -1372,6 +1309,27 @@ export class PostgresStore implements VaultStore {
        AND (($3::text IS NULL AND account_id IS NULL) OR account_id = $3)`,
       [kind, clientIds, accountId],
     );
+  }
+
+  async listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]> {
+    if (clientIds.length === 0) return [];
+    const r = await this.#pool.query(
+      "SELECT id, payload FROM oidc_payloads WHERE kind = $1 AND client_id = ANY($2::text[])",
+      [kind, clientIds],
+    );
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return { id: String(rec.id), payload: String(rec.payload) };
+    });
+  }
+
+  async consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean> {
+    const r = await this.#pool.query(
+      `UPDATE oidc_payloads SET payload = jsonb_set(payload::jsonb, '{consumed}', to_jsonb($3::bigint))::text
+       WHERE id = $1 AND kind = $2 AND (payload::jsonb ->> 'consumed') IS NULL`,
+      [id, kind, consumedAt],
+    );
+    return r.rowCount === 1;
   }
 
   async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {

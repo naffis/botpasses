@@ -9,10 +9,10 @@ JSON bodies are capped at 128 KiB and must be sent as `Content-Type: application
 | Channel | How | May call |
 | --- | --- | --- |
 | `operator` | HttpOnly session (`__Host-bp_session` on HTTPS, read only on a request the proxy marks `x-forwarded-proto: https`, no plain-name fallback; `bp_session` on loopback) or `VAULT_BOOTSTRAP_TOKEN` (on a plane only with `VAULT_BOOTSTRAP_ALLOW_PLANE=1`; every use logs `auth_bootstrap_used`) | `/api/*` operator routes, Access, inbox, approve/revoke. `ready === false` → 403 `{ error: "mfa_required", enroll_url: "/enroll-totp" }` (not enrolled) or `{ error: "mfa_required", verify_url: "/verify-totp" }` (enrolled, authenticator step pending) |
-| `model` | OAuth JWT (`aud` exactly `${origin}/mcp`, `jti` required and not revoked) or `avm_…` | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
+| `model` | OAuth JWT (`aud` exactly `${origin}/mcp`, `jti` required and not revoked, `org_id` required and `sub` a member of it) or `avm_…` | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
 | `trusted` | `avt_…` | `POST /runtime/resolve` only |
 
-JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids are **404**.
+JWT verify allows 30 s of clock skew, accepts any key in `/oauth/jwks` (current or the one being rotated out), maps `(org_id, client_id)` to the vault client, and fails if that client has `revoked_at` set. It never provisions an org. Cross-org ids are **404**.
 
 ## Health and discovery
 
@@ -65,7 +65,7 @@ All require `operatorReady` unless noted.
 | POST | `/api/folders` | `{ environment, name }` | `{ folder }` |
 | POST | `/api/orgs` | `{ name }` (1 to 80 printable characters, trimmed; 400 otherwise) | `{ orgId }`. Ready session required (403 `mfa_required` before the authenticator step). 402 `plan_limit` kind `orgs` past the per-user limit (10 owned orgs on the free tier) |
 | DELETE | `/api/orgs` | `{ confirm_name }` | `{ ok: true }` |
-| GET | `/api/inbox` | | `{ grants, needs, agentpass }` pending |
+| GET | `/api/inbox` | | `{ grants, needs }` pending |
 | GET | `/api/audit` | optional `?client_id=` and `?item_name=` | `{ audit }` actions and item names, no values |
 | GET | `/api/need-items/:id` | operator + same org | need metadata (not public JSON; unsigned is **404**) |
 | POST | `/api/need-items/:id/fulfill` | `{ value, name?, allowed_hosts?, inject?, kind?, username? }` | `{ item, grant_status }` |
@@ -78,8 +78,8 @@ Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
 | --- | --- | --- | --- |
 | POST | `/api/clients/model` | operator | Issues `avm_…` once. `{ client, token, mcp_url }`. Token is not listed later |
 | POST | `/api/clients/trusted` | operator | Issues `avt_…` once |
-| POST | `/api/clients/:id/rotate` | operator | New plaintext once. Old hash dies |
-| POST | `/api/clients/:id/revoke` | operator | `revoked_at`, grants revoked, JWT `jti` denylist. Later Bearer is 401. A later OAuth re-consent reactivates the same row (the `(org_id, oauth_client_id)` pair is unique) |
+| POST | `/api/clients/:id/rotate` | operator | New plaintext once. Old hash dies. 409 if revoked |
+| POST | `/api/clients/:id/revoke` | operator | `revoked_at`, grants revoked, JWT `jti` denylist, and every OAuth grant the org's members gave for that client id is destroyed (refresh tokens included). Later Bearer is 401; a refresh is `invalid_grant`. Only a fresh consent (authorization code or device code) reactivates the same row (the `(org_id, oauth_client_id)` pair is unique); a refresh never does |
 | POST | `/api/grants/request` | model or operator | `{ item_name, task_description?, client_id?, operator_email? }`. `operator_email` is ignored for model principals; an operator may pass a member's email (400 otherwise); with none given every verified member is emailed. Optional `host`, `method`, `path` (the call the agent will make; see MCP `request_grant`). Returns the existing open grant for the client and item (a pending one gets a fresh `approval_code`). Rate limit 30 / org / hour inside the kernel, shared with `http_request` and new needs |
 | POST | `/api/grants/:id/approve` | operator | `{ policy, confirm_name?, scope? }`. `scope: { methods?, path_prefixes?, hosts?, max_calls?, ttl_seconds? }`; omit to inherit the requested call (or no limits); present dimensions are used exactly; `hosts` must be a subset of the item's hosts (400). `ttl_seconds` 60..86400 for `session` (default 28800), 60..31536000 for standing policies, which then expire. `folder_standing` is owner + confirm. A grant for a trusted (`avt_`) client refuses `methods`, `path_prefixes`, and `hosts`, explicit or inherited from the request, with 400 `scope_unenforceable`: the runtime resolves the value directly and nothing checks those limits. Approve it with `scope: {}` or with `max_calls` / `ttl_seconds`, which are counted on resolve. A standing approval replaces a stale policy row for the same pair |
 | POST | `/api/grants/:id/revoke` | operator | Status `revoked`, plus every other open grant for the same (client, item) pair. Drops the `item_standing` policy for the pair. Drops the `folder_standing` policy only when this grant was activated by it (`policy: folder_standing`), which ends the folder approval for every item it covers; revoking a `prompt`, `session`, or `item_standing` grant leaves a folder-wide approval in place. Row stays listed for 30 days after it settles, then the sweep removes it (audit rows stay) |
@@ -110,18 +110,20 @@ Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reac
 
 ## OAuth (botpasses.com is the AS)
 
-Mounted when `VAULT_OIDC_PRIVATE_JWK` is set. Engine: `oidc-provider` 9. [src/hosted/oauth-as.ts](../../src/hosted/oauth-as.ts).
+Mounted when `VAULT_OIDC_PRIVATE_JWK` is set. Engine: `oidc-provider` 9. [src/hosted/oauth-as.ts](../../src/hosted/oauth-as.ts). The engine is pinned to the constants in [oauth-metadata.ts](../../src/hosted/oauth-metadata.ts) that also build the discovery document: scopes `openid mcp`, response type `code`, response modes `query`, `fragment`, `form_post`, grant types `authorization_code`, `refresh_token`, device code, token endpoint auth `none` only (a registration asking for a client secret is `invalid_client_metadata`), PKCE `S256`, DPoP off.
 
 | Path | Role |
 | --- | --- |
-| `/oauth/authorize` | Authorization code + PKCE S256 |
-| `/oauth/token` | JWT access token, `aud=${origin}/mcp`, 600s, refresh rotation |
-| `/oauth/jwks` | Public RS256 |
+| `/oauth/authorize` | Authorization code + PKCE S256. Consent binds the operator session's org into the grant |
+| `/oauth/token` | JWT access token, `aud=${origin}/mcp`, 600s, claim `org_id`, refresh rotation. A refresh for a revoked vault client is `invalid_grant` and never reactivates it |
+| `/oauth/jwks` | Public RS256. Two keys while `VAULT_OIDC_PREVIOUS_JWK` is set; tokens are signed with the current one ([rotation](../ops/oidc-key-rotation.md)) |
 | `/oauth/register` | DCR. HTTPS redirect_uris (loopback http exception). No `javascript:` / `data:` / `file:`. 20 / IP / hour |
-| `/oauth/device/auth` | RFC 8628 |
-| `/oauth/revoke` | RFC 7009. Marks `access_events` + audit `token_revoked` |
+| `/oauth/device/auth` | RFC 8628. `POST /device` user-code attempts: 10 / 15 min per IP and per OP session |
+| `/oauth/revoke` | RFC 7009. A refresh token revokes its grant and marks every ledger row issued under it (`access_events.grant_id`); a JWT access token that verifies and belongs to the calling client is denylisted by `jti`. Audit `token_revoked`. Unknown tokens are 200 |
 
-Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenClaims` (return `undefined`) plus `access_token.issued`.
+Client ID Metadata Documents (`client_id` is an https URL): fetched through the SSRF-pinned fetch, 30 / host / hour, 10 / requesting IP / hour, at most 4 in flight, 3 s timeout, cached 60 s to 1 h.
+
+Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenClaims` (return the `org_id` claim; throw fails the grant) plus `access_token.issued`; refresh tokens via `refresh_token.saved`. Grant-wide ledger revocation runs in the revocation post-hook and on `grant.revoked` (refresh reuse).
 
 ## Local `vault serve` (loopback)
 
@@ -140,10 +142,6 @@ Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenCl
 | POST | `/mcp` | Local MCP JSON-RPC |
 
 No `/api/items`, OAuth, or Access panel on the local plane.
-
-## AgentPass (dark unless `VAULT_AGENTPASS=1`)
-
-`/agentpass/configuration`, `/agentpass/jwks`, request/approve/validate. Not the product name. See README.
 
 ## Static site
 
@@ -186,4 +184,4 @@ Unexpected failures are `500 { error: "Internal error", request_id }` with an `x
 | 410 | Expired approval |
 | 413 | Body over 128 KiB |
 | 415 | A JSON route was sent a body that is not `application/json` |
-| 429 | OTP send or `request_grant` / need limiter |
+| 429 | OTP send, `request_grant` / need limiter, DCR, or `POST /device` attempts |

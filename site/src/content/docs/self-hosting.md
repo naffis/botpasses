@@ -45,7 +45,8 @@ The process exits with code 78 when configuration is wrong: a short session secr
 | `VAULT_KEK_REQUIRE_KMS` | Set to `1` after the wrapped key is confirmed. Refuses to boot on the raw key |
 | `VAULT_KEK` | Raw platform key. Pre-cutover fallback only; unset it after `VAULT_KEK_REQUIRE_KMS=1` |
 | `VAULT_SESSION_SECRET` | 32 bytes or more. Signs sessions and CSRF tokens |
-| `VAULT_OIDC_PRIVATE_JWK` | RS256 private JWK for OAuth access tokens |
+| `VAULT_OIDC_PRIVATE_JWK` | RS256 private JWK that signs OAuth access tokens |
+| `VAULT_OIDC_PREVIOUS_JWK` | Only during a key rotation: the JWK being retired. Published in JWKS and still verifies the tokens it signed; never signs new ones |
 | `VAULT_APPROVAL_HMAC` | Signs email approval links. 64 hex characters (32 bytes); any other shape is exit 78 |
 | `VAULT_BOOTSTRAP_TOKEN` | 32 characters or more. Break-glass operator token; keep it offline. Every use is logged as `auth_bootstrap_used` with a token hash |
 | `VAULT_BOOTSTRAP_ALLOW_PLANE` | Set to `1` only for the break-glass window. Staging and production refuse to boot with `VAULT_BOOTSTRAP_TOKEN` set unless this is `1`; unset both afterwards |
