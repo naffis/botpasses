@@ -31,6 +31,7 @@ import {
   localHttpRequest,
   normalizeAllowedHosts,
   normalizeInject,
+  normalizeUsername,
   publicLocalGrant,
   type LocalHttpInput,
   type LocalHttpResult,
@@ -57,8 +58,10 @@ export type VaultOptions = {
 export type SetSecretOptions = {
   /** Exact hostnames `http_request` may send this value to. Empty means `vault run` only. */
   allowedHosts?: string[];
-  /** `bearer` (default), `basic`, or `header:<Name>`; the same vocabulary as hosted items. */
+  /** `bearer` (default), `basic`, `header:<Name>`, and the rest of the hosted inject vocabulary. */
   inject?: string;
+  /** HTTP Basic username, OAuth client id, or AWS access key id. `null` clears a stored one. */
+  username?: string | null;
 };
 
 export { HTTP_REQUEST_TOOL, publicLocalGrant };
@@ -104,6 +107,7 @@ export class Vault {
     }
     const allowedHosts = opts.allowedHosts === undefined ? undefined : normalizeAllowedHosts(opts.allowedHosts);
     const inject = opts.inject === undefined ? undefined : normalizeInject(opts.inject);
+    const username = opts.username === undefined ? undefined : normalizeUsername(opts.username);
     const envelope = encrypt(value, this.#key, secretName);
     const meta = upsertSecret(this.#db, {
       name: secretName,
@@ -114,6 +118,7 @@ export class Vault {
       at: nowIso(),
       allowedHosts,
       inject,
+      username,
     });
     this.#audit("store", { secretName });
     const publicMeta = { ...meta };

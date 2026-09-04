@@ -98,10 +98,16 @@ async function postTokenRequest(
     },
     { fetchImpl: deps.fetchImpl, resolveAddresses: deps.resolveAddresses, tls: deps.tls, redact: false },
   );
+  // Redact against the client id the request carried, not only the stored username.
+  const sentAs = tokenItem.username;
   if (origin.status < 200 || origin.status >= 300) {
     return {
       minted: failedMint(),
-      origin: { ...origin, body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem) },
+      origin: {
+        ...origin,
+        body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, [], undefined, sentAs),
+        headers: redactOriginHeaders(origin.headers, originalItem, [], sentAs),
+      },
     };
   }
   const minted = readMintedAccessToken(origin.body);
@@ -110,8 +116,8 @@ async function postTokenRequest(
     minted,
     origin: {
       ...origin,
-      body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra),
-      headers: redactOriginHeaders(origin.headers, originalItem, extra),
+      body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra, undefined, sentAs),
+      headers: redactOriginHeaders(origin.headers, originalItem, extra, sentAs),
     },
   };
 }
@@ -214,10 +220,13 @@ export function clientIdRequiredHint(provider: Provider): string {
   );
 }
 
+/** A one-call approval is spent by any origin answer; the model must not expect it to come back. */
+const APPROVAL_SPENT = "A one-call approval is spent by this answer; if the retry returns a pending grant, tell the user to approve it.";
+
 export function mintFailedHint(provider: Provider): string {
   return (
-    `${provider.displayName} token mint failed at ${provider.tokenHost}${provider.tokenPath}. Retry uses the same ` +
-    "approval. Check the client id and that the secret is the current one."
+    `${provider.displayName} token mint failed at ${provider.tokenHost}${provider.tokenPath}. ` +
+    `Check the client id and that the secret is the current one, then retry. ${APPROVAL_SPENT}`
   );
 }
 
@@ -225,13 +234,13 @@ export function emptyOriginHint(status: number): string | undefined {
   if (status === 410) {
     return (
       "Upstream returned 410 with an empty body. This is the origin status, not a Botpasses consume error. " +
-      "Retry uses the same approval. Do not ask for a new 8-digit code."
+      `Retry the call once. ${APPROVAL_SPENT}`
     );
   }
   if (status === 401) {
     return (
       "Upstream 401: missing or invalid access token. A client secret is not a user access token. " +
-      "Retry uses the same approval."
+      `Fix the request before retrying. ${APPROVAL_SPENT}`
     );
   }
   return undefined;

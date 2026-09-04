@@ -50,8 +50,11 @@ const USAGE = `${PRODUCT_NAME}: named credentials for agents and tools, never fo
 
 Usage:
   vault init
-  vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]
+  vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name|...] [--username USER]
     --host allowlists the API hosts http_request may send this credential to (repeatable)
+    --inject takes the hosted vocabulary: bearer, basic, client_credentials, refresh, sigv4,
+      header:Name, query:param, cookie:name, hmac:stripe_sig|slack_sig|github_sig
+    --username is the HTTP Basic user, OAuth client id, or AWS access key id (--username "" clears it)
   vault list
   vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]
   vault grant --id GRANT_ID --agent AGENT --tool TOOL
@@ -141,12 +144,13 @@ async function cmdSet(argv: string[], io: Io): Promise<number> {
       value: { type: "string" },
       host: { type: "string", multiple: true },
       inject: { type: "string" },
+      username: { type: "string" },
     },
     allowPositionals: true,
   });
   const name = positionals[0];
   if (!name) {
-    io.error("Usage: vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]");
+    io.error("Usage: vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name|...] [--username USER]");
     io.error("Prefer piping the value on stdin so it is not visible in `ps`.");
     return 1;
   }
@@ -161,9 +165,10 @@ async function cmdSet(argv: string[], io: Io): Promise<number> {
   }
   const vault = open();
   try {
-    const meta = vault.setSecret(name, value, { allowedHosts: values.host, inject: values.inject });
+    const meta = vault.setSecret(name, value, { allowedHosts: values.host, inject: values.inject, username: values.username });
     const hosts = meta.allowedHosts.length ? ` hosts=${meta.allowedHosts.join(",")}` : "";
-    io.log(`Stored ${meta.name} ${maskLast4(meta.last4)}${hosts} inject=${meta.inject} (value not shown)`);
+    const user = meta.username ? ` username=${meta.username}` : "";
+    io.log(`Stored ${meta.name} ${maskLast4(meta.last4)}${hosts} inject=${meta.inject}${user} (value not shown)`);
     return 0;
   } finally {
     vault.close();

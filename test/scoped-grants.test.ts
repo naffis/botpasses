@@ -418,6 +418,78 @@ test("publicGrant shape and tool schemas: grant_scope, requested_scope, list_ite
   assert.equal(tools.request_grant?.annotations?.readOnlyHint, undefined);
 });
 
+test("C13: task_description is cut to 500 characters on the grant the operator sees", async () => {
+  const ctx = await setup();
+  try {
+    const long = `${"x".repeat(600)}END`;
+    const asked = await mcp(ctx, "request_grant", { item_name: "STRIPE_KEY", task_description: long });
+    assert.equal(String(asked.body.task_description).length, 500);
+    assert.equal((await ctx.store.getGrant(String(asked.body.grant_id)))?.taskDescription?.length, 500);
+    const inbox = (await (await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op })).json()) as { grants: { task_description: string }[] };
+    assert.equal(inbox.grants[0]?.task_description.length, 500);
+    assert.doesNotMatch(inbox.grants[0]?.task_description ?? "", /END/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("C15: dry_run reports scope_denied when the approval would refuse the call, and ok when it fits", async () => {
+  const ctx = await setup();
+  try {
+    const asked = await ctx.ask({ host: "api.stripe.com", method: "GET", path: "/v1/balance" });
+    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: asked.grant.id, policy: "item_standing", role: "owner", actor: "user_owner" });
+    const fits = await mcp(ctx, "http_request", { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance/history", dry_run: true });
+    assert.equal(fits.body.would_send, true);
+    assert.equal(fits.body.reason, "ok");
+    assert.equal(fits.body.grant_status, "standing");
+    for (const args of [
+      { item_name: "STRIPE_KEY", method: "POST", path: "/v1/balance" },
+      { item_name: "STRIPE_KEY", method: "GET", path: "/v1/customers" },
+      { item_name: "STRIPE_KEY", host: "files.stripe.com", method: "GET", path: "/v1/balance" },
+    ]) {
+      const out = await mcp(ctx, "http_request", { ...args, dry_run: true });
+      assert.equal(out.body.would_send, false, JSON.stringify(args));
+      assert.equal(out.body.reason, "scope_denied", JSON.stringify(args));
+      assert.match(String((out.body.next as { for_model?: string }).for_model), /scope_denied/);
+    }
+    assert.equal((await ctx.store.listAudit(ctx.orgId, 50, { action: "scope_denied" })).length, 0, "a dry run audits nothing");
+    // A prompt (one-call) approval scoped by request is checked the same way, and not spent.
+    await ctx.kernel.revokeGrant(ctx.orgId, "user_owner", asked.grant.id);
+    const once = await ctx.ask({ host: "api.stripe.com", method: "GET", path: "/v1/balance" });
+    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: once.grant.id, policy: "prompt", role: "owner", actor: "user_owner" });
+    const denied = await mcp(ctx, "http_request", { item_name: "STRIPE_KEY", method: "DELETE", path: "/v1/balance", dry_run: true });
+    assert.equal(denied.body.reason, "scope_denied");
+    assert.equal(denied.body.grant_status, "active");
+    assert.equal((await ctx.store.getGrant(once.grant.id))?.status, "active");
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("C12: hosts are stored lowercase and deduplicated; a call names the host in any case", async () => {
+  const ctx = await setup();
+  try {
+    const created = await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "MIXED_KEY",
+      value: CANARY,
+      allowedHosts: [" API.Example.COM ", "api.example.com", "Files.Example.com"],
+      inject: "bearer",
+    });
+    assert.deepEqual(created.allowedHosts, ["api.example.com", "files.example.com"]);
+    const updated = await ctx.kernel.updateItem({ orgId: ctx.orgId, actor: "user_owner", itemId: created.id, allowedHosts: ["API.EXAMPLE.COM"] });
+    assert.deepEqual(updated.allowedHosts, ["api.example.com"]);
+    const dry = await mcp(ctx, "http_request", { item_name: "MIXED_KEY", host: "API.Example.com", method: "GET", path: "/", dry_run: true });
+    assert.equal(dry.body.host, "api.example.com");
+    assert.notEqual(dry.body.reason, "host_mismatch");
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("list_items includes allowed_hosts and kind", async () => {
   const ctx = await setup();
   try {

@@ -208,12 +208,14 @@ test("CLI set --host --inject stores connector metadata and list shows it, never
         0,
       );
       assert.equal(await main(["set", "PLAIN_KEY", "--value", CANARY], io), 0);
+      assert.equal(await main(["set", "SIGNED_KEY", "--value", CANARY, "--host", "api.example.com", "--inject", "hmac:stripe_sig", "--username", "acct_1"], io), 0);
       assert.equal(await main(["list"], io), 0);
       assert.equal(await main(["set", "BAD", "--value", CANARY, "--inject", "cookie"], io).catch(() => 1), 1);
     });
     const out = [...io.stdout, ...io.stderr].join("\n");
     assert.ok(!out.includes(CANARY));
     assert.match(out, /Stored STRIPE_KEY ••••c10b hosts=api.stripe.com,files.stripe.com inject=basic/);
+    assert.match(out, /Stored SIGNED_KEY ••••c10b hosts=api.example.com inject=hmac:stripe_sig username=acct_1/);
     assert.match(out, /STRIPE_KEY\t••••c10b\tapi.stripe.com,files.stripe.com\tbasic\tupdated/);
     assert.match(out, /PLAIN_KEY\t••••c10b\t-\tbearer\tupdated/);
   } finally {

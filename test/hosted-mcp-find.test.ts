@@ -315,7 +315,8 @@ test("unauthenticated collect HTML has no client or task (AC-11)", async () => {
         "x-test-org": otherOrg,
       },
     });
-    assert.equal(cross.status, 403);
+    assert.equal(cross.status, 404, "another org's need reads as unknown, not forbidden");
+    assert.equal(((await cross.json()) as { error?: string }).error, "Unknown need");
     const missing = await fetch(`${ctx.base}/collect/need_missing`);
     assert.equal(missing.status, 404);
     assert.equal(missing.headers.get("x-frame-options"), "DENY");
@@ -623,11 +624,7 @@ test("http.request with host requests a grant when the item exists but is not gr
 test("local MCP miss is need_item without collect_url (AC-10)", async () => {
   const { vault, home } = makeVault();
   try {
-    const result = await callMcpTool(vault, "request_grant", {
-      secret_name: "MISSING_KEY",
-      agent_id: "invoicer",
-      tool_id: "stripe",
-    });
+    const result = await callMcpTool(vault, "request_grant", { item_name: "MISSING_KEY" });
     assert.equal(result.isError, true);
     const parsed = JSON.parse(result.content[0]?.text ?? "{}") as {
       status?: string;

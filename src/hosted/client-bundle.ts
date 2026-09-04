@@ -1062,7 +1062,7 @@ function grantCard(g                  , now        )           {
       <div class="inbox-copy">
         <h2 class="inbox-title">Approved: \${client} can \${request ? html\`\${request} using \${name}\` : html\`use \${name}\`}</h2>
         <p>\${detail}</p>
-        <p class="inbox-meta">Approved \${timeHtml(g.approved_at ?? g.created_at, now)}. The agent can retry now. A failed call reuses this approval; it does not need a new code.</p>
+        <p class="inbox-meta">Approved \${timeHtml(g.approved_at ?? g.created_at, now)}. The agent can call now.\${g.policy === "prompt" ? " A one-call approval is spent by any answer from the API, including an error; use Approve with limits (max calls or a duration) when the agent needs to retry." : ""}</p>
       </div>
       <div class="inbox-actions">
         <button type="button" class="btn-ghost" data-deny="\${g.id}" data-deny-label="\${client}|\${name}">Revoke</button>

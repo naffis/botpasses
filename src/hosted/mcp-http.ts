@@ -1,8 +1,10 @@
-import type { HostedGrantStatus, VaultEnvName } from "../hosted-types.ts";
+import { scopeFromPolicy, type GrantScope, type HostedGrantStatus, type VaultEnvName } from "../hosted-types.ts";
 import { normalizeSecretName } from "../ids.ts";
 import {
   clampTimeoutMs,
   executeConnector,
+  hostAllowedBy,
+  isOriginUnreachable,
   redactConnectorBody,
   type ConnectorFetch,
   type ConnectorItem,
@@ -12,7 +14,9 @@ import {
 } from "./connector.ts";
 import { HttpError, isHttpError, isInjectDenied, isNeedItemError, isScopeDenied, type NeedItemPayload } from "./errors.ts";
 import type { HostedKernel, InjectOutcome } from "./kernel.ts";
+import { scopeDenialReason } from "./kernel-grant-scope.ts";
 import type { ModelPrincipal } from "./auth.ts";
+import { canonicalRequestPath } from "./ssrf.ts";
 import {
   clientIdRequiredHint,
   emptyOriginHint,
@@ -59,6 +63,7 @@ type GrantHalt = {
   approval_code?: string;
   notify_failed: boolean;
   item_name: string;
+  hint?: string;
 };
 
 /** Origin result as the model sees it. `status` duplicates `origin_status` for one release. */
@@ -104,9 +109,29 @@ function optionalBoolean(args: Record<string, unknown>, key: string): boolean {
   return value;
 }
 
+/** The two request bodies the connector encodes; anything else is a 400 rather than sent as-is. */
+export const CONTENT_TYPES = ["application/json", "application/x-www-form-urlencoded"] as const;
+
+function optionalContentType(value: unknown): string | undefined {
+  const raw = optional(value)?.trim().toLowerCase();
+  if (raw === undefined) return undefined;
+  const bare = raw.split(";")[0]?.trim() ?? "";
+  if (!CONTENT_TYPES.includes(bare as (typeof CONTENT_TYPES)[number])) {
+    throw new HttpError(400, `content_type must be ${CONTENT_TYPES.join(" or ")}`);
+  }
+  return bare;
+}
+
+function assertDefaultPort(url: URL): void {
+  if (url.port !== "" && url.port !== "443") {
+    throw new HttpError(400, `URL port ${url.port} is not supported. Botpasses connects over https on port 443 only; drop the port or use a host that serves the API on 443.`);
+  }
+}
+
 /**
  * Accept path as `/v1/me` or a full https URL. Host may be a hostname or a URL.
- * Structural URL parsing only (format), not semantic classification.
+ * Structural URL parsing only (format), not semantic classification. The path is returned in
+ * its canonical form (`canonicalRequestPath`), the same string the scope check and the wire use.
  */
 export function connectorTargetFromArgs(args: Record<string, unknown>): ConnectorTarget {
   const method = required(args, "method").toUpperCase();
@@ -115,7 +140,7 @@ export function connectorTargetFromArgs(args: Record<string, unknown>): Connecto
   const itemName = optional(args.item_name)?.trim();
   const taskDescription = optional(args.task_description);
   const clientId = optional(args.client_id);
-  const contentType = optional(args.content_type);
+  const contentType = optionalContentType(args.content_type);
   const timeoutMs = clampTimeoutMs(args.timeout_ms);
   const dryRun = optionalBoolean(args, "dry_run");
 
@@ -129,17 +154,20 @@ export function connectorTargetFromArgs(args: Record<string, unknown>): Connecto
     if (parsed.protocol !== "https:") {
       throw new HttpError(400, "path URL must be https");
     }
+    assertDefaultPort(parsed);
     host = host || parsed.hostname;
     path = parsed.pathname + parsed.search;
   }
-  if (host && (host.includes("://") || host.includes("/"))) {
+  if (host && (host.includes("://") || host.includes("/") || host.includes(":"))) {
+    let u: URL;
     try {
-      const u = new URL(host.includes("://") ? host : `https://${host}`);
-      host = u.hostname;
-      if (path === "/" && u.pathname && u.pathname !== "/") path = u.pathname + u.search;
+      u = new URL(host.includes("://") ? host : `https://${host}`);
     } catch {
       throw new HttpError(400, "host must be a hostname such as api.example.com");
     }
+    assertDefaultPort(u);
+    host = u.hostname;
+    if (path === "/" && u.pathname && u.pathname !== "/") path = u.pathname + u.search;
   }
   if (host) host = host.toLowerCase();
   if (!itemName && !host) {
@@ -148,9 +176,7 @@ export function connectorTargetFromArgs(args: Record<string, unknown>): Connecto
       "http_request requires item_name or host, plus method and path. Example: host=api.example.com method=GET path=/v1/me",
     );
   }
-  if (!path.startsWith("/") || path.startsWith("//")) {
-    throw new HttpError(400, "path must start with /");
-  }
+  path = canonicalRequestPath(path);
   return { itemName, host, method, path, taskDescription, clientId, contentType, timeoutMs, dryRun };
 }
 
@@ -197,15 +223,22 @@ function connectorOpts(deps: ConnectorCallDeps, target: ConnectorTarget, redact 
   };
 }
 
-async function releaseGrantOnFailure(
-  kernel: HostedKernel,
-  item: ConnectorItem,
-  originStatus?: number,
-): Promise<void> {
-  if (originStatus !== undefined && originStatus >= 200 && originStatus < 300) return;
-  if (item.grantPolicy === "prompt") {
-    await kernel.reactivatePromptGrant(item.grantId);
-  }
+/**
+ * A one-call (`prompt`) approval is spent the moment the credential leaves the process. It is
+ * handed back only when the send never left: the connector refused before dialing (host mismatch,
+ * blocked address, unusable mode, missing client id) or the origin was unreachable before the
+ * TLS handshake (DNS, connect, TLS, or a deadline before it). Any origin status, a premature
+ * close, or a timeout after the handshake keeps the grant spent; operators who expect retries
+ * approve with `max_calls` or `session`.
+ */
+async function releaseUnsentGrant(kernel: HostedKernel, item: ConnectorItem): Promise<void> {
+  if (item.grantPolicy === "prompt") await kernel.reactivatePromptGrant(item.grantId);
+}
+
+/** Did this connector failure happen before the credential could leave the process? */
+export function sendNeverLeft(err: unknown): boolean {
+  if (isOriginUnreachable(err)) return !err.credentialSent;
+  return isHttpError(err) && (err.status === 400 || err.message === "inject_unsupported");
 }
 
 /** Host the request will go to when the caller named only the item: its first allowed host. */
@@ -213,7 +246,7 @@ async function hostForItem(deps: ConnectorCallDeps, itemName: string, environmen
   const stored = await deps.kernel.findStoredItem(deps.principal.orgId, environment, itemName);
   if (!stored) return undefined;
   const hosts: unknown = JSON.parse(stored.allowedHostsJson);
-  return Array.isArray(hosts) && typeof hosts[0] === "string" ? hosts[0] : undefined;
+  return Array.isArray(hosts) && typeof hosts[0] === "string" ? hosts[0].toLowerCase() : undefined;
 }
 
 export async function runHttpRequest(
@@ -252,17 +285,18 @@ export async function runHttpRequest(
   try {
     const result = await dispatchConnector(deps, prepared, target, args, environment);
     if (sentToOrigin(result)) {
-      await releaseGrantOnFailure(deps.kernel, prepared, result.origin_status);
       await audit("inject");
     } else {
+      // A structured refusal (client_id_required, a pending refresh grant): nothing was sent.
+      await releaseUnsentGrant(deps.kernel, prepared);
       await audit("inject_denied");
     }
     return withRetry(result, target, itemName);
   } catch (err) {
-    await releaseGrantOnFailure(deps.kernel, prepared);
     // 400-class connector errors (host mismatch, blocked address, unusable mode) stop the send;
-    // anything else means the credential left the process but the origin did not answer.
+    // an unreachable origin may or may not have seen the credential (`credentialSent`).
     const stopped = isHttpError(err) && (err.status === 400 || err.message === "inject_unsupported");
+    if (sendNeverLeft(err)) await releaseUnsentGrant(deps.kernel, prepared);
     await audit(stopped ? "inject_denied" : "inject_failed");
     throw err;
   }
@@ -288,7 +322,7 @@ async function dispatchConnector(
   args: Record<string, unknown>,
   environment: VaultEnvName,
 ): Promise<unknown> {
-  const host = target.host ?? item.allowedHosts[0] ?? "";
+  const host = target.host ?? item.allowedHosts[0]?.toLowerCase() ?? "";
   const provider = providerForHost(host);
   const clientId = resolveClientId(item, target.clientId);
   const request = { method: target.method, path: target.path, host, body: args.body, contentType: target.contentType };
@@ -348,20 +382,23 @@ async function tokenEndpointCall(
     },
     connectorOpts(deps, target, false),
   );
-  const redact = (extra: string[] = []) => redactConnectorBody(origin.body, item, extra, host);
+  // Redact against the username the request actually carried (`client_id`), not only the stored one.
+  const sentAs = tokenItem.username;
+  const redact = (extra: string[] = []) => redactConnectorBody(origin.body, item, extra, host, sentAs);
+  const headers = (extra: string[] = []) => redactOriginHeaders(origin.headers, item, extra, sentAs);
   if (origin.status >= 200 && origin.status < 300 && clientId && grantType === "client_credentials") {
     try {
       const minted = readMintedAccessToken(origin.body);
       storeMint(deps.principal.orgId, item.itemId ?? item.name, clientId, "client_credentials", minted);
       return originPayload(
-        { ...origin, body: redact([minted.accessToken]), headers: redactOriginHeaders(origin.headers, item, [minted.accessToken]) },
+        { ...origin, body: redact([minted.accessToken]), headers: headers([minted.accessToken]) },
         { minted: true, token_last4: minted.last4 },
       );
     } catch {
-      return originPayload({ ...origin, body: redact() });
+      return originPayload({ ...origin, body: redact(), headers: headers() });
     }
   }
-  return originPayload({ ...origin, body: redact() });
+  return originPayload({ ...origin, body: redact(), headers: headers() });
 }
 
 async function ensureAppToken(
@@ -384,8 +421,12 @@ async function ensureAppToken(
 
 /**
  * A path that needs a user token: exchange the stored `<ITEM>_REFRESH` item (if the org has
- * one) for an access token and call with that. Returns undefined when there is no refresh item
- * or this client may not use it, so the caller falls back to the app-token path and its hint.
+ * one) for an access token and call with that. A cached access token is used without touching
+ * the refresh item's approval. Without a cache hit the refresh item needs an active grant for
+ * this client; when it has none, the result is the pending grant for `<ITEM>_REFRESH` so the
+ * model asks the operator instead of silently falling back to the app token. Returns undefined
+ * only when there is no refresh item or no client id, so the caller falls back to the app-token
+ * path and its hint.
  */
 async function tryUserToken(
   deps: ConnectorCallDeps,
@@ -396,48 +437,108 @@ async function tryUserToken(
   environment: VaultEnvName,
   host: string,
   hintMessage: string,
-): Promise<OriginPayload | undefined> {
+): Promise<OriginPayload | GrantHalt | undefined> {
   const refreshName = refreshItemName(item.name);
   const stored = await deps.kernel.findStoredItem(deps.principal.orgId, environment, refreshName);
   if (!stored) return undefined;
-  try {
-    const refreshItem = await deps.kernel.prepareConnector({
+  const clientId = resolveClientId(stored, target.clientId) ?? resolveClientId(item, target.clientId);
+  if (!clientId) return undefined;
+  const refreshKey = stored.id;
+  const call = { method: target.method, path: target.path, host, body: args.body, contentType: target.contentType };
+  const cached = cachedMint(deps.principal.orgId, refreshKey, clientId, "refresh_token");
+  if (cached) {
+    const origin = await executeConnector(itemWithAccessToken(item, cached.accessToken), call, connectorOpts(deps, target));
+    return originPayload(origin, { user_token: true, token_last4: cached.last4 });
+  }
+  const tokenRequest = { host: provider.tokenHost, method: "POST", path: provider.tokenPath };
+  const prepareRefresh = () =>
+    deps.kernel.prepareConnector({
       orgId: deps.principal.orgId,
       clientId: deps.principal.clientId,
       itemName: refreshName,
       environment,
       auditAfterSend: true,
-      request: { host: provider.tokenHost, method: "POST", path: provider.tokenPath },
+      request: tokenRequest,
     });
-    const clientId = resolveClientId(refreshItem, target.clientId) ?? resolveClientId(item, target.clientId);
-    if (!clientId) return undefined;
-    const refreshKey = refreshItem.itemId ?? refreshName;
-    let cached = cachedMint(deps.principal.orgId, refreshKey, clientId, "refresh_token");
-    if (!cached) {
-      const { minted, origin } = await refreshAccessToken(provider, refreshItem, clientId, connectorOpts(deps, target));
-      await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, "inject");
-      if (origin.status < 200 || origin.status >= 300 || !minted.accessToken) {
-        await deps.kernel.reactivatePromptGrant(refreshItem.grantId);
-        return originPayload(origin, { hint: hintMessage });
-      }
-      storeMint(deps.principal.orgId, refreshKey, clientId, "refresh_token", minted);
-      cached = minted;
-    }
-    const origin = await executeConnector(
-      itemWithAccessToken(item, cached.accessToken),
-      { method: target.method, path: target.path, host, body: args.body, contentType: target.contentType },
-      connectorOpts(deps, target),
-    );
-    if (origin.status < 200 || origin.status >= 300) {
+  let refreshItem: ConnectorItem;
+  try {
+    refreshItem = await prepareRefresh();
+  } catch (err) {
+    if (isNeedItemError(err)) return undefined;
+    if (!isInjectDenied(err)) throw err;
+    const halt = await refreshGrantHalt(deps, refreshName, environment, target, tokenRequest);
+    if (halt.status !== "active") return halt;
+    // A standing policy activated the grant on request: proceed as if it had been there.
+    refreshItem = await prepareRefresh();
+  }
+  let exchange: Awaited<ReturnType<typeof refreshAccessToken>>;
+  try {
+    exchange = await refreshAccessToken(provider, refreshItem, clientId, connectorOpts(deps, target));
+  } catch (err) {
+    if (sendNeverLeft(err) && refreshItem.grantPolicy === "prompt") {
       await deps.kernel.reactivatePromptGrant(refreshItem.grantId);
     }
-    return originPayload(origin, { user_token: true, token_last4: cached.last4 });
-  } catch (err) {
-    if (isNeedItemError(err) || isInjectDenied(err)) {
-      return undefined;
-    }
+    await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, sendNeverLeft(err) ? "inject_denied" : "inject_failed");
     throw err;
   }
+  const { minted, origin } = exchange;
+  await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, "inject");
+  if (origin.status < 200 || origin.status >= 300 || !minted.accessToken) {
+    return originPayload(origin, { hint: hintMessage });
+  }
+  storeMint(deps.principal.orgId, refreshKey, clientId, "refresh_token", minted);
+  if (minted.refreshToken && minted.refreshToken !== refreshItem.secret) {
+    await persistRotatedRefresh(deps, refreshItem, refreshName, minted.refreshToken);
+  }
+  const result = await executeConnector(itemWithAccessToken(item, minted.accessToken), call, connectorOpts(deps, target));
+  return originPayload(result, { user_token: true, token_last4: minted.last4 });
+}
+
+/**
+ * RFC 6749 section 6: a provider may rotate the refresh token on every exchange (Google, some
+ * GitHub apps). The old value stops working, so the new one replaces the stored `<ITEM>_REFRESH`
+ * value in place (actor `provider`, audited `refresh_rotated`). The value never leaves the process.
+ */
+async function persistRotatedRefresh(
+  deps: ConnectorCallDeps,
+  refreshItem: ConnectorItem,
+  refreshName: string,
+  nextValue: string,
+): Promise<void> {
+  if (!refreshItem.itemId) return;
+  await deps.kernel.updateItem({
+    orgId: deps.principal.orgId,
+    actor: "provider",
+    itemId: refreshItem.itemId,
+    value: nextValue,
+  });
+  await deps.kernel.writeAudit(deps.principal.orgId, "refresh_rotated", "provider", refreshName, deps.principal.clientId);
+}
+
+/** The refresh item exists but this client has no active grant for it: ask, and say so. */
+async function refreshGrantHalt(
+  deps: ConnectorCallDeps,
+  refreshName: string,
+  environment: VaultEnvName,
+  target: ConnectorTarget,
+  request: { host: string; method: string; path: string },
+): Promise<GrantHalt> {
+  const result = await deps.kernel.requestGrant({
+    orgId: deps.principal.orgId,
+    clientId: deps.principal.clientId,
+    itemName: refreshName,
+    environment,
+    taskDescription: target.taskDescription,
+    request,
+  });
+  return {
+    grant_id: result.grant.id,
+    status: result.grant.status,
+    approval_code: result.code,
+    notify_failed: result.notifyFailed ?? false,
+    item_name: refreshName,
+    hint: `${refreshName} holds the connected account's refresh token. This call needs a user token, so the operator must approve ${refreshName} for this agent. After approval, retry the same call.`,
+  };
 }
 
 async function prepareOrGrant(
@@ -513,21 +614,26 @@ async function dryRun(deps: ConnectorCallDeps, target: ConnectorTarget, environm
     }
     item = items.find((i) => i.name === wanted);
     if (!item) reason = "need_item";
-    else if (target.host && !item.allowedHosts.includes(target.host)) reason = "host_mismatch";
+    else if (target.host && !hostAllowedBy(item.allowedHosts, target.host)) reason = "host_mismatch";
   } else if (target.host) {
     const host = target.host;
-    const matches = items.filter((i) => i.allowedHosts.includes(host));
+    const matches = items.filter((i) => hostAllowedBy(i.allowedHosts, host));
     if (matches.length === 0) reason = "need_item";
     else if (matches.length > 1) reason = "ambiguous";
     else item = matches[0];
   }
-  const host = target.host ?? item?.allowedHosts[0] ?? "";
+  const host = target.host ?? item?.allowedHosts[0]?.toLowerCase() ?? "";
   const provider = host ? providerForHost(host) : undefined;
   const injectMode = item ? injectModeOf(item.inject) : null;
   if (item && !injectMode) reason ??= "inject_unsupported";
-  const grantStatus = item ? await grantStatusFor(deps, item.id, item.name, environment) : "none";
-  if (item && !reason && grantStatus !== "standing" && grantStatus !== "active") {
-    reason = grantStatus === "pending" ? "grant_pending" : "grant_required";
+  const grant = item ? await grantStatusFor(deps, item.id, item.name, environment) : { status: "none" as const };
+  if (item && !reason && grant.status !== "standing" && grant.status !== "active") {
+    reason = grant.status === "pending" ? "grant_pending" : "grant_required";
+  }
+  if (item && !reason && grant.scope) {
+    // The same check `prepareConnector` runs, without spending anything.
+    const denial = scopeDenialReason(grant.scope, { host, method: target.method, path: target.path });
+    if (denial) reason = "scope_denied";
   }
   return {
     dry_run: true,
@@ -537,18 +643,19 @@ async function dryRun(deps: ConnectorCallDeps, target: ConnectorTarget, environm
     path: target.path,
     would_send: item !== undefined && reason === undefined,
     reason: reason ?? "ok",
-    grant_status: grantStatus,
+    grant_status: grant.status,
     inject_mode: injectMode ?? item?.inject ?? null,
     provider: provider?.id ?? null,
   };
 }
 
+/** The approval a real call would spend, with the scope it would be checked against. */
 async function grantStatusFor(
   deps: ConnectorCallDeps,
   itemId: string,
   itemName: string,
   environment: VaultEnvName,
-): Promise<DryRunReport["grant_status"]> {
+): Promise<{ status: DryRunReport["grant_status"]; scope?: GrantScope }> {
   const { kernel, principal } = deps;
   const stored = await kernel.findStoredItem(principal.orgId, environment, itemName);
   if (stored) {
@@ -556,10 +663,12 @@ async function grantStatusFor(
     const folderPolicy = itemPolicy
       ? undefined
       : await kernel.store.findFolderPolicy(principal.orgId, principal.clientId, stored.folderId, stored.environmentId);
-    if (itemPolicy || folderPolicy) return "standing";
+    const standing = itemPolicy ?? folderPolicy;
+    if (standing) return { status: "standing", scope: scopeFromPolicy(standing) };
   }
   const grants = (await kernel.listClientGrants(principal.orgId, principal.clientId)).filter((g) => g.itemId === itemId);
-  if (grants.some((g) => g.status === "active")) return "active";
-  if (grants.some((g) => g.status === "pending")) return "pending";
-  return "none";
+  const active = grants.find((g) => g.status === "active");
+  if (active) return { status: "active", scope: active };
+  if (grants.some((g) => g.status === "pending")) return { status: "pending" };
+  return { status: "none" };
 }

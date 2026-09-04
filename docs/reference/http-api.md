@@ -27,7 +27,7 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/mcp/tools` | none (or model/operator) | `{ tools }` same as MCP `tools/list` |
 | POST | `/api/items/:id/meta` | operator | Same as `POST /api/items/:id` (below). Blank `value` keeps the current secret. |
 | POST | `/api/integrations/:provider/start` | operator | `:provider` is a registry id with a user connect flow (`spotify`, `github`, `google`, `slack`, `stripe`; unknown is 404). `{ item_name, environment?, client_id?, redirect_uri?, agent_client_id? }` → `{ authorize_url, redirect_uri, provider }`. `client_id` defaults to the item username. `agent_client_id` names the one model client that gets an `item_standing` policy on the refresh item after connect; without it the operator approves normally. The sealed `state` carries the provider id. |
-| GET | `/integrations/:provider/callback` | operator cookie (ready) | Exchanges the code with the client-secret item, stores the refresh token as `<ITEM>_REFRESH` (`inject: refresh`, allowed on the provider API and token hosts), redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>`. A state minted for another provider, another org, or another operator account is refused. An existing `<ITEM>_REFRESH` is rotated and its hosts and inject mode reset to the provider defaults. Audit: `provider_connected`, plus `grant` when `agent_client_id` was given. `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `:provider = spotify`. |
+| GET | `/integrations/:provider/callback` | operator cookie (ready) | Exchanges the code with the client-secret item, stores the refresh token as `<ITEM>_REFRESH` (`inject: refresh`, allowed on the provider API and token hosts), redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>&reason=<code>` where `reason` is `state_expired` (invalid, expired, or foreign state), `provider_denied` (the provider sent `error`), `exchange_failed` (non-2xx code exchange), or `no_refresh_token`. A state minted for another provider, another org, or another operator account is refused. An existing `<ITEM>_REFRESH` is rotated and its hosts and inject mode reset to the provider defaults. Audit: `provider_connected`, plus `grant` when `agent_client_id` was given. `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `:provider = spotify`. |
 
 ## Auth HTML and JSON
 
@@ -66,7 +66,7 @@ All require `operatorReady` unless noted.
 | DELETE | `/api/orgs` | `{ confirm_name }` | `{ ok: true }` |
 | GET | `/api/inbox` | | `{ grants, needs, agentpass }` pending |
 | GET | `/api/audit` | optional `?client_id=` and `?item_name=` | `{ audit }` actions and item names, no values |
-| GET | `/api/need-items/:id` | operator + same org | need metadata (not public JSON; unsigned is **404**) |
+| GET | `/api/need-items/:id` | operator + same org | need metadata (not public JSON; unsigned or another org's need is **404**, never 403) |
 | POST | `/api/need-items/:id/fulfill` | `{ value, name?, allowed_hosts?, inject?, kind?, username? }` | `{ item, grant_status }` |
 
 Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
@@ -88,7 +88,7 @@ Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
 | POST | `/api/clients/:id/environment` | operator | `{ environment }`. Moves an agent (including OAuth-issued ones) to another vault environment. 409 if revoked |
 | HEAD | `/console` | none | Same headers as GET |
 
-Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reactivates so the agent can retry), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). DCR `redirect_uris` may be https, loopback http, or a desktop app scheme (`cursor://`, `grok://`).
+Policies: `prompt` (one call: spent by any origin answer or any failure after the credential left the process; handed back only when the send never left, such as a host mismatch or a DNS, connect, or TLS failure), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). Operators who expect retries approve with `max_calls` or `session`. DCR `redirect_uris` may be https, loopback http, or a desktop app scheme (`cursor://`, `grok://`).
 
 ## Access snapshot and ledger
 
@@ -170,7 +170,7 @@ Plan limits: free tier is 25 credentials, 10 agents, 3 members, 5000 `http_reque
 
 ## Errors operators see
 
-Inbox grant cards (`GET /api/inbox`) carry `requested_scope`, `grant_scope`, `allowed_hosts`, `expires_at`; `GET /api/access` grants carry `policy`, `expires_at`, `grant_scope`. Audit actions: `scope_denied`, `grant_exhausted`, `client_environment`, `client_reactivated`, `inject_denied`, `inject_failed`.
+Inbox grant cards (`GET /api/inbox`) carry `requested_scope`, `grant_scope`, `allowed_hosts`, `expires_at`; `GET /api/access` grants carry `policy`, `expires_at`, `grant_scope`. Audit actions: `scope_denied`, `grant_exhausted`, `client_environment`, `client_reactivated`, `inject_denied`, `inject_failed`, `refresh_rotated` (a provider rotated an `<ITEM>_REFRESH` value; actor `provider`). `allowed_hosts` are stored trimmed, lowercase, and deduplicated on create and update.
 
 Unexpected failures are `500 { error: "Internal error", request_id }` with an `x-request-id` header; the detail is in the server log under `request_error`, never in the response. Malformed JSON bodies are `400 { error: "Invalid JSON" }`. Every response carries `x-request-id`.
 

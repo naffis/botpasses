@@ -24,11 +24,18 @@ export function last4(value: string): string {
   return value.slice(-4);
 }
 
-/** Structural hostname → env-var name. Not semantic classification. */
+/**
+ * Structural hostname → env-var name. Not semantic classification. Every character outside
+ * `[A-Z0-9]` becomes `_`, runs collapse, ends are trimmed, and a leading digit gets an `H_`
+ * prefix, so any non-empty host yields a valid name (`api-v2.example.com` → `API_V2_EXAMPLE_COM`,
+ * `1password.com` → `H_1PASSWORD_COM`).
+ */
 export function suggestedNameFromHost(host: string): string | undefined {
-  const raw = host.trim().toLowerCase();
+  const raw = host.trim().toUpperCase();
   if (!raw) return undefined;
-  const candidate = raw.split(".").filter(Boolean).join("_").toUpperCase();
+  const compact = raw.replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+  if (!compact) return undefined;
+  const candidate = /^[0-9]/.test(compact) ? `H_${compact}` : compact;
   try {
     return normalizeSecretName(candidate);
   } catch {

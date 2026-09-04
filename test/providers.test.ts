@@ -293,11 +293,13 @@ test("user connect over HTTP: start returns the provider authorize URL; the call
       (err: unknown) => isHttpError(err) && err.status === 403 && /account/.test(err.message),
     );
 
-    // Unknown provider, and a provider-less callback (denied at the vendor) both land back on the console.
+    // Unknown provider is 404; a callback denied at the vendor lands on the console with a reason code.
     const nope = await startConnect(ctx, "nope", { item_name: "SPOTIFY_SECRET", environment: "staging" });
     assert.equal(nope.res.status, 404);
     const denied = await callback(ctx, "spotify", { error: "access_denied", state: "x" });
-    assert.equal(denied.location, "/console#vault");
+    assert.equal(denied.location, "/console#vault?connect_error=spotify&reason=provider_denied");
+    const noCode = await callback(ctx, "spotify", { state: "x" });
+    assert.equal(noCode.location, "/console#vault", "a bare visit without code or state is not an error");
   } finally {
     await teardown(ctx);
   }
@@ -370,8 +372,10 @@ test("user connect rejects a state minted for another provider, another org, or 
     assert.equal(google.res.status, 200, JSON.stringify(google.json));
     // The Google state arrives on the Spotify callback: refused before any token request leaves.
     const crossed = await callback(ctx, "spotify", { code: "c0de", state: google.state });
-    assert.equal(crossed.location, "/console#vault?connect_error=spotify");
+    assert.equal(crossed.location, "/console#vault?connect_error=spotify&reason=state_expired");
     assert.equal(ctx.hits.length, 0, "no code exchange was attempted");
+    const garbage = await callback(ctx, "google", { code: "c0de", state: "not-a-state" });
+    assert.equal(garbage.location, "/console#vault?connect_error=google&reason=state_expired");
     await assert.rejects(
       () => ctx.kernel.finishProviderUserOauth({ providerId: "spotify", orgId: ctx.orgId, userId: "user_owner", state: google.state, code: "c0de" }),
       (err: unknown) => isHttpError(err) && err.status === 400 && /another provider/.test(err.message),
@@ -476,7 +480,8 @@ test("minted app token calls /v1/search; /v1/me explains user OAuth", async () =
     });
     assert.equal(me.payload.origin_status, 401);
     assert.match(String(me.payload.hint ?? ""), /user OAuth|\/v1\/me|Client credentials|Connect a Spotify user/i);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "the origin answered, so the one-call approval is spent");
+    await approve(ctx);
 
     const search = await call(ctx, {
       item_name: "SPOTIFY_SECRET",
@@ -494,7 +499,7 @@ test("minted app token calls /v1/search; /v1/me explains user OAuth", async () =
   }
 });
 
-test("failed Spotify 401/410 reuses the same prompt grant", async () => {
+test("an origin 401 or 410 spends a one-call approval (the secret left the process); a standing approval covers the retry", async () => {
   let tokenStatus = 401;
   const ctx = await setup(async (url) => {
     if (url.includes("/api/token")) {
@@ -504,38 +509,29 @@ test("failed Spotify 401/410 reuses the same prompt grant", async () => {
     }
     return new Response("nope", { status: 404 });
   });
+  const tokenCall = { item_name: "SPOTIFY_SECRET", method: "POST", path: "https://accounts.spotify.com/api/token", client_id: CLIENT_ID };
   try {
     const grantId = await approve(ctx);
-    const first = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "POST",
-      path: "https://accounts.spotify.com/api/token",
-      client_id: CLIENT_ID,
-    });
+    const first = await call(ctx, tokenCall);
     assert.equal(first.payload.origin_status, 401);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "any origin status spends a prompt grant");
+    const again = await call(ctx, tokenCall);
+    assert.equal(again.payload.status, "pending", "the retry asks for a new approval");
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "nothing was sent without an approval");
 
+    const standingId = await approve(ctx, "SPOTIFY_SECRET", "item_standing");
     tokenStatus = 410;
-    const gone = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "POST",
-      path: "https://accounts.spotify.com/api/token",
-      client_id: CLIENT_ID,
-    });
+    const gone = await call(ctx, tokenCall);
     assert.equal(gone.payload.origin_status, 410);
     assert.equal(gone.payload.body, "");
     assert.match(String(gone.payload.hint), /410/);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+    assert.match(String(gone.payload.hint), /one-call approval is spent/);
+    assert.equal((await ctx.kernel.store.getGrant(standingId))?.status, "active", "a standing approval covers retries");
 
     tokenStatus = 200;
-    const ok = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "POST",
-      path: "https://accounts.spotify.com/api/token",
-      client_id: CLIENT_ID,
-    });
+    const ok = await call(ctx, tokenCall);
     assert.equal(ok.payload.origin_status, 200);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed");
+    assert.equal((await ctx.kernel.store.getGrant(standingId))?.status, "active");
     assert.doesNotMatch(JSON.stringify(ok.payload), new RegExp(CLIENT_SECRET));
     assert.doesNotMatch(JSON.stringify(ok.payload), new RegExp(ACCESS));
   } finally {
@@ -587,6 +583,116 @@ test("a stored <ITEM>_REFRESH token is exchanged in the form body (no Basic) and
     const second = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
     assert.equal(second.payload.origin_status, 200);
     assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "the refreshed token is cached");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("a rotated refresh token replaces the stored <ITEM>_REFRESH value in place and is audited refresh_rotated", async () => {
+  const ROTATED = "AQD_rotated_refresh_token_do_not_leak_2222";
+  let exchanges = 0;
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("accounts.spotify.com/api/token")) {
+      exchanges += 1;
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      const sent = form.get("refresh_token");
+      // The provider rotates on every exchange: the first value works once, then only the new one.
+      if (form.get("grant_type") === "refresh_token" && sent === (exchanges === 1 ? REFRESH : ROTATED)) {
+        return tokenJson({ refresh_token: ROTATED, expires_in: 30 });
+      }
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    if (url.includes("/v1/me")) {
+      return auth === `Bearer ${ACCESS}` ? new Response(JSON.stringify({ id: "user1" }), { status: 200 }) : new Response("", { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    const stored = await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    await approve(ctx, "SPOTIFY_REFRESH", "item_standing");
+    const first = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(first.payload.origin_status, 200, JSON.stringify(first.payload));
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, stored.id)).secret, ROTATED, "the new refresh token is stored");
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    const rotated = audit.find((a) => a.action === "refresh_rotated");
+    assert.equal(rotated?.itemName, "SPOTIFY_REFRESH");
+    assert.equal(rotated?.actor, "provider");
+    assert.doesNotMatch(JSON.stringify(audit), new RegExp(ROTATED));
+    assert.doesNotMatch(JSON.stringify(first.payload), new RegExp(ROTATED));
+    // The 30 s token is inside the cache skew, so the next call refreshes again: only the rotated
+    // value is accepted now, and the call succeeds because it was persisted.
+    clearMintCache();
+    const second = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(second.payload.origin_status, 200, JSON.stringify(second.payload));
+    assert.equal(exchanges, 2);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("user-token path: a cached token needs no refresh approval; without one the result is the pending <ITEM>_REFRESH grant", async () => {
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("accounts.spotify.com/api/token")) {
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      return form.get("grant_type") === "refresh_token" ? tokenJson() : new Response("", { status: 400 });
+    }
+    if (url.includes("/v1/me")) {
+      return auth === `Bearer ${ACCESS}` ? new Response(JSON.stringify({ id: "user1" }), { status: 200 }) : new Response("", { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    const me = { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" };
+    // No approval on the refresh item: the model is told to get one, not sent an app token that 401s.
+    const secretGrant = await approve(ctx);
+    const halted = await call(ctx, me);
+    assert.equal(halted.payload.status, "pending", JSON.stringify(halted.payload));
+    assert.equal(halted.payload.item_name, "SPOTIFY_REFRESH");
+    assert.match(String(halted.payload.hint), /SPOTIFY_REFRESH/);
+    assert.equal(typeof halted.payload.approval_code, "string");
+    assert.equal(ctx.hits.length, 0, "nothing was sent");
+    assert.equal((await ctx.kernel.store.getGrant(secretGrant))?.status, "active", "the client secret's one-call approval was not spent: nothing left the process");
+    const inbox = await (await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op })).json() as { grants: { item_name: string }[] };
+    assert.ok(inbox.grants.some((g) => g.item_name === "SPOTIFY_REFRESH"), "the operator sees the refresh approval request");
+
+    // Approve the refresh item once: the first call exchanges it, the second reuses the cached
+    // access token and does not need (or spend) another refresh approval.
+    const pendingRefresh = (await ctx.kernel.store.listGrants(ctx.orgId)).find((g) => g.status === "pending");
+    assert.ok(pendingRefresh);
+    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: pendingRefresh.id, policy: "prompt", role: "owner", actor: "user_owner" });
+    const first = await call(ctx, me);
+    assert.equal(first.payload.origin_status, 200, JSON.stringify(first.payload));
+    assert.equal(first.payload.user_token, true);
+    assert.equal((await ctx.kernel.store.getGrant(pendingRefresh.id))?.status, "consumed");
+    await approve(ctx);
+    const second = await call(ctx, me);
+    assert.equal(second.payload.origin_status, 200, JSON.stringify(second.payload));
+    assert.equal(second.payload.user_token, true, "the cached user token served the call without a refresh approval");
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "one exchange");
   } finally {
     await teardown(ctx);
   }

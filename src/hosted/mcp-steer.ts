@@ -96,14 +96,14 @@ function nextBase(payload: PublicRecord): McpNext | undefined {
       const hint = typeof payload.hint === "string" ? payload.hint : "";
       return {
         for_model:
-          `${hint || "The origin rejected the credential or the resource is gone."} Retry http_request with next.arguments. The same Botpasses approval is still valid. Do not ask for a new 8-digit code. Do not ask for a token.`,
+          `${hint || "The origin rejected the credential or the resource is gone."} Retry http_request with next.arguments. A standing or session approval still covers the retry; a one-call approval was spent by this answer, so if the retry returns a pending grant, tell the user to approve it. Do not ask for a token.`,
         tool: "http_request",
       };
     }
     if (originStatus >= 500) {
       return {
         for_model:
-          "Transient origin error; retry once. Use http_request with next.arguments. The same approval is still valid.",
+          "Transient origin error; retry once. Use http_request with next.arguments. A standing or session approval still covers the retry; if the retry returns a pending grant, tell the user to approve it.",
         tool: "http_request",
       };
     }

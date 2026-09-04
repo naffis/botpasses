@@ -7,12 +7,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Principal } from "./auth.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import type { HostedKernel } from "./kernel.ts";
+import { connectErrorReason, type ConnectErrorReason } from "./kernel-connect.ts";
 
 const CONNECT_CALLBACK_RE = /^\/integrations\/([a-z0-9_-]+)\/callback$/;
 
 function redirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { location });
   res.end();
+}
+
+/** `/console#vault?connect_error=<provider>&reason=<code>`: the console names the fix per code. */
+function connectErrorLocation(providerId: string, reason: ConnectErrorReason): string {
+  return `/console#vault?connect_error=${encodeURIComponent(providerId)}&reason=${reason}`;
 }
 
 export async function handleConnectCallback(
@@ -34,7 +40,12 @@ export async function handleConnectCallback(
   }
   const code = url.searchParams.get("code") ?? "";
   const state = url.searchParams.get("state") ?? "";
-  if (url.searchParams.get("error") || !code || !state) {
+  if (url.searchParams.get("error")) {
+    // The provider said no (the operator cancelled, or the app is misconfigured there).
+    redirect(res, connectErrorLocation(providerId, "provider_denied"));
+    return true;
+  }
+  if (!code || !state) {
     redirect(res, "/console#vault");
     return true;
   }
@@ -48,8 +59,8 @@ export async function handleConnectCallback(
       fetchImpl,
     });
     redirect(res, `/console#vault?connected=${encodeURIComponent(providerId)}`);
-  } catch {
-    redirect(res, `/console#vault?connect_error=${encodeURIComponent(providerId)}`);
+  } catch (err) {
+    redirect(res, connectErrorLocation(providerId, connectErrorReason(err)));
   }
   return true;
 }

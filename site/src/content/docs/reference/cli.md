@@ -21,7 +21,7 @@ Run `npx vault` from the cloned repository (or `npm run botpasses -- <command>`)
 | Command | Purpose |
 | --- | --- |
 | `vault init` | Create `$VAULT_HOME`, the SQLite schema, and a master key if needed |
-| `vault set NAME` | Read the value from stdin, encrypt, and store. Prints the name and last-4, never the value |
+| `vault set NAME [--host api.example.com]... [--inject MODE] [--username USER]` | Read the value from stdin, encrypt, and store. Prints the name and last-4, never the value. `--host` allowlists the APIs `http_request` may send it to; `--inject` takes the same modes as hosted (`bearer`, `basic`, `client_credentials`, `refresh`, `sigv4`, `header:Name`, `query:param`, `cookie:name`, `hmac:...`); `--username` is the HTTP Basic user, OAuth client id, or AWS access key id |
 | `vault list` | Names and last-4 |
 | `vault grant --secret NAME --agent A --tool T [--once, --session] [--ttl 8h]` | Approve a pending request |
 | `vault revoke --id GRANT_ID` (or `--secret NAME --agent A --tool T`) | Stop later injects |

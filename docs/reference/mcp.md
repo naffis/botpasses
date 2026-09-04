@@ -47,18 +47,20 @@ Call this in the same turn the user asks for an API. Do not `list_items` first. 
 | `path` | yes | `/v1/me` or a full `https://` URL. Host is taken from the URL. |
 | `host` | one of host / item_name / URL path | Hostname such as `api.spotify.com` |
 | `item_name` | one of host / item_name / URL path | Exact stored name |
-| `body` | no | Object for POST/PUT/PATCH. JSON by default; form-urlencoded when `content_type` says so or the path is Spotify `/api/token` |
-| `content_type` | no | `application/json` or `application/x-www-form-urlencoded` |
-| `client_id` | no | Public OAuth Client ID when the item is a Client Secret |
+| `body` | no | Object for POST/PUT/PATCH. JSON by default; form-urlencoded when `content_type` says so or the path is a known provider token endpoint |
+| `content_type` | no | `application/json` or `application/x-www-form-urlencoded` (case-insensitive; a charset parameter is dropped). Anything else is 400 |
+| `client_id` | no | Public OAuth Client ID when the item is a Client Secret. Redaction covers the Basic pair under this id as well as the stored username |
 | `task_description` | no | Shown in the inbox, truncated to 500 characters |
 | `timeout_ms` | no | Origin deadline in ms, 1000 to 30000 (default 10000); out-of-range values are clamped, non-numbers are 400 |
 | `dry_run` | no | `true`: resolve the item and approval and report without calling the API or using an approval |
 
+Paths are canonical everywhere: `path` (or the URL path) is validated once by `canonicalRequestPath` ([src/hosted/ssrf.ts](../../src/hosted/ssrf.ts)) and the same string is stored on the grant, shown on the inbox card, checked against the approval scope, and sent on the wire. Refused with 400: backslashes, percent-encoded `/`, `\`, or `.` inside a segment (`%2F`, `%5C`, `%2E`), `.` or `..` segments in any encoding or with a `;param` suffix, whitespace, a fragment, malformed escapes, a scheme, and paths over 2048 characters. A URL or host with a port other than 443 is 400 with a hint; Botpasses connects on 443 only.
+
 Implementation: [src/hosted/mcp-http.ts](../../src/hosted/mcp-http.ts) `runHttpRequest`, [src/hosted/connector.ts](../../src/hosted/connector.ts).
 
-Success body: `origin_status` (the API's HTTP status), redacted `body` (string), `origin_headers` (only `content-type`, `link`, `retry-after`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`, `x-request-id`), optional `hint`, optional `next`. `status` duplicates `origin_status` for one release and is deprecated. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects. Dry run body: `{ dry_run: true, item_name, host, method, path, would_send, reason, grant_status, inject_mode, provider }` where `reason` is `ok`, `need_item`, `ambiguous`, `host_mismatch`, `grant_required`, `grant_pending`, or `inject_unsupported` and `grant_status` is `standing`, `active`, `pending`, or `none`.
+Success body: `origin_status` (the API's HTTP status), redacted `body` (string), `origin_headers` (only `content-type`, `link`, `retry-after`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`, `x-request-id`), optional `hint`, optional `next`. `status` duplicates `origin_status` for one release and is deprecated. Never the secret. Connector rules: exact `allowed_hosts` (compared case-insensitively; stored lowercase), no IP literals, DNS pin to public addresses, no redirects, `accept-encoding: identity`. An origin body over 1 MiB on the wire is cut at the socket and returned as `origin_status: 502` with body `{ "error": "body_too_large", "hint" }`; an origin that closes the connection mid-response fails the call at once (502, "closed the connection before the response completed") instead of waiting for the deadline. Dry run body: `{ dry_run: true, item_name, host, method, path, would_send, reason, grant_status, inject_mode, provider }` where `reason` is `ok`, `need_item`, `ambiguous`, `host_mismatch`, `grant_required`, `grant_pending`, `scope_denied` (the approval a real call would use does not cover this method, host, or path), or `inject_unsupported` and `grant_status` is `standing`, `active`, `pending`, or `none`.
 
-Providers: Botpasses mints and refreshes OAuth tokens for known providers (Spotify, GitHub, Google, Slack, Stripe Connect); pass `client_id` when the item is an OAuth client secret. Client credentials go to the provider token endpoint as HTTP Basic or form fields, per provider, never as Bearer. Paths that need a user token return a hint; a stored `<ITEM>_REFRESH` item is exchanged automatically. Refresh sends `refresh_token` and `client_id` in the form body (RFC 6749 section 6).
+Providers: Botpasses mints and refreshes OAuth tokens for known providers (Spotify, GitHub, Google, Slack, Stripe Connect); pass `client_id` when the item is an OAuth client secret. Client credentials go to the provider token endpoint as HTTP Basic or form fields, per provider, never as Bearer. Paths that need a user token use the stored `<ITEM>_REFRESH` item: a cached access token is used without touching the refresh item's approval; otherwise the refresh item needs an active approval for this client, and when it has none the result is the pending grant for `<ITEM>_REFRESH` (with `approval_code`, `item_name`, and a `hint`), not an app-token call that 401s. Refresh sends `refresh_token` and `client_id` in the form body (RFC 6749 section 6). When the provider rotates the refresh token, the new value replaces the stored `<ITEM>_REFRESH` value in place (audit `refresh_rotated`, actor `provider`).
 
 Inject modes on items: `bearer`, `basic`, `client_credentials`, `refresh`, `sigv4`, `header:<name>`, `query:<param>`, `cookie:<name>`, `hmac:stripe_sig|slack_sig|github_sig`. Unknown modes are 400 at store time and 500 `inject_unsupported` at send time; nothing falls through to Bearer.
 
@@ -66,7 +68,7 @@ If the item is missing, the result is `need_item` (not MCP `isError`) with `coll
 
 A Client Secret is not a user access token. On `accounts.spotify.com` Botpasses sends HTTP Basic, not Bearer. Token mint uses a form body. App tokens can call `GET /v1/search`. `GET /v1/me` needs a user connect (Authorization Code + PKCE); the tool result says so instead of treating client credentials as a user token. Access tokens in origin JSON are `[redacted]`.
 
-Prompt grants stay reusable after a failed origin 4xx (401/410). Retry with `next.arguments`. Do not ask for a new 8-digit code.
+A `prompt` (one-call) grant is spent the moment the credential leaves the process: any origin status (2xx, 401, 410, 5xx, `body_too_large`), a connection closed mid-response, or a timeout after the TLS handshake all consume it. It is handed back only when the send never left: the connector refused before dialing (host mismatch, blocked address, unusable mode, missing client id) or the origin was unreachable before the handshake (DNS, connect, TLS, or a deadline before it). Operators who expect retries approve with `max_calls` or `session`. Retry with `next.arguments`; if the retry returns a pending grant, the operator approves it.
 
 ### `find_items`
 
@@ -95,7 +97,7 @@ Inventory: `name`, `kind`, `last4`, `username`, `environment`, `inject`. No valu
 
 ### `request_grant`
 
-Optional `host`, `method`, `path`: the call the agent will make. `host` must be one of the item's allowed hosts, `method` one of GET POST PUT PATCH DELETE, `path` must start with `/`; otherwise 400 (`host_mismatch` carries `allowed_hosts`). Stored on the pending grant as `requested_scope` and shown on the inbox card. When the operator approves without limits, the grant is scoped to that method, host, and path prefix.
+Optional `host`, `method`, `path`: the call the agent will make. `host` must be one of the item's allowed hosts, `method` one of GET POST PUT PATCH DELETE, `path` must pass the same canonical-path rules as `http_request` (starts with `/`, no encoded separators or dot segments); otherwise 400 (`host_mismatch` carries `allowed_hosts`). Stored on the pending grant as `requested_scope` in canonical form and shown on the inbox card. When the operator approves without limits, the grant is scoped to that method, host, and path prefix. `task_description` is cut to 500 characters.
 
 Public grant fields gain `requested_scope` (`{ host, method, path }` or null) and `grant_scope` (`{ methods, path_prefixes, hosts, max_calls, calls_used, expires_at }`, or null when unrestricted). `list_items` items include `allowed_hosts` and `kind`.
 
@@ -113,13 +115,13 @@ Grants for **this client** only. Same public grant fields.
 
 ## `next` steering
 
-Origin 4xx: "The request was rejected by the API; change the path, query, or body before retrying. Do not ask for a new approval." Origin 5xx: "Transient origin error; retry once." 401/410 keep the same-approval retry text. A failed connection says what failed (DNS, TLS, connect, timeout, blocked address) without the secret or the raw error message.
+Origin 4xx: "The request was rejected by the API; change the path, query, or body before retrying. Do not ask for a new approval." Origin 5xx: "Transient origin error; retry once." 401/410 and 5xx add that a standing or session approval still covers the retry while a one-call approval was spent by the answer. A failed connection says what failed (DNS, TLS, connect, timeout, premature close, blocked address) without the secret or the raw error message.
 
 [src/hosted/mcp-steer.ts](../../src/hosted/mcp-steer.ts) `attachMcpNext` adds `next.for_model`, optional `next.tool`, and `next.arguments` (retry host/method/path/item_name). The model should follow `next` and not invent a paste-the-secret step.
 
 ## Local tools
 
-`vault mcp` (stdio, SQLite) exposes the same five tools as hosted: `list_items`, `find_items`, `request_grant`, `list_grants`, `http_request`, with the same argument shapes. `list_secrets` and `http.request` are accepted aliases for one release. The agent id comes from the MCP client's `initialize` `clientInfo.name`. `http_request` requires an active grant for `(item, agent, http_request)` (`vault grant --secret NAME --agent A --tool http_request`), decrypts in-process, and calls the shared connector; the result is redacted like hosted. Items get hosts and an inject mode with `vault set NAME --host api.example.com --inject bearer`. A miss returns `need_item` with a message to run `vault set`; there is no `collect_url` locally.
+`vault mcp` (stdio, SQLite) exposes the same five tools as hosted: `list_items`, `find_items`, `request_grant`, `list_grants`, `http_request`, with the same argument shapes. `list_secrets` and `http.request` are accepted aliases for one release. The agent id comes from the MCP client's `initialize` `clientInfo.name` and nothing else: an argument the tool schema does not name (`agent_id`, `tool_id`, `secret_name`, `environment`) is refused with JSON-RPC `-32602` (`Invalid params: unknown argument ...`), or `isError` when the tool is called directly. `http_request` requires an active grant for `(item, agent, http_request)` (`vault grant --secret NAME --agent A --tool http_request`), decrypts in-process, and calls the shared connector; the result is redacted like hosted and carries `origin_status`, `origin_headers`, and the deprecated `status`. `client_id` (overrides the stored username for one call), `timeout_ms`, and `dry_run` work as on hosted; the dry-run report has the same fields (`grant_status` is `active`, `pending`, or `none`). A `once` grant follows the hosted rule: any origin answer spends it; it comes back only when the value never left the process. Items take hosts, an inject mode from the hosted vocabulary, and a username with `vault set NAME --host api.example.com --inject basic --username svc`. A miss returns `need_item` with a message to run `vault set`; there is no `collect_url` locally.
 
 ## Auth and isolation
 
