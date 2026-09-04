@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { describeScope, grantCard, limitsBody } from "../src/hosted/client/inbox.ts";
 import { isHttpError, isInjectDenied, isScopeDenied } from "../src/hosted/errors.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { resolveApprovalScope, scopeDenialReason } from "../src/hosted/kernel-grants.ts";
@@ -43,6 +44,7 @@ async function setup(opts: { now?: () => Date } = {}) {
   });
   const { client: model } = await kernel.createModelClient({ orgId, name: "cursor", environment: "staging" });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,

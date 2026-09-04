@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { AgentPassAuthority } from "../src/hosted/agentpass.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { cleanup, tempHome } from "./helpers.ts";
@@ -18,7 +19,7 @@ test("AgentPass issuance pending, approve, validate consumes, holder_proof requi
     publicUrl: "http://127.0.0.1:8788",
   });
   const { orgId } = await kernel.createOrg("ap", "user_owner");
-  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0 });
+  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0, authResolver: testAuthResolver });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;
   const op = {

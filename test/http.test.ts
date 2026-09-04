@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createVaultServer } from "../src/server.ts";
+import type { LoopbackRole, Vault } from "../src/vault.ts";
 import { CANARY, cleanup, makeVault } from "./helpers.ts";
 
-function loopbackHeaders(vault: { loopbackToken(): string }, extra: Record<string, string> = {}) {
+function loopbackHeaders(vault: Vault, role: LoopbackRole, extra: Record<string, string> = {}) {
   return {
-    authorization: `Bearer ${vault.loopbackToken()}`,
+    authorization: `Bearer ${vault.loopbackToken(role)}`,
     ...extra,
   };
 }
@@ -41,7 +42,8 @@ test("HTTP operator API never returns secret values", async () => {
   const http = createVaultServer({ vault, host: "127.0.0.1", port: 0 });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;
-  const auth = loopbackHeaders(vault, { "content-type": "application/json" });
+  const auth = loopbackHeaders(vault, "operator", { "content-type": "application/json" });
+  const model = loopbackHeaders(vault, "model", { "content-type": "application/json" });
   try {
     const stored = await fetch(`${base}/api/secrets`, {
       method: "POST",
@@ -78,7 +80,7 @@ test("HTTP operator API never returns secret values", async () => {
 
     const mcp = await fetch(`${base}/mcp`, {
       method: "POST",
-      headers: auth,
+      headers: model,
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
@@ -107,7 +109,7 @@ test("HTTP operator API never returns secret values", async () => {
     const tools = (await (
       await fetch(`${base}/mcp`, {
         method: "POST",
-        headers: auth,
+        headers: model,
         body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }),
       })
     ).json()) as { result: { tools: { name: string }[] } };
@@ -130,7 +132,7 @@ test("HTTP operator API never returns secret values", async () => {
 
     const init = await fetch(`${base}/mcp`, {
       method: "POST",
-      headers: auth,
+      headers: model,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
     });
     const initBody = (await init.json()) as {

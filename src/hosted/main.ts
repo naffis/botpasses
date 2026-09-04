@@ -15,7 +15,7 @@ import {
 import { selectKekProvider, usedRawKekFallback } from "./kms.ts";
 import { logVaultEvent, packageVersion } from "./observe.ts";
 import { PostgresStore } from "../store/postgres.ts";
-import { hostedAuthResolver, testAuthResolver } from "./auth.ts";
+import { hostedAuthResolver } from "./auth.ts";
 import { OperatorIdentity } from "./operator-identity.ts";
 import { identityAuthResolver } from "./identity.ts";
 import { createOauthProvider } from "./oauth-as.ts";
@@ -40,6 +40,10 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     logVaultEvent("kek_raw_fallback", { plane: env.VAULT_DEPLOY_PLANE ?? "" });
   }
   const deployPlane = hostedDeployPlane(env);
+  if (!env.SENTRY_DSN?.trim()) {
+    // Not fatal: the plane still serves. Loud, because a plane without error reporting is blind.
+    logVaultEvent("sentry_dsn_missing", { plane: deployPlane });
+  }
   let store: PostgresStore;
   try {
     store = await PostgresStore.open(env.DATABASE_URL ?? "", { plane: deployPlane });
@@ -63,7 +67,8 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     kek,
     sendEmail,
     publicUrl,
-    approvalHmac: env.VAULT_APPROVAL_HMAC ? Buffer.from(env.VAULT_APPROVAL_HMAC, "hex") : undefined,
+    // Shape checked by hostedBootError (64 hex chars); the kernel refuses anything under 32 bytes.
+    approvalHmac: env.VAULT_APPROVAL_HMAC?.trim() ? Buffer.from(env.VAULT_APPROVAL_HMAC.trim(), "hex") : undefined,
     deployPlane,
   });
   const host = env.VAULT_BIND_HOST ?? "0.0.0.0";
@@ -79,16 +84,15 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
         secureCookies: true,
       })
     : undefined;
-  const inner =
-    env.VAULT_AUTH_MODE === "test"
-      ? testAuthResolver
-      : identityAuthResolver({
-          identity,
-          kernel,
-          secureCookies: true,
-          oidcJwk: jwk,
-          issuer: publicUrl.replace(/\/$/, ""),
-        });
+  // Only real identity here: `VAULT_AUTH_MODE=test` is refused by hostedBootError, and the
+  // hosted process never installs header principals.
+  const inner = identityAuthResolver({
+    identity,
+    kernel,
+    secureCookies: true,
+    oidcJwk: jwk,
+    issuer: publicUrl.replace(/\/$/, ""),
+  });
   const authResolver = hostedAuthResolver(env, inner);
   const http = createHostedServer({
     kernel,
@@ -111,9 +115,9 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   });
   console.error(`${PRODUCT_NAME} hosted on ${addr.host}:${addr.port} plane=${deployPlane}`);
 
+  // Signal handlers go in before the first sweep: a SIGTERM during a slow boot-time sweep
+  // must drain and zero the KEK, not kill the process with the default handler.
   const sweeps = scheduleSweeps(store, { log: logVaultEvent });
-  await sweeps.runOnce();
-
   const shutdown = createShutdown({
     http,
     store,
@@ -125,6 +129,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   });
   process.on("SIGINT", () => shutdown.stop("SIGINT"));
   process.on("SIGTERM", () => shutdown.stop("SIGTERM"));
+  await sweeps.runOnce();
   await shutdown.done;
 }
 

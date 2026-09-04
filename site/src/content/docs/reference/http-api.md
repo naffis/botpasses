@@ -120,7 +120,7 @@ PKCE S256 is required. Access tokens are RS256 JWTs with audience `https://botpa
 
 ## Local vault serve (loopback)
 
-`npx vault serve` listens on `127.0.0.1:8788` and prints a loopback bearer. Send it as `Authorization` on `/api/*` and `POST /mcp`.
+`npx vault serve` listens on `127.0.0.1:8788` and prints two loopback bearers. Send the operator bearer as `Authorization` on `/api/*` (the console stores it) and the model bearer on `POST /mcp` (`vault mcp --remote` sends it). Each is refused on the other surface, so an MCP client cannot approve its own requests. The server answers only to a loopback `Host`.
 
 | Path | Role |
 | --- | --- |

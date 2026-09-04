@@ -188,7 +188,7 @@ export async function requestGrant(host: GrantHost, input: RequestGrantInput): P
     return { grant };
   }
   const code = await rotateCodeChallenge(host, grant.id, now);
-  const magic = await ensureMagicChallenge(host, grant.id, now);
+  const magic = await ensureMagicChallenge(host, grant.orgId, grant.id, now);
   let notifyFailed = false;
   if (!open || magic.fresh) {
     notifyFailed = !(await notify(host, input.orgId, recipients, client, item, magic.token));

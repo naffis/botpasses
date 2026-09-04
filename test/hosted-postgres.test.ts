@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { PostgresStore } from "../src/store/postgres.ts";
 import { CANARY } from "./helpers.ts";
@@ -174,7 +175,7 @@ test("AC-11 GET /ready is 200 against Postgres", async (t) => {
     store,
     kek: parseMasterKey(generateMasterKey()),
   });
-  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0 });
+  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0, authResolver: testAuthResolver });
   const addr = await http.listen();
   try {
     const res = await fetch(`http://${addr.host}:${addr.port}/ready`);

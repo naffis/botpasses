@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
@@ -129,6 +130,7 @@ test("AC-14 GET /sign-in is HTML with CSP self only", async () => {
   const kernel = new HostedKernel({ store, kek, publicUrl: "http://127.0.0.1:8788" });
   const identity = new OperatorIdentity({ store, sessionSecret: TEST_SESSION_SECRET, kek });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,

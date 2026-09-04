@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { logRequest, requestIdFrom } from "./observe.ts";
+import { logRequest, logVaultEvent, redactMessage, requestIdFrom } from "./observe.ts";
 import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT } from "../brand.ts";
 import {
@@ -31,6 +31,8 @@ import { handleMemberRoutes } from "./http-member-routes.ts";
 import { handleMcpPost, KEEPALIVE_MS, sseKeepalive } from "./http-mcp-routes.ts";
 import {
   asEnv,
+  bindRequestId,
+  decodePathSegment,
   isLoopbackHost,
   isPublicHtmlPath,
   json,
@@ -58,6 +60,22 @@ export function hostAllowed(hostHeader: string, allowed: string[], allowLoopback
   return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
 }
 
+/** Slow-loris and stuck-client bounds. Fly's proxy idles at 60 s, so keep-alive outlives it. */
+export const HEADERS_TIMEOUT_MS = 15_000;
+export const REQUEST_TIMEOUT_MS = 30_000;
+export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+/** Open `GET /mcp` SSE streams one principal may hold at once. */
+export const SSE_MAX_PER_PRINCIPAL = 4;
+/** `/ready` answers from the last database ping for this long; the probe cannot be used to hammer the pool. */
+export const READY_CACHE_MS = 5_000;
+
+/**
+ * The resolver a server gets when none is passed: nobody is authenticated. Production always
+ * passes the identity resolver; tests pass `testAuthResolver` explicitly. Header principals
+ * are never a default.
+ */
+export const anonymousAuthResolver: AuthResolver = async () => undefined;
+
 export type HostedHttpOpts = {
   kernel: HostedKernel;
   host?: string;
@@ -78,13 +96,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8788;
   const publicUrl = opts.publicUrl ?? opts.kernel.publicUrl;
-  const auth = opts.authResolver ?? testAuthResolver;
+  const auth = opts.authResolver ?? anonymousAuthResolver;
   const agentpass = agentPassEnabled() ? new AgentPassAuthority(opts.kernel, publicUrl) : undefined;
   const allowed = opts.allowedHosts ?? hostAllowlist(publicUrl);
   const siteRoot = opts.siteRoot;
   const deployPlane = opts.deployPlane ?? opts.kernel.deployPlane;
-  const testMode = opts.authResolver === testAuthResolver || process.env.VAULT_AUTH_MODE === "test";
-  const allowLoopback = auth === testAuthResolver || testMode || !publicUrl.startsWith("https://");
+  const testMode = opts.authResolver === testAuthResolver;
+  const allowLoopback = testMode || !publicUrl.startsWith("https://");
+  const sseOpen = new Map<string, number>();
+  let ready: { at: number; ok: boolean } | undefined;
+  let readyPending: Promise<boolean> | undefined;
   const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
   const identity = opts.identity;
   const oidcProvider = opts.oidcProvider;
@@ -101,20 +122,53 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const server = createServer((req, res) => {
     const startedAt = process.hrtime.bigint();
     const requestId = requestIdFrom(req.headers);
+    const path = (req.url ?? "/").split("?")[0] ?? "/";
+    bindRequestId(res, requestId);
     res.setHeader("x-request-id", requestId);
     res.on("finish", () => {
       logRequest({
         method: req.method ?? "GET",
-        path: (req.url ?? "/").split("?")[0] ?? "/",
+        path,
         status: res.statusCode,
         ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
         requestId,
       });
     });
     void route(req, res).catch((err: unknown) => {
-      if (!res.headersSent) sendError(res, err);
+      if (!res.headersSent) {
+        sendError(res, err, path);
+        return;
+      }
+      // Too late for a status line. Log under the request id and cut the stream so the
+      // client sees a broken response, not a clean end on a truncated body.
+      logVaultEvent("request_error_after_headers", {
+        request_id: requestId,
+        path,
+        message: redactMessage(err instanceof Error ? err.message : String(err)),
+      });
+      res.destroy();
     });
   });
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+
+  /** Cached readiness: one `kernel.ping()` per `READY_CACHE_MS`, shared by concurrent probes. */
+  async function isReady(): Promise<boolean> {
+    const now = Date.now();
+    if (ready && now - ready.at < READY_CACHE_MS) return ready.ok;
+    if (!readyPending) {
+      readyPending = opts.kernel
+        .ping()
+        .then(() => true, () => false)
+        .then((ok) => {
+          ready = { at: Date.now(), ok };
+          readyPending = undefined;
+          return ok;
+        });
+    }
+    return readyPending;
+  }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
@@ -143,12 +197,8 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
     if (method === "GET" && path === "/ready") {
-      try {
-        await opts.kernel.ping();
-        json(res, 200, { ok: true }, true);
-      } catch {
-        json(res, 503, { ok: false }, true);
-      }
+      const ok = await isReady();
+      json(res, ok ? 200 : 503, { ok }, true);
       return;
     }
     if ((method === "GET" || method === "HEAD") && isOauthDiscoveryPath(path)) {
@@ -269,12 +319,26 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && path === "/mcp") {
+      let key: string;
       try {
-        requireModelOrOperator(principal);
+        key = ssePrincipalKey(requireModelOrOperator(principal));
       } catch (err) {
         sendError(res, err, path);
         return;
       }
+      const open = sseOpen.get(key) ?? 0;
+      if (open >= SSE_MAX_PER_PRINCIPAL) {
+        sendError(res, new HttpError(429, "Too many open streams", { max_streams: SSE_MAX_PER_PRINCIPAL }), path);
+        return;
+      }
+      sseOpen.set(key, open + 1);
+      res.on("close", () => {
+        const left = (sseOpen.get(key) ?? 1) - 1;
+        if (left <= 0) sseOpen.delete(key);
+        else sseOpen.set(key, left);
+      });
+      // A stream is meant to stay open; the request itself was received in full.
+      req.socket.setTimeout(0);
       sseKeepalive(res);
       return;
     }
@@ -300,7 +364,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
     const collect = /^\/collect\/([^/]+)$/.exec(path);
     if (method === "GET" && collect) {
-      const needId = decodeURIComponent(collect[1] ?? "");
+      const needId = decodePathSegment(collect[1] ?? "");
       const found = await opts.kernel.getNeed(needId);
       if (!found) {
         const nonce = newCspNonce();
@@ -470,13 +534,13 @@ export function createHostedServer(opts: HostedHttpOpts) {
     const apGet = /^\/agentpass\/requests\/([^/]+)$/.exec(path);
     if (authority && method === "GET" && apGet) {
       const op = requireOperator(principal);
-      json(res, 200, await authority.getRequest(op.orgId, decodeURIComponent(apGet[1] ?? "")));
+      json(res, 200, await authority.getRequest(op.orgId, decodePathSegment(apGet[1] ?? "")));
       return;
     }
     const apApprove = /^\/agentpass\/requests\/([^/]+)\/approve$/.exec(path);
     if (authority && method === "POST" && apApprove) {
       const op = requireOperator(principal);
-      await authority.approve(op.orgId, decodeURIComponent(apApprove[1] ?? ""));
+      await authority.approve(op.orgId, decodePathSegment(apApprove[1] ?? ""));
       json(res, 200, { ok: true });
       return;
     }
@@ -539,6 +603,18 @@ export function createHostedServer(opts: HostedHttpOpts) {
  * link cannot set headers) are exempt. TOTP and logout are no longer exempt here; their handlers
  * run first in `handleAuthApi` and enforce CSRF themselves.
  */
+/** The bucket an open SSE stream counts against. */
+function ssePrincipalKey(principal: Principal): string {
+  switch (principal.channel) {
+    case "operator":
+      return `operator:${principal.orgId}:${principal.userId}`;
+    case "model":
+      return `model:${principal.orgId}:${principal.clientId}`;
+    case "trusted":
+      return `trusted:${principal.orgId}:${principal.clientId}`;
+  }
+}
+
 function cookieCsrfApplies(path: string, principal: Principal | undefined): boolean {
   if (principal?.channel !== "operator" || !principal.sessionHash) return false;
   if (path.startsWith("/api/auth/otp/")) return false;

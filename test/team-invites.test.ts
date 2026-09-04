@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { inviteEmail } from "../src/hosted/email.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { INVITE_TTL_MS } from "../src/hosted/kernel-members.ts";
@@ -54,7 +55,7 @@ async function setup(limits?: { credentials: number; agents: number; members: nu
       createdAt: "2026-01-01T00:00:00.000Z",
     });
   }
-  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0 });
+  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0, authResolver: testAuthResolver });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;
   const headers = (user: string, org = orgId) => ({

@@ -13,13 +13,16 @@ import { generateMasterKey, parseMasterKey } from "./crypto.ts";
 import { maskLast4 } from "./ids.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
-import { defaultHome, initVaultHome, loadMasterKey, Vault } from "./vault.ts";
+import { defaultHome, initVaultHome, loadMasterKey, loopbackBearer, Vault } from "./vault.ts";
 import type { GrantScope } from "./types.ts";
 
 // Hosted dependencies (pg, the AWS KMS SDK, oidc-provider) load only for the commands that
 // need them, so `vault set` and `vault list` stay a sqlite-only startup.
 function loadHostedMain(): Promise<typeof import("./hosted/main.ts")> {
   return import("./hosted/main.ts");
+}
+function loadHostedBoot(): Promise<typeof import("./hosted/boot.ts")> {
+  return import("./hosted/boot.ts");
 }
 function loadHostedKernel(): Promise<typeof import("./hosted/kernel.ts")> {
   return import("./hosted/kernel.ts");
@@ -38,19 +41,23 @@ export type Io = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   readStdin: () => Promise<string>;
+  /** Reads one line from an interactive terminal without echo. Absent when stdin is not a TTY. */
+  promptSecret?: (label: string) => Promise<string>;
 };
 
 const defaultIo: Io = {
   log: (...args) => console.log(...args),
   error: (...args) => console.error(...args),
   readStdin: readStdin,
+  promptSecret: input.isTTY ? promptSecret : undefined,
 };
 
 const USAGE = `${PRODUCT_NAME}: named credentials for agents and tools, never for the model.
 
 Usage:
   vault init
-  vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]
+  vault set NAME [--host api.example.com]... [--inject bearer|basic|header:Name]
+    reads the value from stdin (pipe it) or prompts without echo on a terminal; never from argv
     --host allowlists the API hosts http_request may send this credential to (repeatable)
   vault list
   vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]
@@ -61,10 +68,12 @@ Usage:
   vault audit
   vault run --with NAME [--with NAME] --agent AGENT --tool TOOL -- COMMAND
   vault serve [--host 127.0.0.1] [--port 8788]
-    prints a loopback bearer (HMAC of the master key); send it as Authorization on /api and POST /mcp
+    prints two loopback bearers (HMACs of the master key): the operator bearer is the
+    Authorization for /api and the console; the model bearer is the Authorization for POST /mcp
   vault login
-  vault mcp [--user-jwt JWT]
+  vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt JWT]
     stdio MCP with list_items, find_items, request_grant, list_grants, http_request (same as hosted)
+    --remote forwards stdio to a running vault serve with the model bearer
   vault kek-wrap
   vault kek-rotate
 
@@ -135,10 +144,10 @@ function cmdInit(io: Io): number {
 }
 
 async function cmdSet(argv: string[], io: Io): Promise<number> {
+  // No `--value`: argv is visible to every process on the machine (`ps`, shell history).
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
-      value: { type: "string" },
       host: { type: "string", multiple: true },
       inject: { type: "string" },
     },
@@ -146,17 +155,14 @@ async function cmdSet(argv: string[], io: Io): Promise<number> {
   });
   const name = positionals[0];
   if (!name) {
-    io.error("Usage: vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]");
-    io.error("Prefer piping the value on stdin so it is not visible in `ps`.");
+    io.error("Usage: vault set NAME [--host api.example.com]... [--inject bearer|basic|header:Name]");
+    io.error("Pipe the value on stdin, or run on a terminal to be prompted without echo.");
     return 1;
   }
-  let value = values.value;
-  if (value === undefined) {
-    const piped = await io.readStdin();
-    value = piped.replace(/\r?\n$/, "");
-  }
+  const raw = io.promptSecret ? await io.promptSecret(`Value for ${name} (not echoed): `) : await io.readStdin();
+  const value = raw.replace(/\r?\n$/, "");
   if (!value) {
-    io.error("No value. Pipe the secret on stdin or pass --value (argv is visible in process lists).");
+    io.error("No value. Pipe the secret on stdin (printf '%s' VALUE | vault set NAME) or type it at the prompt.");
     return 1;
   }
   const vault = open();
@@ -322,7 +328,10 @@ async function cmdRun(argv: string[], io: Io): Promise<number> {
 
 async function cmdServe(argv: string[], io: Io): Promise<number> {
   if (process.env.VAULT_MODE === "hosted") {
-    const { startHosted } = await loadHostedMain();
+    // Same last-resort guards as `npm run hosted`: an unknown broken invariant exits 1 so Fly
+    // restarts the Machine instead of a half-alive process serving requests.
+    const [{ startHosted }, { installProcessGuards }] = await Promise.all([loadHostedMain(), loadHostedBoot()]);
+    installProcessGuards();
     await startHosted();
     return 0;
   }
@@ -339,7 +348,8 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   const http = createVaultServer({ vault, host: values.host, port });
   const addr = await http.listen();
   io.error(`${PRODUCT_NAME} listening on http://${addr.host}:${addr.port}`);
-  io.error(`Loopback token: ${vault.loopbackToken()}`);
+  io.error(`Operator bearer (console and /api): ${vault.loopbackToken("operator")}`);
+  io.error(`Model bearer (POST /mcp, vault mcp --remote): ${vault.loopbackToken("model")}`);
   io.error("Operator console shows names + last-4 only. MCP is POST /mcp. Bind is loopback by default.");
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -373,6 +383,28 @@ function cmdLogin(io: Io): number {
 }
 
 async function cmdMcp(argv: string[], io: Io): Promise<number> {
+  const remoteIdx = argv.indexOf("--remote");
+  if (remoteIdx >= 0) {
+    // Forward stdio to a running `vault serve` on loopback with the model bearer. The bearer is
+    // derived from the master key here, so nothing is pasted into an MCP client's config.
+    const next = argv[remoteIdx + 1];
+    const rawUrl = next && !next.startsWith("-") ? next : "http://127.0.0.1:8788";
+    let target: URL;
+    try {
+      target = new URL(rawUrl);
+    } catch {
+      io.error("vault mcp --remote takes a loopback URL such as http://127.0.0.1:8788.");
+      return 1;
+    }
+    if (target.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(target.hostname)) {
+      io.error("vault mcp --remote only forwards to a loopback vault serve (http://127.0.0.1:PORT).");
+      return 1;
+    }
+    const { key } = loadMasterKey(defaultHome());
+    const { runRemoteMcpStdio } = await loadRemoteMcp();
+    await runRemoteMcpStdio({ publicUrl: target.origin, userJwt: loopbackBearer(key, "model") });
+    return 0;
+  }
   const jwtIdx = argv.indexOf("--user-jwt");
   const wantsJwt = jwtIdx >= 0 || Boolean(process.env.VAULT_USER_JWT);
   if (wantsJwt) {
@@ -491,6 +523,44 @@ function splitRun(argv: string[]): { vaultArgs: string[]; childArgs: string[] } 
   const idx = argv.indexOf("--");
   if (idx === -1) return { vaultArgs: argv, childArgs: [] };
   return { vaultArgs: argv.slice(0, idx), childArgs: argv.slice(idx + 1) };
+}
+
+/** One line from the terminal with echo off. Ctrl-C aborts with exit 130 like any prompt. */
+function promptSecret(label: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    process.stderr.write(label);
+    const wasRaw = input.isRaw;
+    input.setRawMode(true);
+    input.resume();
+    input.setEncoding("utf8");
+    let buf = "";
+    const finish = (err?: Error) => {
+      input.setRawMode(wasRaw);
+      input.pause();
+      input.off("data", onData);
+      process.stderr.write("\n");
+      if (err) reject(err);
+      else resolve(buf);
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === "\u0003") {
+          finish(new Error("Aborted"));
+          return;
+        }
+        if (ch === "\r" || ch === "\n") {
+          finish();
+          return;
+        }
+        if (ch === "\u007f" || ch === "\b") {
+          buf = buf.slice(0, -1);
+          continue;
+        }
+        buf += ch;
+      }
+    };
+    input.on("data", onData);
+  });
 }
 
 async function readStdin(): Promise<string> {

@@ -6,11 +6,39 @@ import type { GrantPolicy, ItemKind, VaultEnvName } from "../hosted-types.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import { corsHeaders, corsPath, corsPublicUrl } from "./http-cors.ts";
 import { mcpWwwAuthenticate } from "./oauth-metadata.ts";
-import { captureException, logVaultEvent } from "./observe.ts";
+import { captureException, logVaultEvent, redactMessage } from "./observe.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { isPublicSitePath } from "./static-site.ts";
 
 export const BODY_CAP = 128 * 1024;
+
+/**
+ * One request id per request. The router binds the inbound (or minted) id before routing so
+ * the access log line, the `x-request-id` header, the 500 body, and the Sentry event all carry
+ * the same value. A response nobody bound (a test calling `sendError` directly) mints one.
+ */
+const requestIds = new WeakMap<ServerResponse, string>();
+
+export function bindRequestId(res: ServerResponse, requestId: string): void {
+  requestIds.set(res, requestId);
+}
+
+export function requestIdOf(res: ServerResponse): string {
+  const bound = requestIds.get(res);
+  if (bound) return bound;
+  const minted = randomUUID();
+  requestIds.set(res, minted);
+  return minted;
+}
+
+/** `decodeURIComponent` for one path segment; a malformed escape is the caller's 400, not a 500. */
+export function decodePathSegment(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new HttpError(400, "Malformed path");
+  }
+}
 
 export function isLoopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
@@ -75,10 +103,10 @@ export function sendError(res: ServerResponse, err: unknown, path = ""): void {
     res.end(JSON.stringify({ error: err.message, ...err.extra }));
     return;
   }
-  const requestId = randomUUID();
-  const message = err instanceof Error ? err.message : String(err);
-  logVaultEvent("request_error", { requestId, path: routePath, message: message.slice(0, 500) });
-  void captureException(err);
+  const requestId = requestIdOf(res);
+  const message = redactMessage(err instanceof Error ? err.message : String(err));
+  logVaultEvent("request_error", { request_id: requestId, path: routePath, message });
+  void captureException(err, { requestId, path: routePath });
   res.writeHead(500, {
     "content-type": "application/json; charset=utf-8",
     "x-request-id": requestId,

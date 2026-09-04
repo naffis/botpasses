@@ -12,9 +12,11 @@ The hosted process writes one JSON object per line to stderr; Fly ships it to `f
 | `sweep_failed` | Hourly expiry sweep threw. Tables grow until it succeeds. | Ticket. |
 | `sentry_send_failed` | Sentry envelope POST failed or timed out. | Ticket if sustained. |
 | `auth_otp_locked`, `auth_totp_locked`, repeated `auth_otp_failed` / `auth_totp_failed` for one `email_hash` | Brute force against an operator account. | Review; rate limits already apply. |
+| `sentry_dsn_missing` | A plane booted without `SENTRY_DSN`; `captureException` only logs. | Set the secret. Ticket. |
+| `request_error_after_headers`, `static_stream_failed` | A handler or a site file stream failed after the status line went out; the response was cut. | Ticket if repeated; the `request_id` names the request. |
 | `schema_bootstrap` | `PostgresStore.migrate()` created the schema from `schema.ts` because `schema_migrations` did not exist. Expected only for dev and test databases. | On a plane this means the release_command did not run: check `fly releases` and `DATABASE_URL_DIRECT`. |
 
-Requests are logged as `event: "request"` with `method`, `path`, `status`, `ms`, `request_id`. A 5xx rate or p95 `ms` alert can be built from these.
+Requests are logged as `event: "request"` with `method`, `path`, `status`, `ms`, `request_id`. A 5xx rate or p95 `ms` alert can be built from these. The same `request_id` (the inbound `x-request-id` when Fly set one) is on the `request_error` line, the `x-request-id` response header, the 500 body, and the Sentry event's `request_id` tag, so one value finds everything about a failed request.
 
 ### Fly
 

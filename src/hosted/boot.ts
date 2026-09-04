@@ -2,7 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { hostedDeployPlane, originForPlane, publicOriginError } from "../brand.ts";
+import { DEPLOY_PLANE_REQUIRED, originForPlane, publicOriginError } from "../brand.ts";
 import type { SweepCounts } from "../store/types.ts";
 
 export const HOSTED_CONFIG_EXIT = 78;
@@ -222,16 +222,24 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (env.VAULT_HOME) {
     return "VAULT_MODE=hosted refuses VAULT_HOME; do not open sqlite on the Machine.";
   }
+  // Header principals exist for the test suite only; the hosted process never installs them,
+  // so the flag is refused whether or not a plane is named.
+  if (env.VAULT_AUTH_MODE === "test") {
+    return "VAULT_AUTH_MODE=test is refused in hosted mode; there are no test principals on a hosted process.";
+  }
+  const plane = deployPlaneRaw(env);
+  if (!plane) return DEPLOY_PLANE_REQUIRED;
   const kekErr = hostedKekBootError(env);
   if (kekErr) return kekErr;
   if (env.RESEND_API_KEY && !env.VAULT_EMAIL_FROM?.trim()) {
     return "VAULT_MODE=hosted with RESEND_API_KEY requires VAULT_EMAIL_FROM.";
   }
+  const approvalErr = approvalHmacError(env.VAULT_APPROVAL_HMAC);
+  if (approvalErr) return approvalErr;
   const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
   if (bootstrap.length > 0 && bootstrap.length < 32) {
     return "VAULT_BOOTSTRAP_TOKEN must be at least 32 characters when set.";
   }
-  const plane = hostedDeployPlane(env);
   const pub = env.VAULT_PUBLIC_URL?.trim() ?? "";
   if (!pub) {
     return `VAULT_MODE=hosted requires VAULT_PUBLIC_URL=${originForPlane(plane)}.`;
@@ -252,6 +260,21 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   return undefined;
 }
 
+export const APPROVAL_HMAC_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * `VAULT_APPROVAL_HMAC` signs approval magic links. `Buffer.from(x, "hex")` silently yields an
+ * empty or truncated key for anything that is not clean hex, so the shape is checked at boot.
+ */
+export function approvalHmacError(raw: string | undefined): string | undefined {
+  const value = raw?.trim() ?? "";
+  if (!value) return undefined;
+  if (!APPROVAL_HMAC_RE.test(value)) {
+    return "VAULT_APPROVAL_HMAC must be 64 lowercase hex characters (32 bytes) when set.";
+  }
+  return undefined;
+}
+
 export function deployPlaneRaw(env: NodeJS.ProcessEnv): "staging" | "production" | undefined {
   if (env.VAULT_DEPLOY_PLANE === "staging" || env.VAULT_DEPLOY_PLANE === "production") {
     return env.VAULT_DEPLOY_PLANE;
@@ -261,9 +284,6 @@ export function deployPlaneRaw(env: NodeJS.ProcessEnv): "staging" | "production"
 
 export function hostedKekBootError(env: NodeJS.ProcessEnv): string | undefined {
   const plane = deployPlaneRaw(env);
-  if (env.VAULT_AUTH_MODE === "test" && plane) {
-    return "VAULT_AUTH_MODE=test is refused when VAULT_DEPLOY_PLANE is staging or production.";
-  }
   const wrapped = Boolean(env.VAULT_KEK_WRAPPED?.trim() && env.VAULT_KMS_KEY_ID?.trim());
   const raw = Boolean(env.VAULT_KEK?.trim());
   const requireKms = env.VAULT_KEK_REQUIRE_KMS === "1";
