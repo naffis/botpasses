@@ -6,9 +6,11 @@ import { DEFAULT_HOME_DIRNAME } from "./brand.ts";
 import { decrypt, encrypt, generateMasterKey, keyFingerprint, parseMasterKey } from "./crypto.ts";
 import {
   findOpenGrant,
+  findSecretsByHost,
   getGrant,
   getMeta,
   getSecretEnvelope,
+  getSecretMeta,
   insertAudit,
   insertGrant,
   listAudit,
@@ -20,9 +22,19 @@ import {
   setMeta,
   updateGrant,
   upsertSecret,
+  type LocalItemMeta,
 } from "./db.ts";
 import { last4, normalizeActorId, normalizeSecretName, parseTtlSeconds } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
+import {
+  HTTP_REQUEST_TOOL,
+  localHttpRequest,
+  normalizeAllowedHosts,
+  normalizeInject,
+  publicLocalGrant,
+  type LocalHttpInput,
+  type LocalHttpResult,
+} from "./vault-http.ts";
 import type {
   AuditRecord,
   GrantRecord,
@@ -41,6 +53,16 @@ export type VaultOptions = {
   masterKey: Buffer;
   actor?: string;
 };
+
+export type SetSecretOptions = {
+  /** Exact hostnames `http_request` may send this value to. Empty means `vault run` only. */
+  allowedHosts?: string[];
+  /** `bearer` (default), `basic`, or `header:<Name>`; the same vocabulary as hosted items. */
+  inject?: string;
+};
+
+export { HTTP_REQUEST_TOOL, publicLocalGrant };
+export type { LocalHttpInput, LocalHttpResult };
 
 export class Vault {
   readonly home: string;
@@ -74,12 +96,14 @@ export class Vault {
     this.#db.close();
   }
 
-  setSecret(name: string, value: string): SecretMeta {
+  setSecret(name: string, value: string, opts: SetSecretOptions = {}): LocalItemMeta {
     const secretName = normalizeSecretName(name);
     if (value.length === 0) throw new Error("Secret value must not be empty");
     if (Buffer.byteLength(value, "utf8") > MAX_SECRET_BYTES) {
       throw new Error("Secret value exceeds 64KiB");
     }
+    const allowedHosts = opts.allowedHosts === undefined ? undefined : normalizeAllowedHosts(opts.allowedHosts);
+    const inject = opts.inject === undefined ? undefined : normalizeInject(opts.inject);
     const envelope = encrypt(value, this.#key, secretName);
     const meta = upsertSecret(this.#db, {
       name: secretName,
@@ -88,6 +112,8 @@ export class Vault {
       tag: envelope.tag,
       last4: last4(value),
       at: nowIso(),
+      allowedHosts,
+      inject,
     });
     this.#audit("store", { secretName });
     const publicMeta = { ...meta };
@@ -95,10 +121,40 @@ export class Vault {
     return publicMeta;
   }
 
+  /** Same rows as `listItems`; kept for one release under the old name. */
   listSecrets(): SecretMeta[] {
+    return this.listItems();
+  }
+
+  listItems(): LocalItemMeta[] {
     const rows = listSecretMeta(this.#db);
-    assertSafePublicObject("listSecrets", rows);
+    assertSafePublicObject("listItems", rows);
     return rows;
+  }
+
+  getItem(name: string): LocalItemMeta | undefined {
+    return getSecretMeta(this.#db, normalizeSecretName(name));
+  }
+
+  findItemsByHost(host: string): LocalItemMeta[] {
+    return findSecretsByHost(this.#db, host);
+  }
+
+  /** Local `http_request` over the shared connector. See vault-http.ts for the flow. */
+  async httpRequest(input: LocalHttpInput): Promise<LocalHttpResult> {
+    return localHttpRequest(
+      {
+        getItem: (name) => this.getItem(name),
+        findItemsByHost: (host) => this.findItemsByHost(host),
+        openGrant: (secretName, agentId, toolId) => this.#refresh(findOpenGrant(this.#db, secretName, agentId, toolId)),
+        requestGrant: (grant) => this.requestGrant(grant),
+        setGrantStatus: (id, status, revokedAt) => updateGrant(this.#db, id, { status, revokedAt }),
+        decrypt: (name) => this.#decryptSecret(name),
+        audit: (action, parts) => this.#audit(action, parts),
+        now: () => nowIso(),
+      },
+      input,
+    );
   }
 
   requestGrant(input: {

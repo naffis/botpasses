@@ -46,14 +46,16 @@ const defaultIo: Io = {
   readStdin: readStdin,
 };
 
-const USAGE = `${PRODUCT_NAME} — named secrets for agents and tools, never for the model.
+const USAGE = `${PRODUCT_NAME}: named credentials for agents and tools, never for the model.
 
 Usage:
   vault init
-  vault set NAME [--value VALUE]
+  vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]
+    --host allowlists the API hosts http_request may send this credential to (repeatable)
   vault list
   vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]
   vault grant --id GRANT_ID --agent AGENT --tool TOOL
+    MCP http_request grants use --tool http_request; the agent is the MCP client's name
   vault revoke --id GRANT_ID
   vault revoke --secret NAME --agent AGENT --tool TOOL
   vault audit
@@ -62,6 +64,7 @@ Usage:
     prints a loopback bearer (HMAC of the master key); send it as Authorization on /api and POST /mcp
   vault login
   vault mcp [--user-jwt JWT]
+    stdio MCP with list_items, find_items, request_grant, list_grants, http_request (same as hosted)
   vault kek-wrap
   vault kek-rotate
 
@@ -127,19 +130,23 @@ function cmdInit(io: Io): number {
     io.log("Using VAULT_MASTER_KEY from the environment.");
   }
   io.log("");
-  io.log("Next: vault set NAME   then  vault grant --secret NAME --agent AGENT --tool TOOL");
+  io.log("Next: vault set NAME --host api.example.com   then  vault grant --secret NAME --agent AGENT --tool http_request");
   return 0;
 }
 
 async function cmdSet(argv: string[], io: Io): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { value: { type: "string" } },
+    options: {
+      value: { type: "string" },
+      host: { type: "string", multiple: true },
+      inject: { type: "string" },
+    },
     allowPositionals: true,
   });
   const name = positionals[0];
   if (!name) {
-    io.error("Usage: vault set NAME [--value VALUE]");
+    io.error("Usage: vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]");
     io.error("Prefer piping the value on stdin so it is not visible in `ps`.");
     return 1;
   }
@@ -154,8 +161,9 @@ async function cmdSet(argv: string[], io: Io): Promise<number> {
   }
   const vault = open();
   try {
-    const meta = vault.setSecret(name, value);
-    io.log(`Stored ${meta.name} ${maskLast4(meta.last4)} (value not shown)`);
+    const meta = vault.setSecret(name, value, { allowedHosts: values.host, inject: values.inject });
+    const hosts = meta.allowedHosts.length ? ` hosts=${meta.allowedHosts.join(",")}` : "";
+    io.log(`Stored ${meta.name} ${maskLast4(meta.last4)}${hosts} inject=${meta.inject} (value not shown)`);
     return 0;
   } finally {
     vault.close();
@@ -165,13 +173,14 @@ async function cmdSet(argv: string[], io: Io): Promise<number> {
 function cmdList(io: Io): number {
   const vault = open();
   try {
-    const secrets = vault.listSecrets();
-    if (secrets.length === 0) {
-      io.log("No secrets.");
+    const items = vault.listItems();
+    if (items.length === 0) {
+      io.log("No credentials.");
       return 0;
     }
-    for (const s of secrets) {
-      io.log(`${s.name}\t${maskLast4(s.last4)}\tupdated ${s.updatedAt}`);
+    for (const s of items) {
+      const hosts = s.allowedHosts.length ? s.allowedHosts.join(",") : "-";
+      io.log(`${s.name}\t${maskLast4(s.last4)}\t${hosts}\t${s.inject}\tupdated ${s.updatedAt}`);
     }
     return 0;
   } finally {

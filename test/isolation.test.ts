@@ -23,10 +23,10 @@ test("mocked LLM/agent conversation never contains the stored secret after store
       `Stored named secret ${stored.name} last4=${stored.last4}. Value is not shown again.`,
     );
 
-    const listSecrets = callMcpTool(vault, "list_secrets", {});
+    const listSecrets = await callMcpTool(vault, "list_secrets", {});
     chat.add("agent", { tool: "list_secrets", result: listSecrets });
 
-    const requested = callMcpTool(vault, "request_grant", {
+    const requested = await callMcpTool(vault, "request_grant", {
       secret_name: "STRIPE_KEY",
       agent_id: "invoicer",
       tool_id: "stripe",
@@ -45,10 +45,10 @@ test("mocked LLM/agent conversation never contains the stored secret after store
       `Approved grant ${grant.id} secret=${grant.secretName} tool=${grant.toolId} agent=${grant.agentId} scope=${grant.scope}. Value not shown.`,
     );
 
-    const listedGrants = callMcpTool(vault, "list_grants", {});
+    const listedGrants = await callMcpTool(vault, "list_grants", { agent_id: "invoicer" });
     chat.add("agent", { tool: "list_grants", result: listedGrants });
 
-    const tools = handleMcpRpc(vault, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const tools = await handleMcpRpc(vault, { jsonrpc: "2.0", id: 2, method: "tools/list" });
     chat.add("agent", { tool: "tools/list", result: tools });
 
     const run = await vault.runWithSecrets({

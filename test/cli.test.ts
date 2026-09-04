@@ -183,12 +183,42 @@ test("vault mcp --user-jwt without VAULT_PUBLIC_URL exits 1", async () => {
   }
 });
 
-test("help mentions the loopback bearer for vault serve", async () => {
+test("help mentions the loopback bearer for vault serve and the five MCP tools", async () => {
   const io = captureIo();
   assert.equal(await main(["--help"], io), 0);
   const out = io.stdout.join("\n");
   assert.match(out, /loopback bearer/);
   assert.match(out, /Authorization/);
+  assert.match(out, /--host api\.example\.com/);
+  assert.match(out, /--inject bearer\|basic\|header:Name/);
+  assert.match(out, /list_items, find_items, request_grant, list_grants, http_request/);
+  assert.match(out, /--tool http_request/);
+  assert.doesNotMatch(out, /—/);
+});
+
+test("CLI set --host --inject stores connector metadata and list shows it, never the value", async () => {
+  const home = tempHome();
+  const keyHex = generateMasterKey();
+  const io = captureIo();
+  try {
+    await withEnv(home, keyHex, async () => {
+      assert.equal(await main(["init"], io), 0);
+      assert.equal(
+        await main(["set", "STRIPE_KEY", "--value", CANARY, "--host", "api.stripe.com", "--host", "files.stripe.com", "--inject", "basic"], io),
+        0,
+      );
+      assert.equal(await main(["set", "PLAIN_KEY", "--value", CANARY], io), 0);
+      assert.equal(await main(["list"], io), 0);
+      assert.equal(await main(["set", "BAD", "--value", CANARY, "--inject", "cookie"], io).catch(() => 1), 1);
+    });
+    const out = [...io.stdout, ...io.stderr].join("\n");
+    assert.ok(!out.includes(CANARY));
+    assert.match(out, /Stored STRIPE_KEY ••••c10b hosts=api.stripe.com,files.stripe.com inject=basic/);
+    assert.match(out, /STRIPE_KEY\t••••c10b\tapi.stripe.com,files.stripe.com\tbasic\tupdated/);
+    assert.match(out, /PLAIN_KEY\t••••c10b\t-\tbearer\tupdated/);
+  } finally {
+    cleanup(home);
+  }
 });
 
 function spawnCapture(
