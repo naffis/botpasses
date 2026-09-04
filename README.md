@@ -39,7 +39,7 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 | ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration on this origin |
 | Cursor | Remote MCP URL or local `npx vault mcp` stdio. Hosted stdio: `npx vault login`, then `npx vault mcp --user-jwt` |
 
-Until the package is published on npm, use `npx vault` from this repo or `npm run botpasses`.
+Until the package is published on npm, use `npx vault` from this repo or `npm run vault -- <command>`.
 
 ### Hosted MCP stdio
 

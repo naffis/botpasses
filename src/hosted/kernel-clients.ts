@@ -4,8 +4,8 @@
  * sessions, and the Access snapshot. Functions take a `ClientHost` with the kernel's store,
  * clock, and helpers, like `kernel-grants.ts`. `HostedKernel` delegates here.
  */
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { last4 } from "../ids.ts";
+import { randomBytes, randomUUID } from "node:crypto";
+import { last4, nowIso, sha256Hex } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   emptyClientFields,
@@ -66,14 +66,6 @@ export type EnsureModelClientInput = {
 
 export type SessionActor = { userId: string; role: MemberRole; sessionHash: string };
 
-function nowIso(d: Date): string {
-  return d.toISOString();
-}
-
-export function hashSecret(raw: string): string {
-  return createHash("sha256").update(raw).digest("hex");
-}
-
 export async function recordAccessEvent(host: ClientHost, input: Omit<AccessEventRecord, "id" | "revokedAt">): Promise<void> {
   await host.store.insertAccessEvent({
     id: `aev_${randomUUID()}`,
@@ -90,7 +82,7 @@ async function recordMachineIssue(host: ClientHost, row: ClientRecord, plaintext
     clientId: row.id,
     actorUserId: null,
     kind: "machine",
-    jtiHash: hashSecret(plaintext),
+    jtiHash: sha256Hex(plaintext),
     issuedAt: at,
     expiresAt: null,
   });
@@ -107,7 +99,7 @@ export async function rotateClient(
   if (client.revokedAt) throw new HttpError(409, "Client is revoked");
   const prefix = client.kind === "trusted" ? "avt_" : "avm_";
   const plaintext = `${prefix}${randomBytes(24).toString("hex")}`;
-  await host.store.updateClientHashedSecret(client.id, hashSecret(plaintext), last4(plaintext));
+  await host.store.updateClientHashedSecret(client.id, sha256Hex(plaintext), last4(plaintext));
   await host.audit(orgId, "client_rotate", actor, null, client.id);
   return { token: plaintext, client_id: client.id };
 }
@@ -124,7 +116,7 @@ export async function createTrustedClient(
     orgId: input.orgId,
     kind: "trusted",
     name: input.name,
-    hashedSecret: hashSecret(plaintext),
+    hashedSecret: sha256Hex(plaintext),
     clerkOauthUserId: null,
     environment: input.environment,
     ...emptyClientFields(),
@@ -147,7 +139,7 @@ export async function createModelClient(
     orgId: input.orgId,
     kind: "model",
     name: input.name,
-    hashedSecret: plaintext ? hashSecret(plaintext) : null,
+    hashedSecret: plaintext ? sha256Hex(plaintext) : null,
     clerkOauthUserId: input.clerkOauthUserId ?? null,
     environment: input.environment,
     ...emptyClientFields(),
@@ -206,7 +198,7 @@ export async function setClientEnvironment(
 }
 
 export async function lookupTrustedToken(host: ClientHost, token: string): Promise<ClientRecord | undefined> {
-  return host.store.findClientByHashedSecret(hashSecret(token));
+  return host.store.findClientByHashedSecret(sha256Hex(token));
 }
 
 export async function revokeClient(host: ClientHost, orgId: string, actor: string, clientId: string): Promise<void> {

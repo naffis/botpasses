@@ -2,7 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { DEPLOY_PLANE_REQUIRED, originForPlane, publicOriginError } from "../brand.ts";
+import { DEPLOY_PLANE_REQUIRED, deployPlaneRaw, originForPlane, publicOriginError } from "../brand.ts";
 import type { SweepCounts } from "../store/types.ts";
 
 export const HOSTED_CONFIG_EXIT = 78;
@@ -263,7 +263,7 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   return undefined;
 }
 
-export const APPROVAL_HMAC_RE = /^[0-9a-f]{64}$/;
+const APPROVAL_HMAC_RE = /^[0-9a-f]{64}$/;
 
 /**
  * `VAULT_APPROVAL_HMAC` signs approval magic links. `Buffer.from(x, "hex")` silently yields an
@@ -274,13 +274,6 @@ export function approvalHmacError(raw: string | undefined): string | undefined {
   if (!value) return undefined;
   if (!APPROVAL_HMAC_RE.test(value)) {
     return "VAULT_APPROVAL_HMAC must be 64 lowercase hex characters (32 bytes) when set.";
-  }
-  return undefined;
-}
-
-export function deployPlaneRaw(env: NodeJS.ProcessEnv): "staging" | "production" | undefined {
-  if (env.VAULT_DEPLOY_PLANE === "staging" || env.VAULT_DEPLOY_PLANE === "production") {
-    return env.VAULT_DEPLOY_PLANE;
   }
   return undefined;
 }

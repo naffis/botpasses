@@ -1,6 +1,7 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { tokensEqual } from "../crypto.ts";
 import type { ClientKind, MemberRole, VaultEnvName } from "../hosted-types.ts";
+import { sha256Hex } from "../ids.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { HttpError } from "./errors.ts";
 import { requestClientIp } from "./identity-limiter.ts";
@@ -8,7 +9,7 @@ import { logAuthEvent, logVaultEvent } from "./observe.ts";
 
 /** Short, stable fingerprint of the bootstrap token for log correlation; never the token. */
 function hashBootstrap(token: string): string {
-  return createHash("sha256").update(token).digest("hex").slice(0, 12);
+  return sha256Hex(token).slice(0, 12);
 }
 
 export type OperatorPrincipal = {
@@ -53,13 +54,6 @@ export function readBearer(req: IncomingMessage): string | undefined {
   const auth = header(req, "authorization");
   if (!auth?.startsWith("Bearer ")) return undefined;
   return auth.slice("Bearer ".length).trim();
-}
-
-/** Constant-time compare of token strings (hashes first so lengths may differ). */
-export function tokensEqual(a: string, b: string): boolean {
-  const left = createHash("sha256").update(a).digest();
-  const right = createHash("sha256").update(b).digest();
-  return timingSafeEqual(left, right);
 }
 
 export async function resolveMachineToken(

@@ -8,10 +8,8 @@ site/dist
 !CHANGELOG.md
 docs
 !docs/security/threat-model.md
-processes
 test
 coverage
-.loadout
 .cursor
 .claude
 .mcp.json

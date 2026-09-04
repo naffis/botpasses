@@ -5,8 +5,8 @@ import type { VaultEnvName } from "../hosted-types.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
 import { createStoreAdapter } from "./oidc-adapter.ts";
-import { hashToken, IpWindowLimiter } from "./operator-identity.ts";
-import { requestClientIp } from "./identity-limiter.ts";
+import { hashToken } from "./operator-identity.ts";
+import { IpWindowLimiter, requestClientIp } from "./identity-limiter.ts";
 import { HttpError } from "./errors.ts";
 import { sendError } from "./http-util.ts";
 import { createPinnedFetch, type PinnedFetch } from "./cimd-fetch.ts";
@@ -82,9 +82,9 @@ const OP_SESSION_TTL_S = 3600;
 
 /* ---- outbound metadata fetch gate (CIMD, jwks_uri, sector_identifier_uri) ---- */
 
-export const CIMD_FETCHES_PER_HOST_PER_HOUR = 30;
-export const CIMD_FETCHES_PER_IP_PER_HOUR = 10;
-export const CIMD_MAX_IN_FLIGHT = 4;
+const CIMD_FETCHES_PER_HOST_PER_HOUR = 30;
+const CIMD_FETCHES_PER_IP_PER_HOUR = 10;
+const CIMD_MAX_IN_FLIGHT = 4;
 
 export type CimdGateOpts = { perHostPerHour?: number; perIpPerHour?: number; maxInFlight?: number };
 
@@ -537,7 +537,7 @@ export function assertDcrIp(req: IncomingMessage): void {
 }
 
 export const DEVICE_ATTEMPTS_PER_WINDOW = 10;
-export const DEVICE_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const DEVICE_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 
 function cookieValue(req: IncomingMessage, name: string): string | undefined {
   const header = req.headers.cookie;

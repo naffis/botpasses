@@ -5,8 +5,6 @@
  * cookie MCP path needs a ready operator.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -32,22 +30,10 @@ import { suggestedNameFromHost } from "../src/ids.ts";
 import { secretEncodings } from "../src/redact.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
-
-const HOST = "api.pinned.test";
+import { PINNED_HOST as HOST, selfSigned } from "./helpers/self-signed.ts";
 
 function item(secret: string, inject = "bearer", username: string | null = null): ConnectorItem {
   return { secret, username, last4: secret.slice(-4), inject, allowedHosts: [HOST, "api.echo.example"], name: "ECHO", kind: "secret" };
-}
-
-function selfSigned(dir: string): { key: Buffer; cert: Buffer } {
-  const key = join(dir, "key.pem");
-  const cert = join(dir, "cert.pem");
-  execFileSync(
-    "openssl",
-    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", key, "-out", cert, "-subj", `/CN=${HOST}`, "-addext", `subjectAltName=DNS:${HOST}`],
-    { stdio: "ignore" },
-  );
-  return { key: readFileSync(key), cert: readFileSync(cert) };
 }
 
 type Behaviour = "partial_then_destroy" | "huge_chunked" | "huge_declared" | "echo";

@@ -98,7 +98,7 @@ export async function resolvePublicAddresses(hostname: string): Promise<string[]
 
 export const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
-export const PATH_MAX_CHARS = 2048;
+const PATH_MAX_CHARS = 2048;
 
 /** Percent-encoded separators and dots a segment may not carry: an origin may decode them again. */
 const ENCODED_SEPARATOR_RE = /%(?:2f|5c|2e)/i;

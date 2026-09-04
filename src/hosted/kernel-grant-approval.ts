@@ -3,7 +3,8 @@
  * HMAC magic link, and the approval email. `kernel-grants.ts` calls these from `requestGrant`,
  * `approveByCode`, and `approveMagic`; the `GrantHost` it passes is the same object.
  */
-import { createHmac, createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { sha256Hex } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { ClientRecord, HostedGrantRecord, RequestedScope } from "../hosted-types.ts";
 import { escapeHtml } from "./auth-shell.ts";
@@ -28,7 +29,7 @@ export function isPast(iso: string | null, now: Date): boolean {
 }
 
 export function hashCode(code: string, salt: string): string {
-  return createHash("sha256").update(`${salt}:${code}`).digest("hex");
+  return sha256Hex(`${salt}:${code}`);
 }
 
 /**

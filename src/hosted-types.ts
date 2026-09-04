@@ -323,8 +323,6 @@ export type NeedPublic = {
   status: NeedItemStatus;
 };
 
-export type FindItemsStatus = "found" | "ambiguous" | "need_item" | "host_mismatch";
-
 export type FindItemSummary = {
   name: string;
   kind: ItemKind;

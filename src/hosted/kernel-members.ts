@@ -3,8 +3,9 @@
  * Pure functions over a `MemberHost` so `HostedKernel` stays thin; the kernel supplies the
  * store, clock, plan limits, mailer, and audit writer.
  */
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { MemberRole } from "../hosted-types.ts";
+import { nowIso, sha256Hex } from "../ids.ts";
 import type { InviteRecord, VaultStore } from "../store/types.ts";
 import { inviteEmail } from "./email.ts";
 import { HttpError } from "./errors.ts";
@@ -14,10 +15,10 @@ import { assertWithinLimit, type PlanLimits } from "./plan-limits.ts";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Invite spam bounds: per inviting account and per client address, sliding hour. */
-export const INVITE_WINDOW_MS = 60 * 60 * 1000;
+const INVITE_WINDOW_MS = 60 * 60 * 1000;
 export const INVITE_ACTOR_MAX = 10;
 export const INVITE_IP_MAX = 30;
-export const ORG_NAME_MAX = 80;
+const ORG_NAME_MAX = 80;
 
 export type MemberHost = {
   store: VaultStore;
@@ -65,10 +66,6 @@ export function asMemberRole(value: unknown): MemberRole {
   throw new HttpError(400, "role must be owner or operator");
 }
 
-export function hashInviteToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
 export function acceptInviteUrl(publicUrl: string, token: string): string {
   return `${publicUrl.replace(/\/$/, "")}/accept-invite?token=${encodeURIComponent(token)}`;
 }
@@ -79,10 +76,6 @@ function requireOwner(role: MemberRole): void {
 
 function isExpired(invite: InviteRecord, now: Date): boolean {
   return Date.parse(invite.expiresAt) <= now.getTime();
-}
-
-function nowIso(host: MemberHost): string {
-  return host.now().toISOString();
 }
 
 async function emailOf(store: VaultStore, userId: string): Promise<string | null> {
@@ -149,7 +142,7 @@ export async function inviteMember(
     orgId: input.orgId,
     email,
     role: input.role,
-    tokenHash: hashInviteToken(token),
+    tokenHash: sha256Hex(token),
     invitedBy: input.actorUserId,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + INVITE_TTL_MS).toISOString(),
@@ -239,7 +232,7 @@ export async function removeMember(
 
 async function inviteForToken(host: MemberHost, token: string): Promise<InviteRecord> {
   if (!token || token.length > 512) throw new HttpError(404, "Invalid invite");
-  const invite = await host.store.getInviteByTokenHash(hashInviteToken(token));
+  const invite = await host.store.getInviteByTokenHash(sha256Hex(token));
   if (!invite) throw new HttpError(404, "Invalid invite");
   return invite;
 }
@@ -275,7 +268,7 @@ export async function acceptInvite(
   if (invite.email !== input.email.trim().toLowerCase()) {
     throw new HttpError(403, "invite_email_mismatch");
   }
-  const at = nowIso(host);
+  const at = nowIso(host.now());
   const existing = await host.store.getMember(invite.orgId, input.userId);
   if (existing) {
     await host.store.acceptInvite(invite.id, at);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SignJWT, importJWK } from "jose";
@@ -18,6 +18,7 @@ import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
 import { hostedAuthResolver, testAuthResolver, type AuthResolver } from "../src/hosted/auth.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
+import { pkce } from "./oauth-helpers.ts";
 
 async function ledgerCtx() {
   const home = tempHome();
@@ -200,8 +201,7 @@ test("AC-31 JWT issuance via /oauth/token writes access_events (extraTokenClaims
     const client = (await registered.json()) as { client_id: string };
     assert.ok(client.client_id);
 
-    const verifier = randomBytes(32).toString("base64url");
-    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const { verifier, challenge } = pkce();
     const audience = "http://127.0.0.1:8788/mcp";
     const found = await ctx.oidcProvider.Client.find(client.client_id);
     assert.ok(found);

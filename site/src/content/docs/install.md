@@ -27,7 +27,7 @@ export VAULT_HOME="$PWD/.botpasses"
 npx vault init
 ```
 
-`vault init` creates the SQLite vault at `$VAULT_HOME` and a master key. The default home when `VAULT_HOME` is unset is `$HOME/.botpasses`. You can also run `npm run botpasses -- <command>`.
+`vault init` creates the SQLite vault at `$VAULT_HOME` and a master key. The default home when `VAULT_HOME` is unset is `$HOME/.botpasses`. You can also run `npm run vault -- <command>`.
 
 Store and use a credential locally:
 

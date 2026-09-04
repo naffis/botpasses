@@ -5,8 +5,9 @@
  * `value`, `password`, `code`, `token`, `secret`, `authorization`, and `cookie` are dropped
  * before anything is written, so a careless caller cannot log a credential.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { sha256Hex } from "../ids.ts";
 
 const DROPPED_FIELDS = new Set(["value", "password", "code", "token", "secret", "authorization", "cookie"]);
 
@@ -99,7 +100,7 @@ export function logAuthEvent(kind: AuthEventKind, fields: Record<string, unknown
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(fields)) {
     if (key === "email" && typeof val === "string") {
-      out.email_hash = createHash("sha256").update(val.trim().toLowerCase()).digest("hex").slice(0, 12);
+      out.email_hash = sha256Hex(val.trim().toLowerCase()).slice(0, 12);
       continue;
     }
     out[key] = val;

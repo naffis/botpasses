@@ -47,7 +47,3 @@ npm run lint
 ```
 
 `npm test` reads the built site under `site/dist`, so build the site first on a fresh clone. Postgres-only tests run when `DATABASE_URL` points at a Postgres 16 database; CI provides one.
-
-## Agent tooling
-
-This repository was previously equipped with vendored agent-harness assets (Cursor rules, skills, commands) from https://github.com/naffis/loadout. They were removed from the product repository to keep it readable. `loadout.lock.json` records what was installed; re-vendor with `npx github:naffis/loadout update` if you want them back in a working copy.

@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sha256Hex } from "../ids.ts";
 import { AUTH_JS } from "./auth-js.ts";
 import { COLLECT_BUNDLE_JS, CONSOLE_BUNDLE_JS } from "./client-bundle.ts";
 import { CONSOLE_CSS } from "./console-css.ts";
@@ -76,7 +76,7 @@ const SOURCES: Record<AssetName, { type: string; body: string }> = {
 
 /** Eight hex characters of the body's SHA-256: enough to change on every edit, short in the URL. */
 export function assetContentHash(body: string): string {
-  return createHash("sha256").update(body).digest("hex").slice(0, 8);
+  return sha256Hex(body).slice(0, 8);
 }
 
 /** `/assets/console.<sha8>.js`: the versioned path the page renderers reference. */

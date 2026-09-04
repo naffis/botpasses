@@ -23,7 +23,7 @@ export function bindRequestId(res: ServerResponse, requestId: string): void {
   requestIds.set(res, requestId);
 }
 
-export function requestIdOf(res: ServerResponse): string {
+function requestIdOf(res: ServerResponse): string {
   const bound = requestIds.get(res);
   if (bound) return bound;
   const minted = randomUUID();

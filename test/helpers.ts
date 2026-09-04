@@ -2,12 +2,26 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { Vault } from "../src/vault.ts";
 import type { Io } from "../src/cli.ts";
 
 export const CANARY = "sk_live_CANARY_do_not_leak_f47ac10b";
 export const TEST_SESSION_SECRET = "session-secret-for-tests-32b!!!!";
+
+/** A staging hosted env that passes `hostedBootError` once a KEK is added; tests override per case. */
+export function hostedBootEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    VAULT_MODE: "hosted",
+    DATABASE_URL: "postgres://x",
+    VAULT_PUBLIC_URL: STAGING_ORIGIN,
+    VAULT_DEPLOY_PLANE: "staging",
+    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
+    ...extra,
+  };
+}
 
 let cachedOidcJwk: string | undefined;
 export function testOidcPrivateJwk(): string {

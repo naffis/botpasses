@@ -11,7 +11,6 @@
     "vault": "./bin/vault.js"
   },
   "scripts": {
-    "botpasses": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
     "vault": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
     "hosted": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/hosted/main.ts",
     "dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning --watch src/cli.ts serve",

@@ -37,22 +37,13 @@ import { createVaultServer, LOCAL_BODY_CAP, localHostAllowed, loopbackRoleFor } 
 import { openHostedSqlite, type SqliteHostedStore } from "../src/store/sqlite-hosted.ts";
 import type { VaultStore } from "../src/store/types.ts";
 import { loadMasterKey, masterKeyModeError } from "../src/vault.ts";
-import { CANARY, captureIo, cleanup, makeVault, TEST_SESSION_SECRET, tempHome, testOidcPrivateJwk } from "./helpers.ts";
+import { CANARY, captureIo, cleanup, hostedBootEnv, makeVault, tempHome } from "./helpers.ts";
 
-const STAGING = "https://staging.botpasses.com";
 const SITE = join(process.cwd(), "site/dist");
 
+/** The shared env plus a raw KEK, so the control case boots. */
 function bootEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    VAULT_MODE: "hosted",
-    DATABASE_URL: "postgres://x",
-    VAULT_KEK: "aa".repeat(32),
-    VAULT_PUBLIC_URL: STAGING,
-    VAULT_DEPLOY_PLANE: "staging",
-    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
-    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
-    ...extra,
-  };
+  return hostedBootEnv({ VAULT_KEK: "aa".repeat(32), ...extra });
 }
 
 /* ---- N1, N3: boot invariants ---- */

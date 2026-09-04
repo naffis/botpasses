@@ -7,7 +7,7 @@ import { HttpError } from "./errors.ts";
 import { kernelForProvider, redirectHosts } from "./oauth-as.ts";
 import { orgScope } from "./oauth-clients.ts";
 import { consentExpiredHtml, consentHtml, type ConsentView } from "./oauth-pages.ts";
-import { sendHtml } from "./http-auth-routes.ts";
+import { sendHtml } from "./http-util.ts";
 import { needsTotpVerify } from "./identity.ts";
 import { bindSecurityHeaders } from "./security-headers.ts";
 
@@ -59,12 +59,11 @@ export async function handleConsentGet(
   try {
     details = await provider.interactionDetails(req, res);
   } catch {
-    res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...htmlHeaders });
-    res.end(consentExpiredHtml());
+    sendHtml(res, 400, consentExpiredHtml(), htmlHeaders);
     return true;
   }
   const { name, view } = await consentView(provider, principal, clientIdOf(details));
-  sendHtml(res, consentHtml(name, details.uid, view), htmlHeaders);
+  sendHtml(res, 200, consentHtml(name, details.uid, view), htmlHeaders);
   return true;
 }
 

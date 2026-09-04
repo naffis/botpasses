@@ -4,33 +4,13 @@
  * without following it. Uses a self-signed certificate generated per run with openssl.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
 import { test } from "node:test";
 import { describeOriginFailure, fetchPinned } from "../src/hosted/connector.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
 import { cleanup, tempHome } from "./helpers.ts";
-
-const HOST = "api.pinned.test";
-
-function selfSigned(dir: string): { key: Buffer; cert: Buffer } {
-  const key = join(dir, "key.pem");
-  const cert = join(dir, "cert.pem");
-  execFileSync(
-    "openssl",
-    [
-      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-      "-keyout", key, "-out", cert,
-      "-subj", `/CN=${HOST}`,
-      "-addext", `subjectAltName=DNS:${HOST}`,
-    ],
-    { stdio: "ignore" },
-  );
-  return { key: readFileSync(key), cert: readFileSync(cert) };
-}
+import { PINNED_HOST as HOST, selfSigned } from "./helpers/self-signed.ts";
 
 type Seen = { host?: string; servername?: string; path?: string; method?: string; body: string };
 
