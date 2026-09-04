@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import Base from "../layouts/Base.astro";
 
 // The surfaces table is imported from the repository threat model so the public page
-// cannot drift from the document engineers maintain.
-const threatModel = readFileSync(new URL("../../../docs/security/threat-model.md", import.meta.url), "utf8");
+// cannot drift from the document engineers maintain. The path is anchored to the site
+// root (`astro build` runs from `site/`), not to this file, which is bundled elsewhere.
+const threatModel = readFileSync(new URL("../docs/security/threat-model.md", `file://${process.cwd()}/`), "utf8");
 const surfaces = threatModel.split(/^## Surfaces\s*$/m)[1]?.split(/^## /m)[0] ?? "";
 const rows = surfaces
   .split("\n")
