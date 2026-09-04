@@ -1,22 +1,15 @@
-import {
-  createHmac,
-  createHash,
-  randomBytes,
-  randomInt,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { decrypt, encrypt } from "../crypto.ts";
 import { resolvePublicOrigin } from "../brand.ts";
 import { last4, normalizeSecretName } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   emptyClientFields,
+  publicGrantScope,
+  unscopedFields,
   type AccessEventRecord,
-  type ApprovalChallengeRecord,
   type ClientRecord,
   type FindItemsResult,
-  type GrantPolicy,
   type HostedGrantRecord,
   type ItemKind,
   type ItemPublic,
@@ -26,11 +19,34 @@ import {
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "../store/conflict.ts";
 import type { VaultStore } from "../store/types.ts";
-import { escapeHtml } from "./auth-shell.ts";
 import { deployPlaneAllowsEnvironment, environmentsForDeployPlane } from "./deploy-plane.ts";
 import { HttpError } from "./errors.ts";
 import { itemAad, legacyItemAad } from "./item-aad.ts";
 import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
+import {
+  approveByCode,
+  approveGrant,
+  approveMagic,
+  assertMemberEmail,
+  consumeActiveGrant,
+  inboxGrantCards,
+  listClientGrants,
+  MAGIC_TTL_MS,
+  mintApprovalToken,
+  previewMagic,
+  requestGrant,
+  revokeGrant,
+  settleExpired,
+  standingFor,
+  verifyApprovalToken,
+  type ApproveGrantInput,
+  type ConnectorCall,
+  type GrantHost,
+  type InboxGrantCard,
+  type MagicPreview,
+  type RequestGrantInput,
+  type RequestGrantResult,
+} from "./kernel-grants.ts";
 import {
   ensureNeedItem,
   findItems,
@@ -59,9 +75,6 @@ import {
   SPOTIFY_API_HOST,
 } from "./spotify.ts";
 
-const SESSION_TTL_MS = 8 * 3600 * 1000;
-const CODE_TTL_MS = 10 * 60 * 1000;
-const MAGIC_TTL_MS = 15 * 60 * 1000;
 const MAX_ITEM_BYTES = 64 * 1024;
 /** Access shows `idHash.slice(0, 12)`; anything shorter is not a session id. */
 const SESSION_ID_MIN_CHARS = 12;
@@ -89,10 +102,6 @@ function hashSecret(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
-function hashCode(code: string, salt: string): string {
-  return createHash("sha256").update(`${salt}:${code}`).digest("hex");
-}
-
 function parseHosts(json: string): string[] {
   const v: unknown = JSON.parse(json);
   if (!Array.isArray(v) || v.some((h) => typeof h !== "string")) {
@@ -108,10 +117,6 @@ function normalizeItemName(raw: string): string {
   } catch (err) {
     throw new HttpError(400, err instanceof Error ? err.message : "Invalid name");
   }
-}
-
-function isPast(iso: string | null, now: Date): boolean {
-  return iso !== null && new Date(iso).getTime() < now.getTime();
 }
 
 export type InjectOutcome = "inject" | "inject_denied" | "inject_failed";
@@ -446,7 +451,7 @@ export class HostedKernel {
       clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
       assertHosts: (hosts) => this.#assertHosts(hosts),
       assertPlane: (name) => this.#assertPlane(name),
-      standingFor: (orgId, clientId, item) => this.#standingFor(orgId, clientId, item),
+      standingFor: (orgId, clientId, item) => standingFor(this.#grantHost(), orgId, clientId, item),
       publicItem: (environment, item) => this.#publicItem(environment, item),
       audit: (orgId, action, actor, itemName, clientId) =>
         this.#audit(orgId, action, actor, itemName, clientId),
@@ -613,313 +618,26 @@ export class HostedKernel {
     return this.store.findClientByHashedSecret(hashSecret(token));
   }
 
-  /**
-   * One open grant per (client, item). A standing policy activates immediately; otherwise the
-   * existing pending grant is reused with a fresh approval code. The org limiter is counted here
-   * exactly once per call, whichever surface (REST, request_grant, http_request) asked.
-   * Notification goes to `operatorEmail` (must be a member) or to every member; it is sent for a
-   * new grant or when the previous magic link expired, never on every retry.
-   */
-  async requestGrant(input: {
-    orgId: string;
-    clientId: string;
-    itemName: string;
-    environment: VaultEnvName;
-    taskId?: string;
-    taskDescription?: string;
-    operatorEmail?: string;
-  }): Promise<{ grant: HostedGrantRecord; code?: string; notifyFailed?: boolean }> {
-    if (!(await this.limiter.allow(input.orgId, this.now().getTime(), "grant"))) {
-      throw new HttpError(429, "request_grant rate limit");
-    }
-    const client = await this.#clientInOrg(input.orgId, input.clientId);
-    if (client.environment !== input.environment) {
-      throw new HttpError(403, "Client cannot access this environment");
-    }
-    const env = await this.envFor(input.orgId, input.environment);
-    const item = await this.store.getItemByName(env.id, normalizeItemName(input.itemName));
-    if (!item) {
-      throw await this.needItemError({
-        orgId: input.orgId,
-        clientId: input.clientId,
-        environment: input.environment,
-        itemName: input.itemName,
-        host: "",
-        taskDescription: input.taskDescription,
-        alreadyLimited: true,
-      });
-    }
-    const recipients = await this.#notifyRecipients(input.orgId, input.operatorEmail);
-    const standing = await this.#standingFor(input.orgId, client.id, item);
-    const now = this.now();
-    const at = nowIso(now);
-    const open = await this.#openGrantFor(input.orgId, client.id, item.id);
-    let grant: HostedGrantRecord;
-    if (open && open.status === "active") {
-      grant = open;
-    } else if (standing) {
-      grant = open
-        ? { ...open, policy: standing.kind, status: "active", approvedAt: at, expiresAt: null }
-        : this.#newGrant(input, client.id, item, env.id, at, standing.kind, "active");
-      if (open) await this.store.updateGrant(grant);
-      else await this.store.insertGrant(grant);
-    } else if (open) {
-      grant = open;
-    } else {
-      grant = this.#newGrant(input, client.id, item, env.id, at, "prompt", "pending");
-      await this.store.insertGrant(grant);
-    }
-    await this.#audit(input.orgId, "request_grant", client.id, item.name, client.id);
-    if (grant.status === "active") {
-      assertSafePublicObject("requestGrant", grant);
-      return { grant };
-    }
-    const code = await this.#rotateCodeChallenge(grant.id, now);
-    const magic = await this.#ensureMagicChallenge(grant.id, now);
-    let notifyFailed = false;
-    if (!open || magic.fresh) {
-      notifyFailed = !(await this.#notify(input.orgId, recipients, client, item, magic.token));
-    }
-    assertSafePublicObject("requestGrant", grant);
-    return { grant, code, notifyFailed };
-  }
-
-  #newGrant(
-    input: { orgId: string; taskId?: string; taskDescription?: string },
-    clientId: string,
-    item: { id: string; folderId: string | null },
-    environmentId: string,
-    at: string,
-    policy: GrantPolicy,
-    status: "active" | "pending",
-  ): HostedGrantRecord {
-    return {
-      id: `grt_${randomUUID()}`,
-      orgId: input.orgId,
-      clientId,
-      itemId: item.id,
-      folderId: item.folderId,
-      environmentId,
-      policy,
-      status,
-      expiresAt: null,
-      createdAt: at,
-      approvedAt: status === "active" ? at : null,
-      consumedAt: null,
-      taskId: input.taskId ?? null,
-      taskDescription: input.taskDescription ?? null,
-    };
-  }
-
-  /** Newest pending or unexpired active grant for the pair; active wins over pending. */
-  async #openGrantFor(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord | undefined> {
-    const grants = await this.#settleExpired(await this.store.listGrants(orgId));
-    const pair = grants.filter((g) => g.clientId === clientId && g.itemId === itemId);
-    return pair.find((g) => g.status === "active") ?? pair.find((g) => g.status === "pending");
-  }
-
-  /** D15: an active `session` grant past `expires_at` reads as `expired`. */
-  async #settleExpired(grants: HostedGrantRecord[]): Promise<HostedGrantRecord[]> {
-    const now = this.now();
-    const out: HostedGrantRecord[] = [];
-    for (const g of grants) {
-      if (g.status === "active" && isPast(g.expiresAt, now)) {
-        const expired: HostedGrantRecord = { ...g, status: "expired" };
-        await this.store.updateGrant(expired);
-        out.push(expired);
-      } else {
-        out.push(g);
-      }
-    }
-    return out;
-  }
-
-  async #rotateCodeChallenge(grantId: string, now: Date): Promise<string> {
-    const prior = await this.store.getChallengeByGrantKind(grantId, "code");
-    if (prior) await this.store.deleteChallenge(prior.id);
-    const code = String(randomInt(0, 100_000_000)).padStart(8, "0");
-    const salt = randomBytes(8).toString("hex");
-    await this.store.insertChallenge({
-      id: `chl_${randomUUID()}`,
-      grantId,
-      codeHash: `${salt}:${hashCode(code, salt)}`,
-      expiresAt: new Date(now.getTime() + CODE_TTL_MS).toISOString(),
-      attempts: 0,
-      kind: "code",
-    });
-    return code;
-  }
-
-  /** Keeps an unexpired magic link; mints a new one otherwise. `fresh` means a new link was made. */
-  async #ensureMagicChallenge(grantId: string, now: Date): Promise<{ token?: string; fresh: boolean }> {
-    if (!this.approvalHmac) return { fresh: true };
-    const prior = await this.store.getChallengeByGrantKind(grantId, "magic");
-    if (prior && !isPast(prior.expiresAt, now)) return { token: prior.codeHash, fresh: false };
-    if (prior) await this.store.deleteChallenge(prior.id);
-    const exp = now.getTime() + MAGIC_TTL_MS;
-    const token = mintApprovalToken(this.approvalHmac, grantId, exp);
-    await this.store.insertChallenge({
-      id: `chl_${randomUUID()}`,
-      grantId,
-      codeHash: token,
-      expiresAt: new Date(exp).toISOString(),
-      attempts: 0,
-      kind: "magic",
-    });
-    return { token, fresh: true };
-  }
-
-  /** An explicit `operatorEmail` wins; otherwise every member with a verified email is notified. */
-  async #notifyRecipients(orgId: string, operatorEmail: string | undefined): Promise<string[]> {
-    if (operatorEmail !== undefined) return [operatorEmail.trim().toLowerCase()];
-    return this.store.listMemberEmails(orgId);
+  /** See `kernel-grants.ts` `requestGrant`: one open grant per (client, item), limiter counted once. */
+  async requestGrant(input: RequestGrantInput): Promise<RequestGrantResult> {
+    return requestGrant(this.#grantHost(), input);
   }
 
   /** REST boundary check for `operator_email`: only this org's members may be addressed. */
   async assertMemberEmail(orgId: string, email: string): Promise<string> {
-    const wanted = email.trim().toLowerCase();
-    const members = await this.store.listMemberEmails(orgId);
-    if (!members.some((m) => m.toLowerCase() === wanted)) {
-      throw new HttpError(400, "operator_email must be a member of this org");
-    }
-    return wanted;
+    return assertMemberEmail(this.#grantHost(), orgId, email);
   }
 
-  /** Sends the approval email to each recipient. True when at least one send succeeded. */
-  async #notify(
-    orgId: string,
-    recipients: string[],
-    client: ClientRecord,
-    item: { name: string; last4: string },
-    magicToken: string | undefined,
-  ): Promise<boolean> {
-    let sent = 0;
-    if (this.sendEmail && recipients.length > 0) {
-      const link = magicToken
-        ? `${this.publicUrl}/approve?token=${encodeURIComponent(magicToken)}`
-        : `${this.publicUrl.replace(/\/$/, "")}/console`;
-      const html =
-        `<p>Client ${escapeHtml(client.name)} requested ${escapeHtml(item.name)} (••••${escapeHtml(item.last4)}).</p>` +
-        `<p>Approve in inbox or use the code in the agent result.</p>` +
-        `<p><a href="${escapeHtml(link)}">Approve</a></p>`;
-      for (const to of recipients) {
-        try {
-          await this.sendEmail(to, `Grant request ${item.name}`, html);
-          sent += 1;
-        } catch {
-          // counted below
-        }
-      }
-    }
-    if (sent === 0) {
-      await this.#audit(orgId, "notify_failed", "system", item.name, client.id);
-      return false;
-    }
-    return true;
+
+  async approveGrant(input: ApproveGrantInput): Promise<HostedGrantRecord> {
+    return approveGrant(this.#grantHost(), input);
   }
 
-  async approveGrant(input: {
-    orgId: string;
-    grantId: string;
-    policy: GrantPolicy;
-    confirmName?: string;
-    role: MemberRole;
-    actor: string;
-  }): Promise<HostedGrantRecord> {
-    const grant = await this.store.getGrant(input.grantId);
-    if (!grant || grant.orgId !== input.orgId) throw new HttpError(404, "Unknown grant");
-    if (grant.status !== "pending") throw new HttpError(409, "Grant is not pending");
-    if (input.policy === "folder_standing" && input.role !== "owner") {
-      throw new HttpError(403, "Only owners may approve folder_standing");
-    }
-    const env = await this.store.getEnvironment(grant.environmentId);
-    if (!env) throw new HttpError(404, "Unknown environment");
-    if (input.policy === "folder_standing") {
-      const folder = grant.folderId ? await this.store.getFolder(grant.folderId) : undefined;
-      const expected = folder?.name ?? env.name;
-      if (input.confirmName !== expected) {
-        throw new HttpError(400, "confirm_name does not match folder or environment");
-      }
-    }
-    const at = nowIso(this.now());
-    const expiresAt =
-      input.policy === "session"
-        ? new Date(this.now().getTime() + SESSION_TTL_MS).toISOString()
-        : null;
-    const next: HostedGrantRecord = {
-      ...grant,
-      policy: input.policy,
-      status: "active",
-      approvedAt: at,
-      expiresAt,
-    };
-    await this.store.updateGrant(next);
-    if (input.policy === "item_standing" && grant.itemId) {
-      await this.store.insertPolicy({
-        id: `pol_${randomUUID()}`,
-        orgId: input.orgId,
-        clientId: grant.clientId,
-        itemId: grant.itemId,
-        folderId: null,
-        environmentId: grant.environmentId,
-        kind: "item_standing",
-        createdAt: at,
-      });
-    }
-    if (input.policy === "folder_standing") {
-      await this.store.insertPolicy({
-        id: `pol_${randomUUID()}`,
-        orgId: input.orgId,
-        clientId: grant.clientId,
-        itemId: null,
-        folderId: grant.folderId,
-        environmentId: grant.environmentId,
-        kind: "folder_standing",
-        createdAt: at,
-      });
-    }
-    const item = grant.itemId ? await this.store.getItem(grant.itemId) : undefined;
-    await this.#audit(input.orgId, "grant", input.actor, item?.name ?? null, grant.clientId);
-    assertSafePublicObject("approveGrant", next);
-    return next;
-  }
-
-  /**
-   * Finds the pending challenge whose code matches. A wrong code charges one attempt against the
-   * most recently requested pending grant only, so typos cannot lock out every open approval.
-   */
+  /** A wrong code charges one attempt against the newest pending grant only (D14). */
   async approveByCode(orgId: string, actor: string, role: MemberRole, code: string): Promise<HostedGrantRecord> {
-    const pending = await this.store.listPendingGrants(orgId);
-    const now = this.now();
-    const candidates: { grant: HostedGrantRecord; ch: ApprovalChallengeRecord }[] = [];
-    for (const grant of pending) {
-      const ch = await this.store.getChallengeByGrantKind(grant.id, "code");
-      if (ch && ch.kind === "code") candidates.push({ grant, ch });
-    }
-    let sawExpiredMatch = false;
-    for (const { grant, ch } of candidates) {
-      const [salt, expected] = ch.codeHash.split(":");
-      if (!salt || !expected) continue;
-      const actual = hashCode(code, salt);
-      const ok =
-        actual.length === expected.length &&
-        timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
-      if (!ok) continue;
-      if (isPast(ch.expiresAt, now)) {
-        sawExpiredMatch = true;
-        continue;
-      }
-      if (ch.attempts >= 5) continue;
-      await this.store.deleteChallenge(ch.id);
-      return this.approveGrant({ orgId, grantId: grant.id, policy: "prompt", role, actor });
-    }
-    if (sawExpiredMatch) throw new HttpError(410, "Expired code");
-    const newest = candidates.find(({ ch }) => !isPast(ch.expiresAt, now) && ch.attempts < 5);
-    if (newest) {
-      await this.store.updateChallenge({ ...newest.ch, attempts: newest.ch.attempts + 1 });
-    }
-    throw new HttpError(409, "Invalid or reused code");
+    return approveByCode(this.#grantHost(), orgId, actor, role, code);
   }
+
 
   async deleteOrg(orgId: string, actor: string, role: MemberRole, confirmName: string): Promise<void> {
     if (role !== "owner") throw new HttpError(403, "Only owners may delete the org");
@@ -935,76 +653,22 @@ export class HostedKernel {
 
   /** Revokes every open grant for the (client, item) pair and drops the policies that would re-grant it. */
   async revokeGrant(orgId: string, actor: string, grantId: string): Promise<HostedGrantRecord> {
-    const grant = await this.store.getGrant(grantId);
-    if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
-    const next = { ...grant, status: "revoked" as const };
-    await this.store.updateGrant(next);
-    const siblings = (await this.store.listGrants(orgId)).filter(
-      (g) =>
-        g.id !== grant.id &&
-        g.clientId === grant.clientId &&
-        g.itemId === grant.itemId &&
-        (g.status === "active" || g.status === "pending"),
-    );
-    for (const g of siblings) {
-      await this.store.updateGrant({ ...g, status: "revoked" });
-    }
-    const policies = await this.store.listPoliciesForClient(orgId, grant.clientId);
-    for (const p of policies) {
-      if (grant.itemId && p.itemId === grant.itemId) await this.store.deletePolicy(p.id);
-      if (p.kind === "folder_standing" && p.environmentId === grant.environmentId) {
-        if (p.folderId === grant.folderId) await this.store.deletePolicy(p.id);
-      }
-    }
-    const item = grant.itemId ? await this.store.getItem(grant.itemId) : undefined;
-    await this.#audit(orgId, "revoke", actor, item?.name ?? null, grant.clientId);
-    return next;
+    return revokeGrant(this.#grantHost(), orgId, actor, grantId);
   }
+
 
   async inbox(orgId: string): Promise<HostedGrantRecord[]> {
     return this.store.listPendingGrants(orgId);
   }
 
-  async inboxGrantCards(orgId: string): Promise<
-    Array<{
-      id: string;
-      status: string;
-      policy: string;
-      item_name: string | null;
-      item_last4: string | null;
-      client_name: string;
-      task_description: string | null;
-      created_at: string;
-      approved_at: string | null;
-    }>
-  > {
-    const all = await this.#settleExpired(await this.store.listGrants(orgId));
-    const rows = all.filter(
-      (g) => g.status === "pending" || (g.status === "active" && g.policy === "prompt"),
-    );
-    const cards = [];
-    for (const g of rows) {
-      const item = g.itemId ? await this.store.getItem(g.itemId) : undefined;
-      const client = await this.store.getClient(g.clientId);
-      cards.push({
-        id: g.id,
-        status: g.status,
-        policy: g.policy,
-        item_name: item?.name ?? null,
-        item_last4: item?.last4 ?? null,
-        client_name: client?.name ?? "agent",
-        task_description: g.taskDescription,
-        created_at: g.createdAt,
-        approved_at: g.approvedAt,
-      });
-    }
-    return cards;
+  async inboxGrantCards(orgId: string): Promise<InboxGrantCard[]> {
+    return inboxGrantCards(this.#grantHost(), orgId);
   }
 
   async listClientGrants(orgId: string, clientId: string): Promise<HostedGrantRecord[]> {
-    const all = await this.#settleExpired(await this.store.listGrants(orgId));
-    return all.filter((g) => g.clientId === clientId);
+    return listClientGrants(this.#grantHost(), orgId, clientId);
   }
+
 
   async resolveTrusted(input: {
     orgId: string;
@@ -1036,7 +700,8 @@ export class HostedKernel {
   /**
    * Hands the decrypted item to a connector. Handing out the plaintext is audited as `inject`
    * unless the caller sets `auditAfterSend` and calls `auditInject` with the real outcome once the
-   * request has (or has not) left the process.
+   * request has (or has not) left the process. With `request`, a scoped grant must admit the
+   * call (method, host, path prefix) or this is 403 `scope_denied` before anything is decrypted.
    */
   async prepareConnector(input: {
     orgId: string;
@@ -1044,6 +709,7 @@ export class HostedKernel {
     itemName: string;
     environment: VaultEnvName;
     auditAfterSend?: boolean;
+    request?: ConnectorCall;
   }): Promise<{
     secret: string;
     username: string | null;
@@ -1072,7 +738,7 @@ export class HostedKernel {
         alreadyLimited: false,
       });
     }
-    const grant = await this.consumeActiveGrant(input.orgId, client.id, item.id);
+    const grant = await this.consumeActiveGrant(input.orgId, client.id, item.id, input.request);
     const decrypted = await this.decryptItem(input.orgId, item.id);
     if (!input.auditAfterSend) {
       await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
@@ -1323,68 +989,32 @@ export class HostedKernel {
         environmentId: env.id,
         kind: "item_standing",
         createdAt: at,
+        ...unscopedFields(),
+        expiresAt: null,
       });
     }
     return { item_name: name, last4: last };
   }
 
   /** Validates a magic link and returns what approving it would do. No state change. */
-  async previewMagic(orgId: string, token: string): Promise<{
-    grant_id: string;
-    client_name: string;
-    item_name: string;
-    item_last4: string;
-    policy: string;
-    task_description: string | null;
-  }> {
-    const grant = await this.#magicGrant(orgId, token);
-    const item = grant.itemId ? await this.store.getItem(grant.itemId) : undefined;
-    const client = await this.store.getClient(grant.clientId);
-    const preview = {
-      grant_id: grant.id,
-      client_name: client?.name ?? "agent",
-      item_name: item?.name ?? "",
-      item_last4: item?.last4 ?? "",
-      policy: "prompt",
-      task_description: grant.taskDescription,
-    };
-    assertSafePublicObject("previewMagic", preview);
-    return preview;
+  async previewMagic(orgId: string, token: string): Promise<MagicPreview> {
+    return previewMagic(this.#grantHost(), orgId, token);
   }
 
   async approveMagic(orgId: string, actor: string, role: MemberRole, token: string): Promise<HostedGrantRecord> {
-    const grant = await this.#magicGrant(orgId, token);
-    const magic = await this.store.getChallengeByGrantKind(grant.id, "magic");
-    if (!magic) throw new HttpError(410, "Expired link");
-    await this.store.deleteChallenge(magic.id);
-    return this.approveGrant({ orgId, grantId: grant.id, policy: "prompt", role, actor });
+    return approveMagic(this.#grantHost(), orgId, actor, role, token);
   }
 
-  async #magicGrant(orgId: string, token: string): Promise<HostedGrantRecord> {
-    if (!this.approvalHmac) throw new HttpError(500, "Magic links are not configured");
-    const grantId = verifyApprovalToken(this.approvalHmac, token, this.now().getTime());
-    const grant = await this.store.getGrant(grantId);
-    if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
-    if (grant.status !== "pending") throw new HttpError(410, "Expired link");
-    const magic = await this.store.getChallengeByGrantKind(grantId, "magic");
-    if (!magic || magic.codeHash !== token) throw new HttpError(410, "Expired link");
-    return grant;
+  /** See `kernel-grants.ts` `consumeActiveGrant`: with `call`, the grant's scope must admit it. */
+  async consumeActiveGrant(
+    orgId: string,
+    clientId: string,
+    itemId: string,
+    call?: ConnectorCall,
+  ): Promise<HostedGrantRecord> {
+    return consumeActiveGrant(this.#grantHost(), orgId, clientId, itemId, call);
   }
 
-  async consumeActiveGrant(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord> {
-    const grants = await this.#settleExpired(await this.store.listGrants(orgId));
-    const at = this.now();
-    const match = grants.find(
-      (g) => g.clientId === clientId && g.itemId === itemId && g.status === "active",
-    );
-    if (!match) throw new HttpError(403, "inject_denied");
-    if (match.policy === "prompt") {
-      const ok = await this.store.consumeGrant(match.id, nowIso(at));
-      if (!ok) throw new HttpError(403, "inject_denied");
-      return { ...match, status: "consumed", consumedAt: nowIso(at) };
-    }
-    return match;
-  }
 
   async decryptItem(orgId: string, itemId: string): Promise<{ secret: string; username: string | null; last4: string; inject: string; allowedHosts: string[]; name: string; kind: ItemKind }> {
     const item = await this.store.getItem(itemId);
@@ -1469,15 +1099,21 @@ export class HostedKernel {
     return c;
   }
 
-  async #standingFor(
-    orgId: string,
-    clientId: string,
-    item: { id: string; folderId: string | null; environmentId: string },
-  ) {
-    const itemPol = await this.store.findItemPolicy(orgId, clientId, item.id);
-    if (itemPol) return itemPol;
-    return this.store.findFolderPolicy(orgId, clientId, item.folderId, item.environmentId);
+  #grantHost(): GrantHost {
+    return {
+      store: this.store,
+      now: this.now,
+      publicUrl: this.publicUrl,
+      approvalHmac: this.approvalHmac,
+      sendEmail: this.sendEmail,
+      limiter: this.limiter,
+      envFor: (orgId, name) => this.envFor(orgId, name),
+      clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
+      needItemError: (input) => this.needItemError(input),
+      audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),
+    };
   }
+
 
   #publicItem(environment: VaultEnvName, item: {
     id: string;
@@ -1553,7 +1189,7 @@ export class HostedKernel {
       this.store.listAudit(orgId, 200, { action: "inject" }),
       this.store.listAccessEvents(orgId, 200),
     ]);
-    const grants = await this.#settleExpired(storedGrants);
+    const grants = await settleExpired(this.#grantHost(), storedGrants);
     const users = await Promise.all(members.map((m) => this.store.getUser(m.userId)));
     const operators = members.map((m, i) => ({
       user_id: m.userId,
@@ -1602,10 +1238,13 @@ export class HostedKernel {
         client_id: g.clientId,
         client_name: clientNames.get(g.clientId) ?? g.clientId,
         status: g.status,
+        policy: g.policy,
         created_at: usage.created_at,
         first_access_at: usage.first_access_at,
         last_access_at: usage.last_access_at,
         approved_at: g.approvedAt,
+        expires_at: g.expiresAt,
+        grant_scope: publicGrantScope(g),
         fetched: usage.fetched,
       });
     }
@@ -1710,27 +1349,4 @@ export class HostedKernel {
   }
 }
 
-export function mintApprovalToken(hmac: Buffer, grantId: string, expMs: number): string {
-  const body = Buffer.from(JSON.stringify({ grantId, exp: expMs })).toString("base64url");
-  const sig = createHmac("sha256", hmac).update(body).digest("base64url");
-  return `${body}.${sig}`;
-}
-
-export function verifyApprovalToken(hmac: Buffer, token: string, nowMs: number): string {
-  const [body, sig] = token.split(".");
-  if (!body || !sig) throw new HttpError(410, "Invalid link");
-  const expected = createHmac("sha256", hmac).update(body).digest("base64url");
-  if (expected.length !== sig.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) {
-    throw new HttpError(410, "Invalid link");
-  }
-  const parsed: unknown = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-  if (!parsed || typeof parsed !== "object") throw new HttpError(410, "Invalid link");
-  const rec = parsed as { grantId?: unknown; exp?: unknown };
-  if (typeof rec.grantId !== "string" || typeof rec.exp !== "number") {
-    throw new HttpError(410, "Invalid link");
-  }
-  if (rec.exp < nowMs) throw new HttpError(410, "Expired link");
-  return rec.grantId;
-}
-
-export { MAGIC_TTL_MS };
+export { MAGIC_TTL_MS, mintApprovalToken, verifyApprovalToken };

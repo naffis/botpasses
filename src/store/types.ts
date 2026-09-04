@@ -14,6 +14,7 @@ import type {
   OrgRecord,
   PersistFulfillInput,
   PolicyRecord,
+  RequestedScope,
   UserRecord,
   VaultEnvName,
   VaultRecord,
@@ -150,10 +151,19 @@ export type VaultStore = {
   getGrant(id: string): Promise<HostedGrantRecord | undefined>;
   listGrants(orgId: string): Promise<HostedGrantRecord[]>;
   listPendingGrants(orgId: string): Promise<HostedGrantRecord[]>;
+  /** Writes every grant column except `calls_used`, which only `recordGrantCall` moves. */
   updateGrant(row: HostedGrantRecord): Promise<void>;
   consumeGrant(id: string, consumedAt: string): Promise<boolean>;
   /** Prompt grants only. Restores an unused inject after a failed origin call. */
   reactivateGrant(id: string): Promise<boolean>;
+  /**
+   * Counts one call against an active grant's `max_calls` in a single UPDATE; the row becomes
+   * `consumed` (with `consumed_at`) when the quota is reached. False when the grant is not
+   * active or the quota was already spent, so two racing callers cannot both pass the last call.
+   */
+  recordGrantCall(id: string, at: string): Promise<boolean>;
+  /** Counts one call against a standing policy's `max_calls`. False when spent. */
+  recordPolicyCall(id: string): Promise<boolean>;
 
   insertChallenge(row: ApprovalChallengeRecord): Promise<void>;
   getChallenge(id: string): Promise<ApprovalChallengeRecord | undefined>;
@@ -278,6 +288,55 @@ export type VaultStore = {
 };
 
 export type OidcPayloadRow = { id: string; payload: string; expiresAt: string | null };
+
+/** A JSON-array TEXT scope column. Null, empty, or malformed reads as unrestricted. */
+export function parseScopeList(value: unknown): string[] | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const list = parsed.filter((v): v is string => typeof v === "string");
+  return list.length > 0 ? list : null;
+}
+
+export function scopeListJson(list: string[] | null): string | null {
+  return list && list.length > 0 ? JSON.stringify(list) : null;
+}
+
+/** `requested_scope_json` column. Missing keys read as null; malformed JSON as no request. */
+export function parseRequestedScope(value: unknown): RequestedScope | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const rec = parsed as Record<string, unknown>;
+  const str = (key: string): string | null => (typeof rec[key] === "string" && rec[key] ? rec[key] : null);
+  return { host: str("host"), method: str("method"), path: str("path") };
+}
+
+export function requestedScopeJson(scope: RequestedScope | null): string | null {
+  return scope ? JSON.stringify(scope) : null;
+}
+
+/** Integer column that may be NULL (`max_calls`); anything else reads as unrestricted. */
+export function parseNullableInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return null;
+}
+
+/** `calls_used` column: NOT NULL DEFAULT 0, but rows from a half-applied ALTER read as 0. */
+export function parseCallsUsed(value: unknown): number {
+  return parseNullableInt(value) ?? 0;
+}
 
 export type OidcPayloadIndex = {
   uid: string | null;

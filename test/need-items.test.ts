@@ -5,6 +5,7 @@ import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
+import { unscopedFields } from "../src/hosted-types.ts";
 import { StoreConflictError } from "../src/store/conflict.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
@@ -354,6 +355,8 @@ test("persistFulfill rolls back item when grant insert fails", async () => {
       consumedAt: null,
       taskId: null,
       taskDescription: null,
+      requestedScope: null,
+      ...unscopedFields(),
     });
     await assert.rejects(
       () =>
@@ -389,6 +392,8 @@ test("persistFulfill rolls back item when grant insert fails", async () => {
             consumedAt: null,
             taskId: null,
             taskDescription: null,
+            requestedScope: null,
+            ...unscopedFields(),
           },
           needId: need.id,
           fulfilledAt: new Date().toISOString(),

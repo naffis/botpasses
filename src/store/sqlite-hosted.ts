@@ -27,11 +27,18 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
+  HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
   oidcPayloadIndex,
+  parseCallsUsed,
+  parseNullableInt,
+  parseRequestedScope,
+  parseScopeList,
+  requestedScopeJson,
+  scopeListJson,
   type AuditListFilter,
   type IdentityKeyRecord,
   type OidcPayloadRow,
@@ -88,6 +95,12 @@ function mapGrant(r: Record<string, unknown>): HostedGrantRecord {
     consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
     taskId: r.task_id == null ? null : String(r.task_id),
     taskDescription: r.task_description == null ? null : String(r.task_description),
+    methods: parseScopeList(r.methods),
+    pathPrefixes: parseScopeList(r.path_prefixes),
+    hosts: parseScopeList(r.hosts),
+    maxCalls: parseNullableInt(r.max_calls),
+    callsUsed: parseCallsUsed(r.calls_used),
+    requestedScope: parseRequestedScope(r.requested_scope_json),
   };
 }
 
@@ -105,7 +118,11 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   if (orgOauthIndex && !/UNIQUE/i.test(orgOauthIndex.sql ?? "")) {
     db.exec("DROP INDEX clients_org_oauth");
   }
-  for (const alter of [HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE, HOSTED_SCHEMA_OAUTH_ALTER_SQLITE]) {
+  for (const alter of [
+    HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
+    HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
+    HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
+  ]) {
     for (const stmt of alter.trim().split(";")) {
       const sql = stmt.trim();
       if (!sql) continue;
@@ -530,8 +547,10 @@ export class SqliteHostedStore implements VaultStore {
   async insertPolicy(row: PolicyRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO policies (id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO policies (
+          id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at,
+          methods, path_prefixes, hosts, max_calls, calls_used, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -542,7 +561,22 @@ export class SqliteHostedStore implements VaultStore {
         row.environmentId,
         row.kind,
         row.createdAt,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        row.callsUsed,
+        row.expiresAt,
       );
+  }
+
+  async recordPolicyCall(id: string): Promise<boolean> {
+    const result = this.#db
+      .prepare(
+        "UPDATE policies SET calls_used = calls_used + 1 WHERE id = ? AND (max_calls IS NULL OR calls_used < max_calls)",
+      )
+      .run(id);
+    return result.changes === 1;
   }
 
   async deletePolicy(id: string): Promise<void> {
@@ -585,29 +619,7 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async insertGrant(row: HostedGrantRecord): Promise<void> {
-    this.#db
-      .prepare(
-        `INSERT INTO grants (
-          id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-          expires_at, created_at, approved_at, consumed_at, task_id, task_description
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.orgId,
-        row.clientId,
-        row.itemId,
-        row.folderId,
-        row.environmentId,
-        row.policy,
-        row.status,
-        row.expiresAt,
-        row.createdAt,
-        row.approvedAt,
-        row.consumedAt,
-        row.taskId,
-        row.taskDescription,
-      );
+    this.#db.prepare(GRANT_INSERT_SQL).run(...grantInsertValues(row));
   }
 
   async getGrant(id: string): Promise<HostedGrantRecord | undefined> {
@@ -635,7 +647,8 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare(
         `UPDATE grants SET status = ?, policy = ?, expires_at = ?, approved_at = ?, consumed_at = ?,
-         item_id = ?, folder_id = ?, task_id = ?, task_description = ? WHERE id = ?`,
+         item_id = ?, folder_id = ?, task_id = ?, task_description = ?,
+         methods = ?, path_prefixes = ?, hosts = ?, max_calls = ?, requested_scope_json = ? WHERE id = ?`,
       )
       .run(
         row.status,
@@ -647,8 +660,26 @@ export class SqliteHostedStore implements VaultStore {
         row.folderId,
         row.taskId,
         row.taskDescription,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        requestedScopeJson(row.requestedScope),
         row.id,
       );
+  }
+
+  async recordGrantCall(id: string, at: string): Promise<boolean> {
+    const result = this.#db
+      .prepare(
+        `UPDATE grants SET
+           calls_used = calls_used + 1,
+           status = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN 'consumed' ELSE status END,
+           consumed_at = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN ? ELSE consumed_at END
+         WHERE id = ? AND status = 'active' AND (max_calls IS NULL OR calls_used < max_calls)`,
+      )
+      .run(at, id);
+    return result.changes === 1;
   }
 
   async consumeGrant(id: string, consumedAt: string): Promise<boolean> {
@@ -934,29 +965,7 @@ export class SqliteHostedStore implements VaultStore {
           input.item.createdAt,
           input.item.updatedAt,
         );
-      this.#db
-        .prepare(
-          `INSERT INTO grants (
-            id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-            expires_at, created_at, approved_at, consumed_at, task_id, task_description
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.grant.id,
-          input.grant.orgId,
-          input.grant.clientId,
-          input.grant.itemId,
-          input.grant.folderId,
-          input.grant.environmentId,
-          input.grant.policy,
-          input.grant.status,
-          input.grant.expiresAt,
-          input.grant.createdAt,
-          input.grant.approvedAt,
-          input.grant.consumedAt,
-          input.grant.taskId,
-          input.grant.taskDescription,
-        );
+      this.#db.prepare(GRANT_INSERT_SQL).run(...grantInsertValues(input.grant));
       const claimed = this.#db
         .prepare(
           `UPDATE need_items SET status = 'fulfilled', item_id = ?, grant_id = ?, fulfilled_at = ?
@@ -1409,7 +1418,44 @@ function mapPolicy(r: Record<string, unknown>): PolicyRecord {
     environmentId: String(r.environment_id),
     kind: r.kind as PolicyRecord["kind"],
     createdAt: String(r.created_at),
+    methods: parseScopeList(r.methods),
+    pathPrefixes: parseScopeList(r.path_prefixes),
+    hosts: parseScopeList(r.hosts),
+    maxCalls: parseNullableInt(r.max_calls),
+    callsUsed: parseCallsUsed(r.calls_used),
+    expiresAt: r.expires_at == null ? null : String(r.expires_at),
   };
+}
+
+const GRANT_INSERT_SQL = `INSERT INTO grants (
+  id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
+  expires_at, created_at, approved_at, consumed_at, task_id, task_description,
+  methods, path_prefixes, hosts, max_calls, calls_used, requested_scope_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+function grantInsertValues(row: HostedGrantRecord): (string | number | null)[] {
+  return [
+    row.id,
+    row.orgId,
+    row.clientId,
+    row.itemId,
+    row.folderId,
+    row.environmentId,
+    row.policy,
+    row.status,
+    row.expiresAt,
+    row.createdAt,
+    row.approvedAt,
+    row.consumedAt,
+    row.taskId,
+    row.taskDescription,
+    scopeListJson(row.methods),
+    scopeListJson(row.pathPrefixes),
+    scopeListJson(row.hosts),
+    row.maxCalls,
+    row.callsUsed,
+    requestedScopeJson(row.requestedScope),
+  ];
 }
 
 function mapChallenge(r: Record<string, unknown>): ApprovalChallengeRecord {

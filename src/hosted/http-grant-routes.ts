@@ -4,9 +4,10 @@ import { assertSafePublicObject } from "../redact.ts";
 import { agentPassEnabled } from "./agentpass.ts";
 import { requireModelOrOperator, requireOperator, type Principal } from "./auth.ts";
 import { approveConfirmHtml, approveDoneHtml, approveErrorHtml } from "./approve-page.ts";
-import { isHttpError } from "./errors.ts";
+import { HttpError, isHttpError } from "./errors.ts";
 import { asEnv, asPolicy, json, optional, readJson, readJsonOrForm, sendHtml } from "./http-util.ts";
 import type { HostedKernel } from "./kernel.ts";
+import type { GrantRequest, ScopeInput } from "./kernel-grants.ts";
 
 export type GrantRouteOpts = {
   kernel: HostedKernel;
@@ -43,6 +44,7 @@ export async function handleGrantRoutes(
       taskId: optional(body.task_id ?? body.taskId),
       taskDescription: optional(body.task_description ?? body.taskDescription),
       operatorEmail,
+      request: asGrantRequest(body),
     });
     json(res, 200, {
       grant: result.grant,
@@ -82,6 +84,7 @@ export async function handleGrantRoutes(
       confirmName: optional(body.confirm_name ?? body.confirmName),
       role: op.role,
       actor: op.userId,
+      scope: asScopeInput(body.scope),
     });
     json(res, 200, { grant });
     return true;
@@ -138,6 +141,18 @@ export async function handleGrantRoutes(
     }
     return true;
   }
+  return handleApproveMagicRoute(req, res, method, path, principal, opts);
+}
+
+async function handleApproveMagicRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  path: string,
+  principal: Principal | undefined,
+  opts: GrantRouteOpts,
+): Promise<boolean> {
+  const { kernel } = opts;
   if (method === "POST" && path === "/approve") {
     const op = requireOperator(principal);
     const body = await readJsonOrForm(req);
@@ -158,4 +173,47 @@ export async function handleGrantRoutes(
     return true;
   }
   return false;
+}
+
+/** `host`, `method`, `path` on a grant request: the call the agent will make. Absent when none given. */
+function asGrantRequest(body: Record<string, unknown>): GrantRequest | undefined {
+  const host = optional(body.host);
+  const method = optional(body.method);
+  const path = optional(body.path);
+  if (host === undefined && method === undefined && path === undefined) return undefined;
+  return { host, method, path };
+}
+
+function stringList(value: unknown, field: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
+    throw new HttpError(400, `scope.${field} must be an array of strings`);
+  }
+  return value as string[];
+}
+
+function integer(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isInteger(n)) {
+    throw new HttpError(400, `scope.${field} must be an integer`);
+  }
+  return n;
+}
+
+/**
+ * Operator limits on approve: `{ methods?, path_prefixes?, hosts?, max_calls?, ttl_seconds? }`.
+ * Shape errors are 400 here; bounds and the item's host set are checked in the kernel.
+ */
+export function asScopeInput(value: unknown): ScopeInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "scope must be an object");
+  const rec = value as Record<string, unknown>;
+  return {
+    methods: stringList(rec.methods, "methods"),
+    pathPrefixes: stringList(rec.path_prefixes ?? rec.pathPrefixes, "path_prefixes"),
+    hosts: stringList(rec.hosts, "hosts"),
+    maxCalls: integer(rec.max_calls ?? rec.maxCalls, "max_calls"),
+    ttlSeconds: integer(rec.ttl_seconds ?? rec.ttlSeconds, "ttl_seconds"),
+  };
 }

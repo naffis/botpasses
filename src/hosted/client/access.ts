@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 /** Agents panel: agents, approvals, sessions, and humanised activity with filters and paging. */
 import { describeActivity, pageOf } from "./activity.ts";
+import { describeScope, type ScopePublic } from "./inbox.ts";
 import { agentsHash, type AgentsTab, AGENTS_TABS, type Route } from "./routes.ts";
 import type { AccessClient, AccessGrant, AccessSession, AuditRow } from "./types.ts";
 import {
@@ -103,12 +104,26 @@ function agentRow(c: AccessClient, environments: string[]): SafeHtml {
   </div>`;
 }
 
-function grantRow(g: AccessGrant): SafeHtml {
+/** Approvals rows carry the grant's policy and limits (3.1); older servers omit them. */
+type ScopedAccessGrant = AccessGrant & {
+  policy?: string;
+  grant_scope?: ScopePublic | null;
+  expires_at?: string | null;
+};
+
+function grantRow(g: ScopedAccessGrant): SafeHtml {
   const live = g.status === "active" || g.status === "pending";
+  const scope = describeScope(g.grant_scope);
   return html`<div class="access-row" data-testid="grant-row">
     <div class="access-row-main">
-      <p class="access-row-title">${g.client_name} → <span class="mono">${g.item_name || "credential"}</span> ${statusPill(g.status)}</p>
-      <p class="access-meta">${meta([when("Requested", g.created_at), when("Approved", g.approved_at), when("Last used", g.last_access_at)])}</p>
+      <p class="access-row-title">${g.client_name} → <span class="mono">${g.item_name || "credential"}</span> ${statusPill(g.status)}${g.policy && g.policy !== "prompt" ? html` <span class="pill">${g.policy.replace("_", " ")}</span>` : ""}</p>
+      <p class="access-meta">${meta([
+        scope ? html`<span data-testid="grant-scope">${scope}</span>` : "",
+        !scope && g.expires_at ? html`Expires ${timeHtml(g.expires_at)}` : "",
+        when("Requested", g.created_at),
+        when("Approved", g.approved_at),
+        when("Last used", g.last_access_at),
+      ])}</p>
     </div>
     <div class="access-row-actions">
       ${live ? html`<button type="button" class="btn-danger btn-small" data-grant-revoke="${g.id}" data-testid="grant-revoke">Revoke</button>` : ""}

@@ -740,11 +740,27 @@ function storeValidationError(values                 , opts                     
 }
 
 // ---- src/hosted/client/inbox.ts ----
-/** Inbox panel: pending requests, approve, deny, approve by code, 15 s polling. */
+/** Inbox panel: pending requests, approve (one click or with limits), deny, approve by code, 15 s polling. */
 
 /** Matches CODE_TTL_MS in the kernel until the API sends \`code_expires_at\`. */
 const APPROVAL_CODE_TTL_MS = 10 * 60 * 1000;
 const INBOX_POLL_MS = 15_000;
+const SCOPE_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]         ;
+/** Durations the limits form offers. Up to a day is a \`session\` approval; longer is a standing one with an expiry. */
+const SCOPE_DURATIONS                                                  = [
+  { value: "once", label: "This call only" },
+  { value: "3600", label: "1 hour" },
+  { value: "28800", label: "8 hours" },
+  { value: "86400", label: "24 hours" },
+  { value: "604800", label: "7 days" },
+  { value: "2592000", label: "30 days" },
+  { value: "standing", label: "Until revoked" },
+];
+const SESSION_MAX_SECONDS = 86_400;
+
+/** \`grant_scope\` as the API sends it. Null means unrestricted. */
+
+/** \`requested_scope\`: what the agent said it would call. */
 
 let listeners                 = { onCount: () => {}, onChanged: () => {} };
 let pollTimer                    ;
@@ -754,7 +770,7 @@ function isNeed(v         )                 {
   return isJson(v) && typeof v.id === "string";
 }
 
-function isInboxGrant(v         )                  {
+function isInboxGrant(v         )                        {
   return isJson(v) && typeof v.id === "string";
 }
 
@@ -762,6 +778,27 @@ function codeExpiry(g            )         {
   if (g.code_expires_at) return g.code_expires_at;
   const t = new Date(g.created_at).getTime();
   return Number.isNaN(t) ? "" : new Date(t + APPROVAL_CODE_TTL_MS).toISOString();
+}
+
+/** "GET api.stripe.com/v1/balance" from a requested scope; empty when nothing was stated. */
+function requestText(rs                                         )         {
+  if (!rs) return "";
+  return \`\${rs.method ?? ""} \${rs.host ?? ""}\${rs.path ?? ""}\`.trim();
+}
+
+/** One line of limits: "GET only · paths under /v1 · api.stripe.com · 2 of 10 calls · expires in 7 hours". */
+function describeScope(scope                                , now         = Date.now())         {
+  if (!scope) return "";
+  const parts           = [];
+  if (scope.methods) parts.push(\`\${scope.methods.join("/")} only\`);
+  if (scope.path_prefixes) parts.push(\`paths under \${scope.path_prefixes.join(", ")}\`);
+  if (scope.hosts) parts.push(scope.hosts.join(", "));
+  if (scope.max_calls !== null) parts.push(\`\${scope.calls_used} of \${scope.max_calls} calls used\`);
+  if (scope.expires_at) {
+    const rel = relativeTime(scope.expires_at, now);
+    if (rel) parts.push(\`expires \${rel}\`);
+  }
+  return parts.join(" · ");
 }
 
 function needCard(n           )           {
@@ -776,15 +813,39 @@ function needCard(n           )           {
   </article>\`;
 }
 
-function grantCard(g            , now        )           {
+function limitsForm(g                  , name        )           {
+  const rs = g.requested_scope ?? null;
+  const method = rs?.method ?? null;
+  const path = rs?.path ? rs.path.split("?")[0] ?? "" : "";
+  return html\`<details class="approve-limits" data-limits="\${g.id}" data-testid="inbox-limits">
+    <summary>Approve with limits</summary>
+    <form data-limits-form="\${g.id}" data-host="\${rs?.host ?? ""}" aria-label="Limits for \${name}">
+      <fieldset>
+        <legend class="hint">Methods</legend>
+        \${SCOPE_METHODS.map(
+          (m) => html\`<label class="inline-select"><input type="checkbox" name="methods" value="\${m}"\${method === null || method === m ? " checked" : ""}> \${m}</label>\`,
+        )}
+      </fieldset>
+      <label>Path prefix <input name="path_prefix" value="\${path}" placeholder="/v1 (empty: any path)" autocomplete="off"></label>
+      <label>Max calls <input name="max_calls" type="number" min="1" step="1" placeholder="unlimited" inputmode="numeric"></label>
+      <label>Duration <select name="duration">\${SCOPE_DURATIONS.map((d) => html\`<option value="\${d.value}">\${d.label}</option>\`)}</select></label>
+      <p class="hint">\${rs?.host ? \`Limited to \${rs.host}.\` : g.allowed_hosts?.length ? \`Any of \${g.allowed_hosts.join(", ")}.\` : ""}</p>
+      <button type="submit" class="btn-primary btn-small" data-testid="inbox-approve-limits">Approve with these limits</button>
+    </form>
+  </details>\`;
+}
+
+function grantCard(g                  , now        )           {
   const name = g.item_name ?? "credential";
   const client = g.client_name || "An agent";
   const last4 = g.item_last4 ? \`····\${g.item_last4}\` : "";
-  const detail = [last4, g.task_description].filter(Boolean).join(" · ");
+  const request = requestText(g.requested_scope);
+  const scope = describeScope(g.grant_scope, now);
   if (g.status === "active") {
+    const detail = [last4, g.task_description, scope].filter(Boolean).join(" · ");
     return html\`<article class="inbox-item is-approved" data-testid="inbox-approved">
       <div class="inbox-copy">
-        <h2 class="inbox-title">Approved: \${client} can use \${name}</h2>
+        <h2 class="inbox-title">Approved: \${client} can \${request ? html\`\${request} using \${name}\` : html\`use \${name}\`}</h2>
         <p>\${detail}</p>
         <p class="inbox-meta">Approved \${timeHtml(g.approved_at ?? g.created_at, now)}. The agent can retry now. A failed call reuses this approval; it does not need a new code.</p>
       </div>
@@ -795,11 +856,13 @@ function grantCard(g            , now        )           {
   }
   const expires = codeExpiry(g);
   const left = countdown(expires, now);
+  const detail = [request ? \`using \${name} \${last4}\`.trim() : last4, g.task_description].filter(Boolean).join(" · ");
   return html\`<article class="inbox-item" data-testid="inbox-request">
     <div class="inbox-copy">
-      <h2 class="inbox-title">\${client} wants \${name}</h2>
+      <h2 class="inbox-title">\${client} wants \${request ? \`to \${request}\` : name}</h2>
       <p>\${detail}</p>
-      <p class="inbox-meta">Requested \${timeHtml(g.created_at, now)}\${left ? html\` · <span class="pill pill-warn" data-countdown="\${expires}">code \${left}</span>\` : ""}</p>
+      <p class="inbox-meta">Requested \${timeHtml(g.created_at, now)}\${left ? html\` · <span class="pill pill-warn" data-countdown="\${expires}">code \${left}</span>\` : ""}\${request ? html\` · <span class="hint">Approve limits it to this call.</span>\` : ""}</p>
+      \${limitsForm(g, name)}
     </div>
     <div class="inbox-actions">
       <button type="button" class="btn-primary" data-approve="\${g.id}" data-testid="inbox-approve">Approve</button>
@@ -816,13 +879,59 @@ function tickCountdowns()       {
   });
 }
 
-async function approve(id        , button                   )                {
-  await busy(button, async () => {
+/** Approve body. \`scope\` absent means "inherit the requested call"; present means "exactly these limits". */
+
+/**
+ * Turns the limits form into the approve body. Pure so it can be tested without a DOM.
+ * Duration: "once" is a prompt approval, up to a day a session, longer a standing one with expiry.
+ */
+function limitsBody(input
+
+ )                                 {
+  if (input.methods.length === 0) return { error: "Pick at least one method." };
+  const scope                          = { methods: input.methods };
+  const prefix = input.pathPrefix.trim();
+  if (prefix) {
+    if (!prefix.startsWith("/")) return { error: "Path prefix must start with /." };
+    scope.path_prefixes = [prefix];
+  }
+  if (input.host) scope.hosts = [input.host];
+  const max = input.maxCalls.trim();
+  if (max) {
+    const n = Number(max);
+    if (!Number.isInteger(n) || n < 1) return { error: "Max calls must be a whole number of 1 or more." };
+    scope.max_calls = n;
+  }
+  let policy = "prompt";
+  if (input.duration === "standing") policy = "item_standing";
+  else if (input.duration !== "once") {
+    const seconds = Number(input.duration);
+    if (!Number.isInteger(seconds) || seconds < 60) return { error: "Pick a duration." };
+    policy = seconds <= SESSION_MAX_SECONDS ? "session" : "item_standing";
+    scope.ttl_seconds = seconds;
+  }
+  return { policy, scope };
+}
+
+function readLimits(form                 )                                 {
+  const methods = Array.from(form.querySelectorAll                  ('input[name="methods"]:checked')).map((i) => i.value);
+  const value = (name        )         => {
+    const el = form.elements.namedItem(name);
+    return el instanceof HTMLInputElement || el instanceof HTMLSelectElement ? el.value : "";
+  };
+  return limitsBody({
+    methods,
+    pathPrefix: value("path_prefix"),
+    maxCalls: value("max_calls"),
+    duration: value("duration"),
+    host: form.dataset.host ?? "",
+  });
+}
+
+async function postApprove(id        , body            , control                                     )                {
+  await busy(control, async () => {
     try {
-      const r = await api(\`/api/grants/\${encodeURIComponent(id)}/approve\`, {
-        method: "POST",
-        body: JSON.stringify({ policy: "prompt" }),
-      });
+      const r = await api(\`/api/grants/\${encodeURIComponent(id)}/approve\`, { method: "POST", body: JSON.stringify(body) });
       flash(r.ok ? "Approved. The agent can retry now." : errorMessage(r, "Approve failed"), r.ok);
     } catch (err) {
       flash(loadErrorText(err, "Approve failed"), false);
@@ -830,6 +939,20 @@ async function approve(id        , button                   )                {
   });
   await loadInbox();
   listeners.onChanged();
+}
+
+/** One click: no \`scope\`, so the server narrows to the requested call when the agent stated one. */
+async function approve(id        , button                   )                {
+  await postApprove(id, { policy: "prompt" }, button);
+}
+
+async function approveWithLimits(id        , form                 )                {
+  const body = readLimits(form);
+  if ("error" in body) {
+    flash(body.error, false);
+    return;
+  }
+  await postApprove(id, body, form);
 }
 
 async function deny(id        , button                   )                {
@@ -861,6 +984,8 @@ async function loadInbox()                {
     const count = needs.length + grants.filter((g) => g.status !== "active").length;
     listeners.onCount(count);
     setHidden("inbox-empty", needs.length + grants.length > 0);
+    // A poll must not wipe a limits form the operator is filling in.
+    if (el.querySelector("details[data-limits][open]")) return;
     const now = Date.now();
     render(el, html\`\${needs.map(needCard)}\${grants.map((g) => grantCard(g, now))}\`);
   } catch (err) {
@@ -898,6 +1023,12 @@ function bindInbox(on                )       {
       const [client, name] = (t.dataset.denyLabel ?? "|").split("|");
       void requestDeny(t.dataset.deny, client ?? "the agent", name ?? "this credential", t);
     }
+  });
+  el?.addEventListener("submit", (e) => {
+    const form = e.target instanceof HTMLFormElement ? e.target : null;
+    if (!form?.dataset.limitsForm) return;
+    e.preventDefault();
+    void approveWithLimits(form.dataset.limitsForm, form);
   });
   const code = byId                 ("code");
   code?.addEventListener("submit", (e) => {
@@ -1213,12 +1344,21 @@ function agentRow(c              , environments          )           {
   </div>\`;
 }
 
-function grantRow(g             )           {
+/** Approvals rows carry the grant's policy and limits (3.1); older servers omit them. */
+
+function grantRow(g                   )           {
   const live = g.status === "active" || g.status === "pending";
+  const scope = describeScope(g.grant_scope);
   return html\`<div class="access-row" data-testid="grant-row">
     <div class="access-row-main">
-      <p class="access-row-title">\${g.client_name} → <span class="mono">\${g.item_name || "credential"}</span> \${statusPill(g.status)}</p>
-      <p class="access-meta">\${meta([when("Requested", g.created_at), when("Approved", g.approved_at), when("Last used", g.last_access_at)])}</p>
+      <p class="access-row-title">\${g.client_name} → <span class="mono">\${g.item_name || "credential"}</span> \${statusPill(g.status)}\${g.policy && g.policy !== "prompt" ? html\` <span class="pill">\${g.policy.replace("_", " ")}</span>\` : ""}</p>
+      <p class="access-meta">\${meta([
+        scope ? html\`<span data-testid="grant-scope">\${scope}</span>\` : "",
+        !scope && g.expires_at ? html\`Expires \${timeHtml(g.expires_at)}\` : "",
+        when("Requested", g.created_at),
+        when("Approved", g.approved_at),
+        when("Last used", g.last_access_at),
+      ])}</p>
     </div>
     <div class="access-row-actions">
       \${live ? html\`<button type="button" class="btn-danger btn-small" data-grant-revoke="\${g.id}" data-testid="grant-revoke">Revoke</button>\` : ""}

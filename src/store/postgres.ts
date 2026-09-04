@@ -25,11 +25,18 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER2_PG,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_OAUTH_ALTER_PG,
+  HOSTED_SCHEMA_SCOPE_ALTER_PG,
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
   oidcPayloadIndex,
+  parseCallsUsed,
+  parseNullableInt,
+  parseRequestedScope,
+  parseScopeList,
+  requestedScopeJson,
+  scopeListJson,
   type AuditListFilter,
   type IdentityKeyRecord,
   type OidcPayloadRow,
@@ -108,6 +115,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER2_PG);
     await this.#pool.query(HOSTED_SCHEMA_OAUTH_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_SCOPE_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
@@ -502,8 +510,10 @@ export class PostgresStore implements VaultStore {
 
   async insertPolicy(row: PolicyRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO policies (id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO policies (
+        id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at,
+        methods, path_prefixes, hosts, max_calls, calls_used, expires_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         row.id,
         row.orgId,
@@ -513,8 +523,22 @@ export class PostgresStore implements VaultStore {
         row.environmentId,
         row.kind,
         row.createdAt,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        row.callsUsed,
+        row.expiresAt,
       ],
     );
+  }
+
+  async recordPolicyCall(id: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      "UPDATE policies SET calls_used = calls_used + 1 WHERE id=$1 AND (max_calls IS NULL OR calls_used < max_calls)",
+      [id],
+    );
+    return r.rowCount === 1;
   }
 
   async deletePolicy(id: string): Promise<void> {
@@ -552,28 +576,7 @@ export class PostgresStore implements VaultStore {
   }
 
   async insertGrant(row: HostedGrantRecord): Promise<void> {
-    await this.#pool.query(
-      `INSERT INTO grants (
-        id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-        expires_at, created_at, approved_at, consumed_at, task_id, task_description
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [
-        row.id,
-        row.orgId,
-        row.clientId,
-        row.itemId,
-        row.folderId,
-        row.environmentId,
-        row.policy,
-        row.status,
-        row.expiresAt,
-        row.createdAt,
-        row.approvedAt,
-        row.consumedAt,
-        row.taskId,
-        row.taskDescription,
-      ],
-    );
+    await this.#pool.query(GRANT_INSERT_SQL, grantValues(row));
   }
 
   async getGrant(id: string): Promise<HostedGrantRecord | undefined> {
@@ -599,7 +602,8 @@ export class PostgresStore implements VaultStore {
   async updateGrant(row: HostedGrantRecord): Promise<void> {
     await this.#pool.query(
       `UPDATE grants SET status=$1, policy=$2, expires_at=$3, approved_at=$4, consumed_at=$5,
-       item_id=$6, folder_id=$7, task_id=$8, task_description=$9 WHERE id=$10`,
+       item_id=$6, folder_id=$7, task_id=$8, task_description=$9,
+       methods=$10, path_prefixes=$11, hosts=$12, max_calls=$13, requested_scope_json=$14 WHERE id=$15`,
       [
         row.status,
         row.policy,
@@ -610,9 +614,26 @@ export class PostgresStore implements VaultStore {
         row.folderId,
         row.taskId,
         row.taskDescription,
+        scopeListJson(row.methods),
+        scopeListJson(row.pathPrefixes),
+        scopeListJson(row.hosts),
+        row.maxCalls,
+        requestedScopeJson(row.requestedScope),
         row.id,
       ],
     );
+  }
+
+  async recordGrantCall(id: string, at: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      `UPDATE grants SET
+         calls_used = calls_used + 1,
+         status = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN 'consumed' ELSE status END,
+         consumed_at = CASE WHEN max_calls IS NOT NULL AND calls_used + 1 >= max_calls THEN $1 ELSE consumed_at END
+       WHERE id=$2 AND status='active' AND (max_calls IS NULL OR calls_used < max_calls)`,
+      [at, id],
+    );
+    return r.rowCount === 1;
   }
 
   async consumeGrant(id: string, consumedAt: string): Promise<boolean> {
@@ -792,13 +813,7 @@ export class PostgresStore implements VaultStore {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         itemValues(input.item),
       );
-      await client.query(
-        `INSERT INTO grants (
-          id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-          expires_at, created_at, approved_at, consumed_at, task_id, task_description
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-        grantValues(input.grant),
-      );
+      await client.query(GRANT_INSERT_SQL, grantValues(input.grant));
       const claimed = await client.query(
         `UPDATE need_items SET status='fulfilled', item_id=$1, grant_id=$2, fulfilled_at=$3
          WHERE id=$4 AND status='pending'`,
@@ -1314,6 +1329,12 @@ function mapPolicy(row: unknown): PolicyRecord | undefined {
     environmentId: String(rec.environment_id),
     kind: rec.kind as PolicyRecord["kind"],
     createdAt: String(rec.created_at),
+    methods: parseScopeList(rec.methods),
+    pathPrefixes: parseScopeList(rec.path_prefixes),
+    hosts: parseScopeList(rec.hosts),
+    maxCalls: parseNullableInt(rec.max_calls),
+    callsUsed: parseCallsUsed(rec.calls_used),
+    expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
   };
 }
 
@@ -1335,6 +1356,12 @@ function mapGrant(row: unknown): HostedGrantRecord | undefined {
     consumedAt: rec.consumed_at == null ? null : String(rec.consumed_at),
     taskId: rec.task_id == null ? null : String(rec.task_id),
     taskDescription: rec.task_description == null ? null : String(rec.task_description),
+    methods: parseScopeList(rec.methods),
+    pathPrefixes: parseScopeList(rec.path_prefixes),
+    hosts: parseScopeList(rec.hosts),
+    maxCalls: parseNullableInt(rec.max_calls),
+    callsUsed: parseCallsUsed(rec.calls_used),
+    requestedScope: parseRequestedScope(rec.requested_scope_json),
   };
 }
 
@@ -1474,6 +1501,12 @@ function itemValues(row: ItemRecord): unknown[] {
   ];
 }
 
+const GRANT_INSERT_SQL = `INSERT INTO grants (
+  id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
+  expires_at, created_at, approved_at, consumed_at, task_id, task_description,
+  methods, path_prefixes, hosts, max_calls, calls_used, requested_scope_json
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`;
+
 function grantValues(row: HostedGrantRecord): unknown[] {
   return [
     row.id,
@@ -1490,5 +1523,11 @@ function grantValues(row: HostedGrantRecord): unknown[] {
     row.consumedAt,
     row.taskId,
     row.taskDescription,
+    scopeListJson(row.methods),
+    scopeListJson(row.pathPrefixes),
+    scopeListJson(row.hosts),
+    row.maxCalls,
+    row.callsUsed,
+    requestedScopeJson(row.requestedScope),
   ];
 }
