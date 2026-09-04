@@ -309,7 +309,7 @@ test("hosted find then operator fulfill never leaks canary into MCP collect HTML
         id: 2,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "SPOTIFY_TOKEN", method: "GET", path: "/v1/me" },
         },
       },

@@ -18,6 +18,7 @@ import type {
   PersistFulfillInput,
   PolicyRecord,
   UserRecord,
+  VaultEnvName,
   VaultRecord,
 } from "../hosted-types.ts";
 import { isUniqueViolation, StoreConflictError } from "./conflict.ts";
@@ -156,6 +157,15 @@ export class SqliteHostedStore implements VaultStore {
   async deleteOrg(orgId: string): Promise<void> {
     this.#db.exec("BEGIN");
     try {
+      this.#db
+        .prepare(
+          `DELETE FROM oidc_payloads WHERE json_extract(payload, '$.accountId') IN (
+            SELECT user_id FROM org_members WHERE org_id = ?
+          )`,
+        )
+        .run(orgId);
+      this.#db.prepare("DELETE FROM access_events WHERE org_id = ?").run(orgId);
+      this.#db.prepare("DELETE FROM rate_hits WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM need_items WHERE org_id = ?").run(orgId);
       this.#db
         .prepare(
@@ -413,6 +423,10 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare("UPDATE clients SET hashed_secret = ?, last4 = ? WHERE id = ?")
       .run(hashedSecret, tokenLast4, id);
+  }
+
+  async updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void> {
+    this.#db.prepare("UPDATE clients SET environment = ? WHERE id = ?").run(environment, id);
   }
 
   async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
@@ -968,6 +982,16 @@ export class SqliteHostedStore implements VaultStore {
       userId: String(r.user_id),
       role: r.role as MemberRecord["role"],
     }));
+  }
+
+  async listMemberEmails(orgId: string): Promise<string[]> {
+    const rows = this.#db
+      .prepare(
+        `SELECT u.email AS email FROM org_members m JOIN users u ON u.id = m.user_id
+         WHERE m.org_id = ? AND u.email_verified_at IS NOT NULL ORDER BY u.email`,
+      )
+      .all(orgId) as { email: string }[];
+    return rows.map((r) => String(r.email));
   }
 
   async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {

@@ -49,7 +49,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   {
     name: "list_secrets",
     description:
-      "List named secrets in the grant vault. Returns names, last-4, and timestamps only — never secret values.",
+      "List named secrets in the grant vault. Returns names, last-4, and timestamps only, never secret values.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -79,7 +79,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
   {
     name: "list_grants",
     description:
-      "List grant status (pending/active/revoked/consumed). Names and metadata only — never secret values.",
+      "List grant status (pending/active/revoked/consumed). Names and metadata only, never secret values.",
     inputSchema: {
       type: "object",
       properties: {
@@ -148,7 +148,7 @@ function dispatch(vault: Vault, name: string, args: Record<string, unknown>): un
         return {
           status: "need_item",
           message:
-            "No secret with that name. Store it with `vault store` or the local console. Do not paste the secret into chat.",
+            "No secret with that name. Store it with `vault set` or the local console. Do not paste the secret into chat.",
         };
       }
       return publicGrant(

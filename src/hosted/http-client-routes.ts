@@ -1,4 +1,4 @@
-/** Operator client routes: issue, rotate machine bearers. */
+/** Operator client routes: issue and rotate machine bearers, move a client between environments. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { requireOperator, type Principal } from "./auth.ts";
 import { asEnv, json, readJson } from "./http-util.ts";
@@ -22,6 +22,19 @@ export async function handleClientRoutes(
       decodeURIComponent(rotateClient[1] ?? ""),
     );
     json(res, 200, out);
+    return true;
+  }
+  const setEnv = /^\/api\/clients\/([^/]+)\/environment$/.exec(path);
+  if (method === "POST" && setEnv) {
+    const op = requireOperator(principal);
+    const body = await readJson(req);
+    const client = await kernel.setClientEnvironment(
+      op.orgId,
+      op.userId,
+      decodeURIComponent(setEnv[1] ?? ""),
+      asEnv(body.environment),
+    );
+    json(res, 200, { client: { id: client.id, name: client.name, environment: client.environment } });
     return true;
   }
   if (method === "POST" && path === "/api/clients/trusted") {

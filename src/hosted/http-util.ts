@@ -1,11 +1,12 @@
 /** Shared request/response helpers for the hosted HTTP router and its route modules. */
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WWW_AUTHENTICATE_REALM } from "../brand.ts";
 import type { GrantPolicy, ItemKind, VaultEnvName } from "../hosted-types.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import { corsHeaders, corsPath, corsPublicUrl } from "./http-cors.ts";
 import { mcpWwwAuthenticate } from "./oauth-metadata.ts";
-import { captureException } from "./observe.ts";
+import { captureException, logVaultEvent } from "./observe.ts";
 import { securityHeaders } from "./security-headers.ts";
 
 export const BODY_CAP = 128 * 1024;
@@ -19,8 +20,21 @@ export function json(res: ServerResponse, status: number, body: unknown, skipSec
   res.end(JSON.stringify(body));
 }
 
+export function sendHtml(res: ServerResponse, status: number, html: string, extra: Record<string, string>): void {
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    ...extra,
+  });
+  res.end(html);
+}
+
+/**
+ * HttpError and NeedItemError go to the client as they are. Anything else is a bug or a store
+ * failure: the client gets a generic 500 with an `x-request-id`, the detail is logged and captured
+ * server-side under that id. Driver messages (pg constraint names, row values) never leave the process.
+ */
 export function sendError(res: ServerResponse, err: unknown, path = ""): void {
-  void captureException(err);
   const routePath = path || corsPath(res);
   if (isNeedItemError(err)) {
     const headers: Record<string, string> = {
@@ -48,11 +62,20 @@ export function sendError(res: ServerResponse, err: unknown, path = ""): void {
     res.end(JSON.stringify({ error: err.message, ...err.extra }));
     return;
   }
+  const requestId = randomUUID();
   const message = err instanceof Error ? err.message : String(err);
-  json(res, 400, { error: message });
+  logVaultEvent("request_error", { requestId, path: routePath, message: message.slice(0, 500) });
+  void captureException(err);
+  res.writeHead(500, {
+    "content-type": "application/json; charset=utf-8",
+    "x-request-id": requestId,
+    ...securityHeaders({ html: false }),
+    ...corsHeaders(res),
+  });
+  res.end(JSON.stringify({ error: "Internal error", request_id: requestId }));
 }
 
-export async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readRaw(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -61,10 +84,32 @@ export async function readJson(req: IncomingMessage): Promise<Record<string, unk
     if (size > BODY_CAP) throw new HttpError(413, "Body too large");
     chunks.push(buf);
   }
-  if (chunks.length === 0) return {};
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  return Buffer.concat(chunks);
+}
+
+/** JSON object body. Malformed JSON is a 400 that does not echo the bytes back. */
+export async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readRaw(req);
+  if (raw.length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.toString("utf8"));
+  } catch (err) {
+    if (err instanceof SyntaxError) throw new HttpError(400, "Invalid JSON");
+    throw err;
+  }
   if (!parsed || typeof parsed !== "object") return {};
   return parsed as Record<string, unknown>;
+}
+
+/** JSON or `application/x-www-form-urlencoded` (HTML forms). Form values are strings. */
+export async function readJsonOrForm(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const type = typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "";
+  if (!type.includes("application/x-www-form-urlencoded")) return readJson(req);
+  const raw = await readRaw(req);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of new URLSearchParams(raw.toString("utf8"))) out[k] = v;
+  return out;
 }
 
 export function asEnv(value: unknown): VaultEnvName {

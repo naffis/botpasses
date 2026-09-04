@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT } from "../brand.ts";
-import type { VaultEnvName } from "../hosted-types.ts";
+import { defaultEnvironmentForDeployPlane } from "./deploy-plane.ts";
 import {
   requireModelOrOperator,
   requireOperator,
@@ -42,7 +42,28 @@ import type Provider from "oidc-provider";
 
 const KEEPALIVE_MS = 25_000;
 
-export { hostAllowed } from "./http-cors.ts";
+/**
+ * Host header check. Loopback hosts are only trusted when `allowLoopback` is set (tests and
+ * local runs); a public plane never answers to `Host: localhost`.
+ */
+export function hostAllowed(hostHeader: string, allowed: string[], allowLoopback = false): boolean {
+  const host = (hostHeader.split(":")[0] ?? "").toLowerCase();
+  if (!host) return false;
+  if (isLoopbackHost(host)) return allowLoopback;
+  return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+function originIsLoopback(origin: string): boolean {
+  try {
+    return isLoopbackHost(new URL(origin).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;
@@ -65,12 +86,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
   const port = opts.port ?? 8788;
   const publicUrl = opts.publicUrl ?? opts.kernel.publicUrl;
   const auth = opts.authResolver ?? testAuthResolver;
-  const limiter = opts.kernel.limiter;
   const agentpass = agentPassEnabled() ? new AgentPassAuthority(opts.kernel, publicUrl) : undefined;
   const allowed = opts.allowedHosts ?? hostAllowlist(publicUrl);
   const siteRoot = opts.siteRoot;
   const deployPlane = opts.deployPlane ?? opts.kernel.deployPlane;
   const testMode = opts.authResolver === testAuthResolver || process.env.VAULT_AUTH_MODE === "test";
+  const allowLoopback = auth === testAuthResolver || testMode || !publicUrl.startsWith("https://");
   const secureCookies = opts.secureCookies ?? publicUrl.startsWith("https://");
   const identity = opts.identity;
   const oidcProvider = opts.oidcProvider;
@@ -187,7 +208,11 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
-    if (!originOk(req, allowed, path)) {
+    if (!originOk(req, allowed, path) || !hostAllowed(req.headers.host ?? "", allowed, allowLoopback)) {
+      json(res, 403, { error: "Origin/Host not allowed" });
+      return;
+    }
+    if (!allowLoopback && originHdr && originIsLoopback(originHdr) && !isMcpClientSurface(path)) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
     }
@@ -239,13 +264,11 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && path === "/mcp") {
-      if (principal) {
-        try {
-          requireModelOrOperator(principal);
-        } catch (err) {
-          sendError(res, err, path);
-          return;
-        }
+      try {
+        requireModelOrOperator(principal);
+      } catch (err) {
+        sendError(res, err, path);
+        return;
       }
       sseKeepalive(res);
       return;
@@ -287,13 +310,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
       res.end();
       return;
     }
-    if (method === "GET" && (path === "/console" || (!siteRoot && (path === "/" || path === "/index.html")))) {
+    if (
+      (method === "GET" || method === "HEAD") &&
+      (path === "/console" || (!siteRoot && (path === "/" || path === "/index.html")))
+    ) {
       const nonce = newCspNonce();
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         ...operatorAppHeaders(nonce),
       });
-      res.end(hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce, deployPlane }));
+      res.end(method === "HEAD" ? undefined : hostedOperatorHtml({ hosted: Boolean(siteRoot), nonce, deployPlane }));
       return;
     }
     const collect = /^\/collect\/([^/]+)$/.exec(path);
@@ -346,13 +372,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
       }
       let model: ModelPrincipal;
       try {
-        model = await mcpModelPrincipal(opts.kernel, principal, body);
+        assertCookieMcpRequest(req, principal, {
+          identity,
+          secureCookies,
+          publicOrigin: new URL(publicUrl).origin,
+          allowLoopback,
+        });
+        model = await mcpModelPrincipal(opts.kernel, principal, deployPlane);
       } catch (err) {
         sendError(res, err, path);
         return;
-      }
-      if (body.method === "tools/call" && mcpToolName(body) === "request_grant") {
-        if (!(await limiter.allow(model.orgId))) throw new HttpError(429, "request_grant rate limit");
       }
       const rpc = await handleHostedMcpRpc(
         {
@@ -415,7 +444,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
       if (handled) return;
     }
     const mutating = method === "POST" || method === "DELETE" || method === "PATCH" || method === "PUT";
-    if (identity && mutating && !path.startsWith("/api/auth/") && principal?.channel === "operator" && principal.sessionHash) {
+    if (identity && mutating && cookieCsrfApplies(path, principal)) {
       identity.assertCsrf(
         req.headers.cookie,
         typeof req.headers["x-csrf-token"] === "string" ? req.headers["x-csrf-token"] : undefined,
@@ -441,7 +470,14 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
     if (await handleItemRoutes(req, res, url, method, path, principal, opts.kernel)) return;
     if (await handleClientRoutes(req, res, method, path, principal, opts.kernel, publicUrl)) return;
-    if (await handleGrantRoutes(req, res, url, method, path, principal, opts.kernel)) return;
+    if (
+      await handleGrantRoutes(req, res, url, method, path, principal, {
+        kernel: opts.kernel,
+        htmlHeaders: () => operatorAppHeaders(newCspNonce()),
+      })
+    ) {
+      return;
+    }
     if (method === "DELETE" && path === "/api/orgs") {
       const op = requireOperator(principal);
       const body = await readJson(req);
@@ -552,14 +588,45 @@ export function createHostedServer(opts: HostedHttpOpts) {
   };
 }
 
+/**
+ * Cookie sessions may drive MCP as a model (the stdio shim), but only from our own pages: the
+ * request must carry the CSRF header and an Origin on this deployment (S4). Bearer principals
+ * and header-authenticated test principals have no cookie to ride.
+ */
+function assertCookieMcpRequest(
+  req: IncomingMessage,
+  principal: Principal | undefined,
+  ctx: {
+    identity: OperatorIdentity | undefined;
+    secureCookies: boolean;
+    publicOrigin: string;
+    allowLoopback: boolean;
+  },
+): void {
+  if (principal?.channel !== "operator" || !principal.sessionHash) return;
+  if (!ctx.identity) throw new HttpError(403, "CSRF required");
+  ctx.identity.assertCsrf(
+    req.headers.cookie,
+    typeof req.headers["x-csrf-token"] === "string" ? req.headers["x-csrf-token"] : undefined,
+    ctx.secureCookies,
+  );
+  const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+  const sameOrigin = origin === ctx.publicOrigin || (ctx.allowLoopback && originIsLoopback(origin));
+  if (!sameOrigin) throw new HttpError(403, "Origin not allowed for cookie MCP");
+}
+
+/**
+ * The stdio shim runs as a synthetic model client for the operator. Its environment is the
+ * plane default, never something the request body chose (S4).
+ */
 async function mcpModelPrincipal(
   kernel: HostedKernel,
   principal: Principal | undefined,
-  body: JsonRpcRequest,
+  deployPlane: "staging" | "production",
 ): Promise<ModelPrincipal> {
   if (principal?.channel === "model") return principal;
   if (principal?.channel === "operator") {
-    const environment = envFromMcpRpc(body);
+    const environment = defaultEnvironmentForDeployPlane(deployPlane);
     const client = await kernel.ensureModelClient({
       orgId: principal.orgId,
       name: `stdio:${principal.userId}`,
@@ -570,24 +637,23 @@ async function mcpModelPrincipal(
       channel: "model",
       orgId: principal.orgId,
       clientId: client.id,
-      environment,
+      environment: client.environment,
     };
   }
   throw new HttpError(401, "Model OAuth required");
 }
 
-function envFromMcpRpc(body: JsonRpcRequest): VaultEnvName {
-  const params = body.params;
-  if (!params || typeof params !== "object") return "staging";
-  const args = params.arguments;
-  if (!args || typeof args !== "object" || args === null) return "staging";
-  const env = (args as { environment?: unknown }).environment;
-  return env === "production" ? "production" : "staging";
-}
-
-function mcpToolName(body: JsonRpcRequest): string | undefined {
-  const name = body.params?.name;
-  return typeof name === "string" ? name : undefined;
+/**
+ * Cookie sessions need the double-submit header on every mutation. Only the email-OTP steps
+ * (no session yet) and POST /approve (protected by its HMAC token; an HTML form from an email
+ * link cannot set headers) are exempt. TOTP and logout are no longer exempt here; their handlers
+ * run first in `handleAuthApi` and enforce CSRF themselves.
+ */
+function cookieCsrfApplies(path: string, principal: Principal | undefined): boolean {
+  if (principal?.channel !== "operator" || !principal.sessionHash) return false;
+  if (path.startsWith("/api/auth/otp/")) return false;
+  if (path === "/approve") return false;
+  return true;
 }
 
 function sseKeepalive(res: ServerResponse): void {

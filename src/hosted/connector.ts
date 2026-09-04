@@ -7,7 +7,7 @@ import {
   isBlockedIp,
   resolvePublicAddresses,
 } from "./ssrf.ts";
-import { redactOauthJson } from "../redact.ts";
+import { redactOauthJson, redactSecrets, secretEncodings } from "../redact.ts";
 
 const RESPONSE_CAP = 256 * 1024;
 const ORIGIN_TIMEOUT_MS = 10_000;
@@ -49,6 +49,12 @@ export type ConnectorRequest = {
 export type ConnectorResult = {
   status: number;
   body: string;
+};
+
+/** Test-only overrides for the pinned TLS path: trust a local CA and dial a non-443 port. */
+export type PinnedTlsOpts = {
+  ca?: string | Buffer;
+  port?: number;
 };
 
 export function selectConnectorHost(item: ConnectorItem, requested?: string): string {
@@ -104,13 +110,32 @@ function injectHeaders(item: ConnectorItem, host: string): Record<string, string
   return { authorization: `Bearer ${item.secret}` };
 }
 
-export function redactConnectorBody(body: string, item: ConnectorItem): string {
-  let out = redactOauthJson(body);
-  if (item.secret.length > 0) out = out.split(item.secret).join("[redacted]");
-  if (item.last4.length >= 4 && item.secret.length >= 8) {
-    out = out.split(item.last4).join("••••");
+/**
+ * Strip OAuth token fields, then every encoding of the item secret (and any extra values such as
+ * a minted access token). No body-wide last-4 masking: it rewrote dates and ids.
+ */
+export function redactConnectorBody(body: string, item: ConnectorItem, extra: readonly string[] = []): string {
+  const forms = secretEncodings(item.secret, item.username);
+  for (const value of extra) forms.push(...secretEncodings(value));
+  return redactSecrets(redactOauthJson(body), forms);
+}
+
+/** Human-readable transport failure without the request (which carries the credential). */
+export function describeOriginFailure(err: unknown, host: string, aborted: boolean): string {
+  if (aborted) return `Origin request failed: ${host} did not respond within ${ORIGIN_TIMEOUT_MS / 1000}s`;
+  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "EAI_NODATA") {
+    return `Origin request failed: DNS lookup for ${host} failed (${code})`;
   }
-  return out;
+  if (code.startsWith("ERR_TLS") || code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" ||
+      code === "DEPTH_ZERO_SELF_SIGNED_CERT" || code === "SELF_SIGNED_CERT_IN_CHAIN" || code === "ERR_OSSL_EVP_UNSUPPORTED" ||
+      code === "ERR_SSL_WRONG_VERSION_NUMBER" || code.startsWith("ERR_SSL")) {
+    return `Origin request failed: TLS handshake with ${host} failed (${code})`;
+  }
+  if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EHOSTUNREACH" || code === "ENETUNREACH" || code === "ETIMEDOUT" || code === "EPIPE") {
+    return `Origin request failed: could not connect to ${host} (${code})`;
+  }
+  return code ? `Origin request failed: ${host} (${code})` : `Origin request failed: ${host}`;
 }
 
 export async function executeConnector(
@@ -121,6 +146,7 @@ export async function executeConnector(
     resolveAddresses?: (hostname: string) => Promise<string[]>;
     /** Internal mint only. Caller must redact before any MCP/API result. */
     redact?: boolean;
+    tls?: PinnedTlsOpts;
   } = {},
 ): Promise<ConnectorResult> {
   const method = req.method.toUpperCase();
@@ -170,20 +196,26 @@ export async function executeConnector(
           body: encoded,
           signal: ac.signal,
           addresses: addrs,
+          ...opts.tls,
         });
-    const buf = Buffer.from(await res.arrayBuffer());
-    const sliced = buf.subarray(0, RESPONSE_CAP).toString("utf8");
-    const body = opts.redact === false ? sliced : redactConnectorBody(sliced, item);
+    const full = Buffer.from(await res.arrayBuffer()).toString("utf8");
+    const redacted = opts.redact === false ? full : redactConnectorBody(full, item);
+    const body = redacted.length > RESPONSE_CAP ? redacted.slice(0, RESPONSE_CAP) : redacted;
     return { status: res.status, body };
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    throw new HttpError(502, "Origin request failed");
+    throw new HttpError(502, describeOriginFailure(err, host, ac.signal.aborted));
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchPinned(
+/**
+ * Dial the resolved (public) IP directly so DNS cannot rebind between resolve and connect, while
+ * presenting the hostname for SNI, certificate verification, and the Host header. Redirects are
+ * returned as-is, never followed.
+ */
+export async function fetchPinned(
   url: string,
   init: {
     method: string;
@@ -191,7 +223,7 @@ async function fetchPinned(
     body?: string;
     signal: AbortSignal;
     addresses: string[];
-  },
+  } & PinnedTlsOpts,
 ): Promise<Response> {
   const parsed = new URL(url);
   const ip = init.addresses[0];
@@ -200,11 +232,12 @@ async function fetchPinned(
     const req = httpsRequest(
       {
         hostname: ip,
-        port: 443,
+        port: init.port ?? 443,
         path: `${parsed.pathname}${parsed.search}`,
         method: init.method,
         servername: parsed.hostname,
         headers: { ...init.headers, host: parsed.hostname },
+        ...(init.ca ? { ca: init.ca } : {}),
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -223,7 +256,7 @@ async function fetchPinned(
     );
     const onAbort = () => {
       req.destroy();
-      reject(new HttpError(502, "Origin request failed"));
+      reject(new HttpError(502, describeOriginFailure(undefined, parsed.hostname, true)));
     };
     init.signal.addEventListener("abort", onAbort, { once: true });
     req.on("error", (err) => {

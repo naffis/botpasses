@@ -111,7 +111,7 @@ async function call(ctx: Awaited<ReturnType<typeof setup>>, args: Record<string,
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "http.request", arguments: args },
+      params: { name: "http_request", arguments: args },
     }),
   });
   const rpc = await res.json();
@@ -280,7 +280,7 @@ test("avm-style model principal can tools/list without leaking secrets", async (
     assert.equal(listed.status, 200);
     assert.doesNotMatch(body, new RegExp(CLIENT_SECRET));
     assert.doesNotMatch(body, /avm_/);
-    assert.match(body, /http\.request/);
+    assert.match(body, /http_request/);
   } finally {
     await ctx.http.close();
     await ctx.store.close();

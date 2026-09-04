@@ -3,9 +3,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { assertSafePublicObject } from "../redact.ts";
 import { agentPassEnabled } from "./agentpass.ts";
 import { requireModelOrOperator, requireOperator, type Principal } from "./auth.ts";
-import { HttpError } from "./errors.ts";
-import { asEnv, asPolicy, json, optional, readJson } from "./http-util.ts";
+import { approveConfirmHtml, approveDoneHtml, approveErrorHtml } from "./approve-page.ts";
+import { isHttpError } from "./errors.ts";
+import { asEnv, asPolicy, json, optional, readJson, readJsonOrForm, sendHtml } from "./http-util.ts";
 import type { HostedKernel } from "./kernel.ts";
+
+export type GrantRouteOpts = {
+  kernel: HostedKernel;
+  /** Headers for operator HTML (CSP with nonce). */
+  htmlHeaders: () => Record<string, string>;
+};
 
 export async function handleGrantRoutes(
   req: IncomingMessage,
@@ -14,15 +21,20 @@ export async function handleGrantRoutes(
   method: string,
   path: string,
   principal: Principal | undefined,
-  kernel: HostedKernel,
+  opts: GrantRouteOpts,
 ): Promise<boolean> {
+  const { kernel } = opts;
   if (method === "POST" && path === "/api/grants/request") {
     const actor = requireModelOrOperator(principal);
     const orgId = actor.orgId;
-    if (!(await kernel.limiter.allow(orgId))) throw new HttpError(429, "request_grant rate limit");
     const body = await readJson(req);
     const clientId =
       actor.channel === "model" ? actor.clientId : String(body.client_id ?? body.clientId ?? "");
+    // S3: a model must not pick who gets the approval email; the kernel notifies org members.
+    // An operator may address one member of their own org.
+    const requested =
+      actor.channel === "operator" ? optional(body.operator_email ?? body.operatorEmail) : undefined;
+    const operatorEmail = requested ? await kernel.assertMemberEmail(orgId, requested) : undefined;
     const result = await kernel.requestGrant({
       orgId,
       clientId,
@@ -30,7 +42,7 @@ export async function handleGrantRoutes(
       environment: asEnv(body.environment),
       taskId: optional(body.task_id ?? body.taskId),
       taskDescription: optional(body.task_description ?? body.taskDescription),
-      operatorEmail: optional(body.operator_email ?? body.operatorEmail),
+      operatorEmail,
     });
     json(res, 200, {
       grant: result.grant,
@@ -97,12 +109,52 @@ export async function handleGrantRoutes(
     json(res, 200, { grant });
     return true;
   }
-  if ((method === "GET" || method === "POST") && path === "/approve") {
+  if (method === "GET" && path === "/approve") {
+    if (!principal) {
+      res.writeHead(302, { location: "/sign-in" });
+      res.end();
+      return true;
+    }
     const op = requireOperator(principal);
-    const token =
-      url.searchParams.get("token") ?? String((await readJson(req)).token ?? "");
-    const grant = await kernel.approveMagic(op.orgId, op.userId, op.role, token);
-    json(res, 200, { grant });
+    const token = url.searchParams.get("token") ?? "";
+    try {
+      const preview = await kernel.previewMagic(op.orgId, token);
+      sendHtml(
+        res,
+        200,
+        approveConfirmHtml({
+          token,
+          clientName: preview.client_name,
+          itemName: preview.item_name,
+          last4: preview.item_last4,
+          policy: preview.policy,
+          taskDescription: preview.task_description,
+        }),
+        opts.htmlHeaders(),
+      );
+    } catch (err) {
+      if (!isHttpError(err)) throw err;
+      sendHtml(res, err.status, approveErrorHtml(err.message), opts.htmlHeaders());
+    }
+    return true;
+  }
+  if (method === "POST" && path === "/approve") {
+    const op = requireOperator(principal);
+    const body = await readJsonOrForm(req);
+    const token = String(body.token ?? "");
+    const wantsHtml = (req.headers.accept ?? "").includes("text/html");
+    try {
+      const grant = await kernel.approveMagic(op.orgId, op.userId, op.role, token);
+      if (wantsHtml) {
+        const item = grant.itemId ? await kernel.store.getItem(grant.itemId) : undefined;
+        sendHtml(res, 200, approveDoneHtml(item?.name ?? "The request"), opts.htmlHeaders());
+        return true;
+      }
+      json(res, 200, { grant });
+    } catch (err) {
+      if (!wantsHtml || !isHttpError(err)) throw err;
+      sendHtml(res, err.status, approveErrorHtml(err.message), opts.htmlHeaders());
+    }
     return true;
   }
   return false;

@@ -225,7 +225,7 @@ test("http.request unknown item is need_item not connector body (AC-14)", async 
         id: 1,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "MISSING", method: "GET", path: "/" },
         },
       },
@@ -374,7 +374,7 @@ test("fulfill then http.request attaches bearer and redacts canary (AC-07)", asy
         id: 9,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { item_name: "SPOTIFY_TOKEN", method: "GET", path: "/v1/me" },
         },
       },
@@ -451,7 +451,7 @@ test("find_items found is not isError (R-23)", async () => {
     assert.equal(parsed.isError, undefined);
     assert.equal(parsed.body.status, "found");
     const next = parsed.body.next as { tool?: string } | undefined;
-    assert.equal(next?.tool, "http.request");
+    assert.equal(next?.tool, "http_request");
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -526,7 +526,7 @@ test("http.request with host only on a miss returns need_item and next, not isEr
         id: 40,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { host: "api.spotify.com", method: "GET", path: "/v1/me" },
         },
       },
@@ -557,7 +557,7 @@ test("http.request accepts a full https URL as path and finds by host", async ()
         id: 41,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { method: "GET", path: "https://api.spotify.com/v1/me" },
         },
       },
@@ -597,7 +597,7 @@ test("http.request with host requests a grant when the item exists but is not gr
         id: 42,
         method: "tools/call",
         params: {
-          name: "http.request",
+          name: "http_request",
           arguments: { host: "api.spotify.com", method: "GET", path: "/v1/me" },
         },
       },
