@@ -11,6 +11,8 @@ test("connectorTargetFromArgs splits a full https path URL", () => {
   assert.equal(t.host, "api.spotify.com");
   assert.equal(t.path, "/v1/me");
   assert.equal(t.method, "GET");
+  assert.equal(t.timeoutMs, 10_000, "default origin deadline");
+  assert.equal(t.dryRun, false);
 });
 
 test("connectorTargetFromArgs keeps path and host when already split", () => {
@@ -30,6 +32,16 @@ test("connectorTargetFromArgs rejects missing host and item_name", () => {
   );
 });
 
+test("timeout_ms is clamped to 1000..30000 and dry_run must be a boolean (3.4)", () => {
+  const base = { host: "api.example.com", method: "GET", path: "/v1/me" };
+  assert.equal(connectorTargetFromArgs({ ...base, timeout_ms: 50 }).timeoutMs, 1000);
+  assert.equal(connectorTargetFromArgs({ ...base, timeout_ms: 99_999 }).timeoutMs, 30_000);
+  assert.equal(connectorTargetFromArgs({ ...base, timeout_ms: 2500.4 }).timeoutMs, 2500);
+  assert.throws(() => connectorTargetFromArgs({ ...base, timeout_ms: "fast" }), /timeout_ms must be a number/);
+  assert.equal(connectorTargetFromArgs({ ...base, dry_run: true }).dryRun, true);
+  assert.throws(() => connectorTargetFromArgs({ ...base, dry_run: "yes" }), /dry_run must be true or false/);
+});
+
 test("need_item payload includes next.for_model", () => {
   const steered = attachMcpNext({
     status: "need_item",
@@ -46,11 +58,17 @@ test("need_item payload includes next.for_model", () => {
   assert.equal(steered.next?.arguments?.method, "GET");
   assert.equal(steered.next?.arguments?.path, "/v1/me");
   assert.equal(steered.next?.arguments?.host, "api.spotify.com");
-  assert.equal(nextForPayload({ status: 200, body: "{}" })?.for_model.includes("redacted"), true);
+  assert.equal(nextForPayload({ origin_status: 200, status: 200, body: "{}" })?.for_model.includes("redacted"), true);
+});
+
+test("origin results are keyed on origin_status, so a numeric legacy status alone is not steered", () => {
+  assert.equal(nextForPayload({ status: 200, body: "{}" }), undefined);
+  assert.match(nextForPayload({ origin_status: 200, body: "{}" })?.for_model ?? "", /origin_headers/);
 });
 
 test("origin 401 next tells the model to retry the same grant", () => {
   const next = nextForPayload({
+    origin_status: 401,
     status: 401,
     body: "",
     hint: "Upstream 401",
@@ -62,17 +80,27 @@ test("origin 401 next tells the model to retry the same grant", () => {
 });
 
 test("origin 4xx says fix the request, 5xx says retry once; neither asks for a new approval (3.4)", () => {
-  const bad = nextForPayload({ status: 404, body: "{}", retry: { method: "GET", path: "/v1/nope", host: "api.example.com" } });
+  const bad = nextForPayload({ origin_status: 404, status: 404, body: "{}", retry: { method: "GET", path: "/v1/nope", host: "api.example.com" } });
   assert.equal(bad?.tool, "http_request");
   assert.match(bad?.for_model ?? "", /rejected by the API; change the path, query, or body before retrying/);
   assert.match(bad?.for_model ?? "", /Do not ask for a new approval/);
-  const flaky = nextForPayload({ status: 503, body: "", retry: { method: "GET", path: "/v1/me", host: "api.example.com" } });
+  const flaky = nextForPayload({ origin_status: 503, status: 503, body: "", retry: { method: "GET", path: "/v1/me", host: "api.example.com" } });
   assert.equal(flaky?.tool, "http_request");
   assert.match(flaky?.for_model ?? "", /Transient origin error; retry once/);
-  for (const next of [bad, flaky, nextForPayload({ status: 401, body: "" }), nextForPayload({ status: "need_item", collect_url: "x" })]) {
+  for (const next of [bad, flaky, nextForPayload({ origin_status: 401, body: "" }), nextForPayload({ status: "need_item", collect_url: "x" })]) {
     assert.doesNotMatch(next?.for_model ?? "", /spotify|grok/i, "generic steering names no vendor");
     assert.doesNotMatch(next?.for_model ?? "", /http\.request|—/);
   }
+});
+
+test("dry_run reports steer to a real call or to fixing the target, and never to pasting a key", () => {
+  const go = nextForPayload({ dry_run: true, would_send: true, reason: "ok", retry: { method: "GET", path: "/v1/me", item_name: "X" } });
+  assert.match(go?.for_model ?? "", /nothing was sent/i);
+  assert.match(go?.for_model ?? "", /without dry_run/);
+  assert.equal(go?.arguments?.item_name, "X");
+  const no = nextForPayload({ dry_run: true, would_send: false, reason: "grant_required" });
+  assert.match(no?.for_model ?? "", /reason: grant_required/);
+  assert.doesNotMatch(no?.for_model ?? "", /paste/i);
 });
 
 test("pending grant next.arguments merges retry with item_name", () => {

@@ -60,7 +60,12 @@ async function tlsServer(dir: string, behaviour: "echo" | "redirect" | "hang"): 
           res.end("moved");
           return;
         }
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          link: '<https://api.pinned.test/v1/thing?page=2>; rel="next"',
+          "x-ratelimit-remaining": "9",
+          "set-cookie": "sid=never-forwarded",
+        });
         res.end(JSON.stringify({ host: req.headers.host, auth: req.headers.authorization ?? null }));
       });
     },
@@ -83,6 +88,8 @@ test("fetchPinned dials the pinned IP with the hostname as SNI and Host, and ver
       port,
     });
     assert.equal(res.status, 200);
+    assert.equal(res.headers.get("link"), '<https://api.pinned.test/v1/thing?page=2>; rel="next"', "origin headers are forwarded");
+    assert.equal(res.headers.get("x-ratelimit-remaining"), "9");
     const body = (await res.json()) as { host: string; auth: string };
     assert.equal(body.host, HOST, "Host header is the hostname, not the IP");
     assert.equal(body.auth, "Bearer not-a-real-token");
@@ -147,11 +154,12 @@ test("fetchPinned aborts a hung origin and reports a timeout without the request
           addresses: ["127.0.0.1"],
           ca: cert,
           port,
+          timeoutMs: 3000,
         }),
       (err: unknown) =>
         isHttpError(err) &&
         err.status === 502 &&
-        /did not respond within/.test(err.message) &&
+        /did not respond within 3s/.test(err.message) &&
         !err.message.includes("secret-value-never-shown"),
     );
   } finally {

@@ -46,6 +46,8 @@ Call a third-party API. Botpasses finds the credential by host or name, requests
 | `content_type` | no | `application/json` or `application/x-www-form-urlencoded` |
 | `client_id` | no | Public OAuth client ID when the credential is a client secret |
 | `task_description` | no | Shown to the operator in the Inbox, truncated to 500 characters |
+| `timeout_ms` | no | Origin deadline in ms, 1000 to 30000 (default 10000) |
+| `dry_run` | no | `true`: report which credential and approval would be used without calling the API |
 
 Request:
 
@@ -148,3 +150,11 @@ The `initialize` response carries these instructions. They are written for the m
 - [HTTP API](/docs/reference/http-api): the routes that wrap the same vault.
 - [Rate limits](/docs/reference/rate-limits).
 - [Troubleshooting](/docs/troubleshooting): `host_mismatch`, pending approvals, connect cards.
+
+## Result shape
+
+A successful call returns `origin_status` (the API's HTTP status), a redacted `body`, and `origin_headers` limited to `content-type`, `link`, `retry-after`, `x-ratelimit-*`, and `x-request-id`. `status` duplicates `origin_status` for one release. With `dry_run: true` the result names the credential, host, method, path, approval state, inject mode, and provider, and nothing is sent.
+
+## Providers and inject modes
+
+Botpasses mints and refreshes OAuth tokens for Spotify, GitHub, Google, Slack, and Stripe Connect; pass `client_id` when the credential is an OAuth client secret. Credentials can be sent as `bearer`, `basic`, `header:<name>`, `query:<param>`, `cookie:<name>`, AWS `sigv4`, or a request signature (`hmac:stripe_sig`, `hmac:slack_sig`, `hmac:github_sig`). Unknown modes are refused when stored.

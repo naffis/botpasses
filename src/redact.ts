@@ -15,36 +15,44 @@ const OAUTH_TOKEN_KEYS = new Set([
   "client_secret",
 ]);
 
-const OAUTH_TOKEN_RE = /"(?:access_token|refresh_token|id_token|client_secret)"\s*:\s*"[^"]*"/gi;
+function escapeRe(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-function redactOauthTree(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(redactOauthTree);
+function tokenKeyRe(keys: ReadonlySet<string>): RegExp {
+  return new RegExp(`"(?:${[...keys].map(escapeRe).join("|")})"\\s*:\\s*"[^"]*"`, "gi");
+}
+
+function redactOauthTree(node: unknown, keys: ReadonlySet<string>): unknown {
+  if (Array.isArray(node)) return node.map((n) => redactOauthTree(n, keys));
   if (!node || typeof node !== "object") return node;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
     out[key] =
-      OAUTH_TOKEN_KEYS.has(key.toLowerCase()) && typeof value === "string"
+      keys.has(key.toLowerCase()) && typeof value === "string"
         ? "[redacted]"
-        : redactOauthTree(value);
+        : redactOauthTree(value, keys);
   }
   return out;
 }
 
 /**
  * Replace token fields anywhere in an origin JSON body (nested objects and arrays included).
- * Non-JSON bodies get a structural regex pass over `"access_token": "..."` shapes.
+ * Non-JSON bodies get a structural regex pass over `"access_token": "..."` shapes. `extraKeys`
+ * adds a provider's own token field names to the standard OAuth set.
  */
-export function redactOauthJson(body: string): string {
+export function redactOauthJson(body: string, extraKeys: readonly string[] = []): string {
   const trimmed = body.trim();
   if (!trimmed) return body;
+  const keys = new Set([...OAUTH_TOKEN_KEYS, ...extraKeys.map((k) => k.toLowerCase())]);
+  const re = tokenKeyRe(keys);
+  const textual = () => body.replace(re, (m) => m.replace(/:\s*"[^"]*"$/, ':"[redacted]"'));
   try {
     const parsed: unknown = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== "object") {
-      return body.replace(OAUTH_TOKEN_RE, (m) => m.replace(/:\s*"[^"]*"$/, ':"[redacted]"'));
-    }
-    return JSON.stringify(redactOauthTree(parsed));
+    if (!parsed || typeof parsed !== "object") return textual();
+    return JSON.stringify(redactOauthTree(parsed, keys));
   } catch {
-    return body.replace(OAUTH_TOKEN_RE, (m) => m.replace(/:\s*"[^"]*"$/, ':"[redacted]"'));
+    return textual();
   }
 }
 

@@ -170,6 +170,13 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
         },
+        timeout_ms: {
+          type: "number",
+          minimum: 1000,
+          maximum: 30000,
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_timeout_ms,
+        },
+        dry_run: { type: "boolean", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.http_dry_run },
       },
       required: ["method", "path"],
       additionalProperties: false,

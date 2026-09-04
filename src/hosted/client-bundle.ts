@@ -21,17 +21,68 @@ export const CONSOLE_BUNDLE_JS = `"use strict";
 /**
  * Store-form vocabulary shared by the server (kernel, need-ops, page templates) and the
  * browser (bundled into /assets/console.js and /assets/collect.js by scripts/build-client.ts).
- * Keep this module free of imports and Node APIs so the bundle can inline it.
+ * Keep this module free of value imports and Node APIs so the bundle can inline it (type-only
+ * imports are stripped by the build).
  */
 
-/** Username is HTTP Basic or an OAuth client id. Secret + bearer/header items do not use it. */
+/** Request-signing schemes accepted after \`hmac:\`. Mirrors the HmacScheme type. */
+const HMAC_SCHEMES                        = ["stripe_sig", "slack_sig", "github_sig"];
+
+/** RFC 7230 token: what an HTTP header name or cookie name may contain. Format check only. */
+const HTTP_TOKEN_RE = /^[!#$%&'*+\\-.^_\`|~0-9A-Za-z]+$/;
+/** Query parameter name. Conservative so the value never needs escaping in the key position. */
+const QUERY_NAME_RE = /^[A-Za-z0-9_.-]+$/;
+
+const INJECT_MODE_HELP =
+  "Accepted send modes: bearer, basic, client_credentials, refresh, sigv4, header:<name>, query:<param>, cookie:<name>, hmac:stripe_sig, hmac:slack_sig, hmac:github_sig.";
+
+/**
+ * The one place that decides whether a string is an InjectMode. Returns null for anything else
+ * so both the browser form and the server can refuse it with the same message.
+ */
+function injectModeOf(raw        )                    {
+  const value = raw.trim();
+  switch (value) {
+    case "bearer":
+    case "basic":
+    case "client_credentials":
+    case "refresh":
+    case "sigv4":
+      return value;
+    default:
+      break;
+  }
+  const sep = value.indexOf(":");
+  if (sep <= 0) return null;
+  const prefix = value.slice(0, sep);
+  const arg = value.slice(sep + 1);
+  if (prefix === "header") return HTTP_TOKEN_RE.test(arg) ? \`header:\${arg}\` : null;
+  if (prefix === "cookie") return HTTP_TOKEN_RE.test(arg) ? \`cookie:\${arg}\` : null;
+  if (prefix === "query") return QUERY_NAME_RE.test(arg) ? \`query:\${arg}\` : null;
+  if (prefix === "hmac") {
+    const scheme = HMAC_SCHEMES.find((s) => s === arg);
+    return scheme ? \`hmac:\${scheme}\` : null;
+  }
+  return null;
+}
+
+/** Message for an unknown mode. Shared by the browser form and the server's 400. */
+function invalidInjectMessage(raw        )         {
+  return \`Unknown send mode "\${raw.trim()}". \${INJECT_MODE_HELP}\`;
+}
+
+/**
+ * Username is HTTP Basic, an OAuth client id, or an AWS access key id. Secret + bearer/header
+ * items do not use it.
+ */
 function needsLoginUsername(kind        , inject        )          {
   return (
     kind === "login" ||
     kind === "client_secret" ||
     inject === "basic" ||
     inject === "client_credentials" ||
-    inject === "refresh"
+    inject === "refresh" ||
+    inject === "sigv4"
   );
 }
 
@@ -65,10 +116,22 @@ function isValidItemName(name        )          {
 function injectSummary(inject        )         {
   if (inject === "basic") return "Sent as HTTP Basic (username + password).";
   if (inject === "client_credentials") {
-    return "OAuth client secret. Botpasses mints an app token with HTTP Basic (client_id:secret) and a form body. Not a user access token.";
+    return "OAuth client secret. Botpasses mints an app token at the provider token endpoint (HTTP Basic or form body, per provider). Not a user access token.";
+  }
+  if (inject === "refresh") {
+    return "OAuth refresh token. Botpasses exchanges it for a short-lived access token before each call.";
+  }
+  if (inject === "sigv4") {
+    return "AWS Signature Version 4. Username is the access key ID; the value is the secret access key. Region and service come from the host.";
   }
   if (inject === "header:Authorization") {
     return "Sent as a raw Authorization header, with no Bearer prefix.";
+  }
+  if (inject.startsWith("header:")) return \`Sent as the \${inject.slice("header:".length)} request header.\`;
+  if (inject.startsWith("query:")) return \`Appended to the URL as ?\${inject.slice("query:".length)}=.\`;
+  if (inject.startsWith("cookie:")) return \`Sent as the \${inject.slice("cookie:".length)} cookie.\`;
+  if (inject.startsWith("hmac:")) {
+    return "Signs the request body with the secret and sets the vendor signature header. The secret itself is never sent.";
   }
   return "Sent as Authorization: Bearer. Typical for API tokens.";
 }
@@ -105,6 +168,9 @@ const INJECT_OPTIONS = [
   { value: "client_credentials", label: "OAuth client secret (mint app token)" },
   { value: "basic", label: "HTTP Basic (username + password)" },
   { value: "header:Authorization", label: "Raw Authorization header" },
+  { value: "header:X-API-Key", label: "X-API-Key header" },
+  { value: "query:api_key", label: "Query string (?api_key=)" },
+  { value: "sigv4", label: "AWS Signature V4 (access key ID + secret)" },
 ]         ;
 
 function injectOptionsHtml()         {
@@ -128,11 +194,13 @@ function kindPillLabel(kind        , inject         )         {
 
 function usernameFieldLabel(kind        , inject        )         {
   if (kind === "client_secret" || inject === "client_credentials") return "Client ID";
+  if (inject === "sigv4") return "AWS access key ID";
   return "HTTP Basic username";
 }
 
 function valueFieldLabel(kind        , inject        )         {
   if (kind === "client_secret" || inject === "client_credentials") return "Client Secret";
+  if (inject === "sigv4") return "AWS secret access key";
   return "Value";
 }
 
@@ -149,10 +217,15 @@ function splitHosts(raw        )           {
     .filter(Boolean);
 }
 
-/** One place decides how the form fields become the JSON body. */
+/**
+ * One place decides how the form fields become the JSON body. Throws on an unknown send mode so
+ * the form never posts one; the server repeats the check with \`parseInjectMode\` and answers 400.
+ */
 function storeRequestBody(values                 , opts                      )                   {
   const kind = values.kind === "client_secret" ? "client_secret" : "secret";
-  const inject = kind === "client_secret" ? "client_credentials" : values.inject || "bearer";
+  const requested = kind === "client_secret" ? "client_credentials" : values.inject || "bearer";
+  const inject = injectModeOf(requested);
+  if (!inject) throw new Error(invalidInjectMessage(requested));
   const body                   = {
     name: values.name,
     kind,
@@ -2178,17 +2251,68 @@ export const COLLECT_BUNDLE_JS = `"use strict";
 /**
  * Store-form vocabulary shared by the server (kernel, need-ops, page templates) and the
  * browser (bundled into /assets/console.js and /assets/collect.js by scripts/build-client.ts).
- * Keep this module free of imports and Node APIs so the bundle can inline it.
+ * Keep this module free of value imports and Node APIs so the bundle can inline it (type-only
+ * imports are stripped by the build).
  */
 
-/** Username is HTTP Basic or an OAuth client id. Secret + bearer/header items do not use it. */
+/** Request-signing schemes accepted after \`hmac:\`. Mirrors the HmacScheme type. */
+const HMAC_SCHEMES                        = ["stripe_sig", "slack_sig", "github_sig"];
+
+/** RFC 7230 token: what an HTTP header name or cookie name may contain. Format check only. */
+const HTTP_TOKEN_RE = /^[!#$%&'*+\\-.^_\`|~0-9A-Za-z]+$/;
+/** Query parameter name. Conservative so the value never needs escaping in the key position. */
+const QUERY_NAME_RE = /^[A-Za-z0-9_.-]+$/;
+
+const INJECT_MODE_HELP =
+  "Accepted send modes: bearer, basic, client_credentials, refresh, sigv4, header:<name>, query:<param>, cookie:<name>, hmac:stripe_sig, hmac:slack_sig, hmac:github_sig.";
+
+/**
+ * The one place that decides whether a string is an InjectMode. Returns null for anything else
+ * so both the browser form and the server can refuse it with the same message.
+ */
+function injectModeOf(raw        )                    {
+  const value = raw.trim();
+  switch (value) {
+    case "bearer":
+    case "basic":
+    case "client_credentials":
+    case "refresh":
+    case "sigv4":
+      return value;
+    default:
+      break;
+  }
+  const sep = value.indexOf(":");
+  if (sep <= 0) return null;
+  const prefix = value.slice(0, sep);
+  const arg = value.slice(sep + 1);
+  if (prefix === "header") return HTTP_TOKEN_RE.test(arg) ? \`header:\${arg}\` : null;
+  if (prefix === "cookie") return HTTP_TOKEN_RE.test(arg) ? \`cookie:\${arg}\` : null;
+  if (prefix === "query") return QUERY_NAME_RE.test(arg) ? \`query:\${arg}\` : null;
+  if (prefix === "hmac") {
+    const scheme = HMAC_SCHEMES.find((s) => s === arg);
+    return scheme ? \`hmac:\${scheme}\` : null;
+  }
+  return null;
+}
+
+/** Message for an unknown mode. Shared by the browser form and the server's 400. */
+function invalidInjectMessage(raw        )         {
+  return \`Unknown send mode "\${raw.trim()}". \${INJECT_MODE_HELP}\`;
+}
+
+/**
+ * Username is HTTP Basic, an OAuth client id, or an AWS access key id. Secret + bearer/header
+ * items do not use it.
+ */
 function needsLoginUsername(kind        , inject        )          {
   return (
     kind === "login" ||
     kind === "client_secret" ||
     inject === "basic" ||
     inject === "client_credentials" ||
-    inject === "refresh"
+    inject === "refresh" ||
+    inject === "sigv4"
   );
 }
 
@@ -2222,10 +2346,22 @@ function isValidItemName(name        )          {
 function injectSummary(inject        )         {
   if (inject === "basic") return "Sent as HTTP Basic (username + password).";
   if (inject === "client_credentials") {
-    return "OAuth client secret. Botpasses mints an app token with HTTP Basic (client_id:secret) and a form body. Not a user access token.";
+    return "OAuth client secret. Botpasses mints an app token at the provider token endpoint (HTTP Basic or form body, per provider). Not a user access token.";
+  }
+  if (inject === "refresh") {
+    return "OAuth refresh token. Botpasses exchanges it for a short-lived access token before each call.";
+  }
+  if (inject === "sigv4") {
+    return "AWS Signature Version 4. Username is the access key ID; the value is the secret access key. Region and service come from the host.";
   }
   if (inject === "header:Authorization") {
     return "Sent as a raw Authorization header, with no Bearer prefix.";
+  }
+  if (inject.startsWith("header:")) return \`Sent as the \${inject.slice("header:".length)} request header.\`;
+  if (inject.startsWith("query:")) return \`Appended to the URL as ?\${inject.slice("query:".length)}=.\`;
+  if (inject.startsWith("cookie:")) return \`Sent as the \${inject.slice("cookie:".length)} cookie.\`;
+  if (inject.startsWith("hmac:")) {
+    return "Signs the request body with the secret and sets the vendor signature header. The secret itself is never sent.";
   }
   return "Sent as Authorization: Bearer. Typical for API tokens.";
 }
@@ -2262,6 +2398,9 @@ const INJECT_OPTIONS = [
   { value: "client_credentials", label: "OAuth client secret (mint app token)" },
   { value: "basic", label: "HTTP Basic (username + password)" },
   { value: "header:Authorization", label: "Raw Authorization header" },
+  { value: "header:X-API-Key", label: "X-API-Key header" },
+  { value: "query:api_key", label: "Query string (?api_key=)" },
+  { value: "sigv4", label: "AWS Signature V4 (access key ID + secret)" },
 ]         ;
 
 function injectOptionsHtml()         {
@@ -2285,11 +2424,13 @@ function kindPillLabel(kind        , inject         )         {
 
 function usernameFieldLabel(kind        , inject        )         {
   if (kind === "client_secret" || inject === "client_credentials") return "Client ID";
+  if (inject === "sigv4") return "AWS access key ID";
   return "HTTP Basic username";
 }
 
 function valueFieldLabel(kind        , inject        )         {
   if (kind === "client_secret" || inject === "client_credentials") return "Client Secret";
+  if (inject === "sigv4") return "AWS secret access key";
   return "Value";
 }
 
@@ -2306,10 +2447,15 @@ function splitHosts(raw        )           {
     .filter(Boolean);
 }
 
-/** One place decides how the form fields become the JSON body. */
+/**
+ * One place decides how the form fields become the JSON body. Throws on an unknown send mode so
+ * the form never posts one; the server repeats the check with \`parseInjectMode\` and answers 400.
+ */
 function storeRequestBody(values                 , opts                      )                   {
   const kind = values.kind === "client_secret" ? "client_secret" : "secret";
-  const inject = kind === "client_secret" ? "client_credentials" : values.inject || "bearer";
+  const requested = kind === "client_secret" ? "client_credentials" : values.inject || "bearer";
+  const inject = injectModeOf(requested);
+  if (!inject) throw new Error(invalidInjectMessage(requested));
   const body                   = {
     name: values.name,
     kind,

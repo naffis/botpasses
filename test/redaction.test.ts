@@ -107,6 +107,36 @@ test("redactOauthJson walks nested objects and arrays", () => {
   assert.match(redactOauthJson('not json but "access_token": "zzz" here'), /"access_token":"\[redacted\]"/);
 });
 
+test("redactOauthJson takes a provider's own token keys and returns allowlisted headers only", async () => {
+  const out = redactOauthJson(JSON.stringify({ bot_token: "xoxb-1", authed_user: { access_token: "u" }, team: "T1" }), ["bot_token"]);
+  assert.doesNotMatch(out, /xoxb-1|"u"/);
+  assert.match(out, /"team":"T1"/);
+  assert.equal((out.match(/\[redacted\]/g) ?? []).length, 2);
+  const result = await executeConnector(
+    item(CANARY, "bearer"),
+    { method: "GET", path: "/page" },
+    {
+      resolveAddresses: async () => ["8.8.8.8"],
+      fetchImpl: async () =>
+        new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            link: '<https://api.echo.example/page?cursor=2>; rel="next"',
+            "x-ratelimit-remaining": "41",
+            "retry-after": "3",
+            "x-request-id": "req_1",
+            "set-cookie": `sid=${CANARY}`,
+            "x-upstream-auth": CANARY,
+          },
+        }),
+    },
+  );
+  assert.deepEqual(Object.keys(result.headers).sort(), ["content-type", "link", "retry-after", "x-ratelimit-remaining", "x-request-id"]);
+  assert.equal(result.headers.link, '<https://api.echo.example/page?cursor=2>; rel="next"');
+  assert.ok(!JSON.stringify(result.headers).includes(CANARY), "non-allowlisted headers are dropped, not redacted");
+});
+
 test("secretEncodings includes every form and skips ambiguous short derivations", () => {
   const forms = secretEncodings("abc", "u");
   assert.deepEqual(forms.filter((f) => f === "abc"), ["abc"]);

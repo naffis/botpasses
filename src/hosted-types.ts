@@ -1,7 +1,31 @@
 export type MemberRole = "owner" | "operator";
 export type VaultEnvName = "staging" | "production";
 export type ItemKind = "secret" | "login" | "client_secret";
-export type InjectMode = "bearer" | "basic" | `header:${string}`;
+/** Request-signing schemes for `hmac:<scheme>`. Algorithms: src/hosted/providers/hmac.ts. */
+export type HmacScheme = "stripe_sig" | "slack_sig" | "github_sig";
+
+/**
+ * How the connector attaches a stored value to an origin request. Grammar and validation:
+ * `injectModeOf` in src/hosted/store-form-fields.ts (shared with the browser); application:
+ * src/hosted/providers/inject.ts. Unknown strings are rejected at store time (400) and at send
+ * time (500 `inject_unsupported`); nothing falls through to Bearer.
+ */
+export type InjectMode =
+  | "bearer"
+  | "basic"
+  | "client_credentials"
+  | "refresh"
+  | "sigv4"
+  | `header:${string}`
+  | `query:${string}`
+  | `cookie:${string}`
+  | `hmac:${HmacScheme}`;
+
+/** OAuth 2.0 grant types a provider's token endpoint accepts (RFC 6749 sections 4.1, 4.4, 6). */
+export type OauthGrantType = "client_credentials" | "authorization_code" | "refresh_token";
+
+/** Where the token endpoint expects client credentials: HTTP Basic (RFC 6749 2.3.1) or form fields. */
+export type TokenAuthStyle = "basic" | "post_body";
 export type ClientKind = "model" | "trusted";
 export type GrantPolicy = "prompt" | "session" | "item_standing" | "folder_standing";
 export type HostedGrantStatus = "pending" | "active" | "revoked" | "consumed" | "expired";

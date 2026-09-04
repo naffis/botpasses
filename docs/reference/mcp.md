@@ -51,10 +51,18 @@ Call this in the same turn the user asks for an API. Do not `list_items` first. 
 | `content_type` | no | `application/json` or `application/x-www-form-urlencoded` |
 | `client_id` | no | Public OAuth Client ID when the item is a Client Secret |
 | `task_description` | no | Shown in the inbox, truncated to 500 characters |
+| `timeout_ms` | no | Origin deadline in ms, 1000 to 30000 (default 10000); out-of-range values are clamped, non-numbers are 400 |
+| `dry_run` | no | `true`: resolve the item and approval and report without calling the API or using an approval |
 
 Implementation: [src/hosted/mcp-http.ts](../../src/hosted/mcp-http.ts) `runHttpRequest`, [src/hosted/connector.ts](../../src/hosted/connector.ts).
 
 Success body: HTTP `status`, redacted origin `body` (string), optional `hint`, optional `next`. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects.
+
+Success body: `origin_status` (the API's HTTP status), redacted `body` (string), `origin_headers` (only `content-type`, `link`, `retry-after`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`, `x-request-id`), optional `hint`, optional `next`. `status` duplicates `origin_status` for one release and is deprecated. Dry run body: `{ dry_run: true, item_name, host, method, path, would_send, reason, grant_status, inject_mode, provider }` where `reason` is `ok`, `need_item`, `ambiguous`, `host_mismatch`, `grant_required`, `grant_pending`, or `inject_unsupported` and `grant_status` is `standing`, `active`, `pending`, or `none`.
+
+Providers: Botpasses mints and refreshes OAuth tokens for known providers (Spotify, GitHub, Google, Slack, Stripe Connect); pass `client_id` when the item is an OAuth client secret. Client credentials go to the provider token endpoint as HTTP Basic or form fields, per provider, never as Bearer. Paths that need a user token return a hint; a stored `<ITEM>_REFRESH` item is exchanged automatically. Refresh sends `refresh_token` and `client_id` in the form body (RFC 6749 section 6).
+
+Inject modes on items: `bearer`, `basic`, `client_credentials`, `refresh`, `sigv4`, `header:<name>`, `query:<param>`, `cookie:<name>`, `hmac:stripe_sig|slack_sig|github_sig`. Unknown modes are 400 at store time and 500 `inject_unsupported` at send time; nothing falls through to Bearer.
 
 If the item is missing, the result is `need_item` (not MCP `isError`) with `collect_url` (`${origin}/collect/:needId`, no HMAC). If a grant is required, the result is a pending grant plus `approval_code`. `host_mismatch` is MCP `isError`.
 

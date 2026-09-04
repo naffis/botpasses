@@ -4,6 +4,7 @@ import { requireOperator, type Principal } from "./auth.ts";
 import { asEnv, asHosts, asKind, json, optional, readJson } from "./http-util.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { defaultInjectForKind } from "./store-form-fields.ts";
+import { parseInjectMode } from "./providers/inject.ts";
 
 export async function handleItemRoutes(
   req: IncomingMessage,
@@ -37,7 +38,7 @@ export async function handleItemRoutes(
       value: String(body.value ?? ""),
       username: optional(body.username),
       allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-      inject: String(body.inject ?? defaultInjectForKind(kind)),
+      inject: parseInjectMode(String(body.inject ?? defaultInjectForKind(kind))),
       folderName: optional(body.folder_name ?? body.folderName),
     });
     json(res, 200, { item });
@@ -86,7 +87,7 @@ export async function handleItemRoutes(
       value: String(body.value ?? ""),
       name: optional(body.name),
       allowedHosts: asHosts(body.allowed_hosts ?? body.allowedHosts),
-      inject: String(body.inject ?? defaultInjectForKind(body.kind === undefined ? "secret" : asKind(body.kind))),
+      inject: parseInjectMode(String(body.inject ?? defaultInjectForKind(body.kind === undefined ? "secret" : asKind(body.kind)))),
       kind: body.kind === undefined ? undefined : asKind(body.kind),
       username: optional(body.username),
     });
@@ -105,7 +106,7 @@ export async function handleItemRoutes(
       kind: body.kind === undefined ? undefined : asKind(body.kind),
       environment: body.environment === undefined ? undefined : asEnv(body.environment),
       username: optional(body.username),
-      inject: optional(body.inject),
+      inject: body.inject === undefined ? undefined : parseInjectMode(String(body.inject)),
       allowedHosts: body.allowed_hosts !== undefined || body.allowedHosts !== undefined
         ? asHosts(body.allowed_hosts ?? body.allowedHosts)
         : undefined,
