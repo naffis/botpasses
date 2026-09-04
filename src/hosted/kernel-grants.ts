@@ -33,7 +33,7 @@ import type { VaultStore } from "../store/types.ts";
 import { escapeHtml } from "./auth-shell.ts";
 import { HttpError, type NeedItemError } from "./errors.ts";
 import type { OrgRateLimiter } from "./rate-limit.ts";
-import { ALLOWED_METHODS, assertAllowedHostname } from "./ssrf.ts";
+import { ALLOWED_METHODS, assertAllowedHostname, hasDotSegments } from "./ssrf.ts";
 
 export const SESSION_TTL_MS = 8 * 3600 * 1000;
 export const CODE_TTL_MS = 10 * 60 * 1000;
@@ -148,7 +148,24 @@ function normalizePath(raw: string, field: string): string {
   if (!path.startsWith("/") || path.startsWith("//") || /\s/.test(path) || path.length > PATH_MAX_CHARS) {
     throw new HttpError(400, `${field} must be a path starting with /`);
   }
+  if (hasDotSegments(path)) throw new HttpError(400, `${field} must not contain . or .. segments`);
   return path;
+}
+
+/** Path as the origin will see it: URL-normalised, no query. */
+function canonicalPath(path: string): string {
+  try {
+    return new URL(pathPrefixOf(path), "https://x.invalid").pathname || "/";
+  } catch {
+    return pathPrefixOf(path);
+  }
+}
+
+/** Prefix match on segment boundaries: `/v1/read` covers `/v1/read` and `/v1/read/x`, not `/v1/readwrite`. */
+export function pathWithinPrefix(path: string, prefix: string): boolean {
+  if (prefix === "/" || path === prefix) return true;
+  const boundary = prefix.endsWith("/") ? prefix : `${prefix}/`;
+  return path.startsWith(boundary);
 }
 
 function normalizeHost(raw: string, allowed: string[], field: string): string {
@@ -268,8 +285,9 @@ export function scopeDenialReason(scope: GrantScope, call: ConnectorCall): Scope
   if (scope.methods && !scope.methods.includes(call.method.toUpperCase())) return "method";
   if (scope.hosts && !scope.hosts.includes(call.host.toLowerCase())) return "host";
   if (scope.pathPrefixes) {
-    const path = pathPrefixOf(call.path);
-    if (!scope.pathPrefixes.some((prefix) => path.startsWith(prefix))) return "path";
+    if (hasDotSegments(call.path)) return "path";
+    const path = canonicalPath(call.path);
+    if (!scope.pathPrefixes.some((prefix) => pathWithinPrefix(path, canonicalPath(prefix)))) return "path";
   }
   return undefined;
 }

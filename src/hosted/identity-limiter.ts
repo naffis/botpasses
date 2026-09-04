@@ -51,8 +51,9 @@ export function clientIpFrom(
   flyClientIp: string | undefined,
   forwarded: string | undefined,
   remote: string | undefined,
+  trustFlyHeader = true,
 ): string {
-  const fly = flyClientIp?.trim();
+  const fly = trustFlyHeader ? flyClientIp?.trim() : undefined;
   if (fly) return fly;
   const hops = (forwarded ?? "")
     .split(",")
@@ -70,10 +71,16 @@ function headerValue(req: IncomingMessage, name: string): string | undefined {
   return raw;
 }
 
+/** `Fly-Client-IP` is authoritative only behind Fly (or when the deployer opts in with VAULT_TRUST_PROXY=1). */
+export function trustsFlyClientIp(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.FLY_APP_NAME?.trim()) || env.VAULT_TRUST_PROXY === "1";
+}
+
 export function requestClientIp(req: IncomingMessage): string {
   return clientIpFrom(
     headerValue(req, "fly-client-ip"),
     headerValue(req, "x-forwarded-for"),
     req.socket?.remoteAddress,
+    trustsFlyClientIp(),
   );
 }

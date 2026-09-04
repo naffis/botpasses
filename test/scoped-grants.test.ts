@@ -124,7 +124,8 @@ test("scope denies per dimension (method, host, path prefix) and admits a matchi
 test("scopeDenialReason and resolveApprovalScope are pure and exact", () => {
   const scope = { ...unscopedFields(), methods: ["GET"], pathPrefixes: ["/v1"], hosts: ["a.example"] };
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "get", path: "/v1" }), undefined);
-  assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v10/x" }), undefined, "prefix is a string prefix");
+  assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v1/x" }), undefined, "prefix covers deeper segments");
+  assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v10/x" }), "path", "prefix matches on segment boundaries");
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v2" }), "path");
   assert.equal(scopeDenialReason(scope, { host: "b.example", method: "GET", path: "/v1" }), "host");
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "DELETE", path: "/v1" }), "method");

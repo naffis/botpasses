@@ -161,6 +161,13 @@ export function requireOperator(p: Principal | undefined): OperatorPrincipal {
 export function requireModelOrOperator(p: Principal | undefined): ModelPrincipal | OperatorPrincipal {
   if (!p) throw new HttpError(401, "Authentication required");
   if (p.channel === "trusted") throw new HttpError(403, "Trusted tokens cannot use the model channel");
+  if (p.channel === "operator" && p.ready === false) {
+    throw new HttpError(
+      403,
+      "mfa_required",
+      p.needs_totp ? { verify_url: "/verify-totp" } : { enroll_url: "/enroll-totp" },
+    );
+  }
   return p;
 }
 

@@ -72,7 +72,7 @@ export function createPinnedFetch(opts: PinnedFetchOpts = {}): PinnedFetch {
       const req = request(
         {
           hostname: ip,
-          port: url.port ? Number(url.port) : 443,
+          port: 443,
           path: `${url.pathname}${url.search}`,
           method,
           servername: url.hostname,

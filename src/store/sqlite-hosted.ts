@@ -236,11 +236,16 @@ export class SqliteHostedStore implements VaultStore {
     try {
       this.#db
         .prepare(
-          `DELETE FROM oidc_payloads WHERE json_extract(payload, '$.accountId') IN (
+          `DELETE FROM oidc_payloads WHERE account_id IN (
             SELECT user_id FROM org_members WHERE org_id = ?
+          ) AND (
+            client_id IN (SELECT id FROM clients WHERE org_id = ?)
+            OR (client_id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM org_members m2 WHERE m2.user_id = oidc_payloads.account_id AND m2.org_id <> ?
+            ))
           )`,
         )
-        .run(orgId);
+        .run(orgId, orgId, orgId);
       this.#db.prepare("DELETE FROM access_events WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM rate_hits WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM need_items WHERE org_id = ?").run(orgId);
@@ -1413,9 +1418,9 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare(
         `DELETE FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})
-         AND (account_id IS NULL OR account_id = ?)`,
+         AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)`,
       )
-      .run(kind, ...clientIds, accountId);
+      .run(kind, ...clientIds, accountId, accountId);
   }
 
   async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {

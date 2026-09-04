@@ -269,7 +269,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "GET" && path === "/integrations/spotify/callback") {
-      if (!principal || principal.channel !== "operator") {
+      if (!principal || principal.channel !== "operator" || principal.ready === false) {
         res.writeHead(302, { location: "/sign-in" });
         res.end();
         return;

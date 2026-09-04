@@ -16,7 +16,14 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev'
+    # Only a push to dev in this repository may deploy: workflow_run also fires for fork pull
+    # requests whose head branch happens to be named dev, and those must never reach staging.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'dev'
+    environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

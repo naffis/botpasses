@@ -15,6 +15,7 @@ const skipReason = playwrightUnavailableReason();
 const SMOKE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 20_000);
 
 async function within(page: PwPage, selector: string, width: number): Promise<void> {
+  await page.locator(selector).first().waitFor({ state: "visible", timeout: 5_000 });
   const box = await page.locator(selector).first().boundingBox();
   assert.ok(box, `${selector} has no box`);
   assert.ok(box.x >= 0 && box.x + box.width <= width + 1, `${selector} overflows ${width}px: x=${box.x} w=${box.width}`);
