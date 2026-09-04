@@ -26,8 +26,8 @@ JWT verify also fails if the mapped client has `revoked_at` set. Cross-org ids a
 | GET | `/llms.txt`, `/.well-known/security.txt` | none | Static from `site/dist` |
 | GET | `/mcp/tools` | none (or model/operator) | `{ tools }` same as MCP `tools/list` |
 | POST | `/api/items/:id/meta` | operator | Same as `POST /api/items/:id` (below). Blank `value` keeps the current secret. |
-| POST | `/api/integrations/spotify/start` | operator | `{ item_name, environment?, client_id? }` → `{ authorize_url, redirect_uri }` |
-| GET | `/integrations/spotify/callback` | operator cookie | Exchanges the code, stores a refresh token, redirects to `/console#vault` |
+| POST | `/api/integrations/:provider/start` | operator | `:provider` is a registry id with a user connect flow (`spotify`, `github`, `google`, `slack`, `stripe`; unknown is 404). `{ item_name, environment?, client_id?, redirect_uri?, agent_client_id? }` → `{ authorize_url, redirect_uri, provider }`. `client_id` defaults to the item username. `agent_client_id` names the one model client that gets an `item_standing` policy on the refresh item after connect; without it the operator approves normally. The sealed `state` carries the provider id. |
+| GET | `/integrations/:provider/callback` | operator cookie (ready) | Exchanges the code with the client-secret item, stores the refresh token as `<ITEM>_REFRESH` (`inject: refresh`, allowed on the provider API and token hosts), redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>`. A state minted for another provider is refused. `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `:provider = spotify`. |
 
 ## Auth HTML and JSON
 
