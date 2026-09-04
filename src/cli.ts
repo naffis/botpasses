@@ -11,15 +11,28 @@ import {
 } from "./brand.ts";
 import { generateMasterKey, parseMasterKey } from "./crypto.ts";
 import { maskLast4 } from "./ids.ts";
-import { HostedKernel } from "./hosted/kernel.ts";
-import { awsKmsEncrypt, kekEncryptionContext } from "./hosted/kms.ts";
-import { PostgresStore } from "./store/postgres.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
 import { defaultHome, initVaultHome, loadMasterKey, Vault } from "./vault.ts";
 import type { GrantScope } from "./types.ts";
-import { startHosted } from "./hosted/main.ts";
-import { runRemoteMcpStdio } from "./hosted/mcp-stdio-remote.ts";
+
+// Hosted dependencies (pg, the AWS KMS SDK, oidc-provider) load only for the commands that
+// need them, so `vault set` and `vault list` stay a sqlite-only startup.
+function loadHostedMain(): Promise<typeof import("./hosted/main.ts")> {
+  return import("./hosted/main.ts");
+}
+function loadHostedKernel(): Promise<typeof import("./hosted/kernel.ts")> {
+  return import("./hosted/kernel.ts");
+}
+function loadKms(): Promise<typeof import("./hosted/kms.ts")> {
+  return import("./hosted/kms.ts");
+}
+function loadPostgresStore(): Promise<typeof import("./store/postgres.ts")> {
+  return import("./store/postgres.ts");
+}
+function loadRemoteMcp(): Promise<typeof import("./hosted/mcp-stdio-remote.ts")> {
+  return import("./hosted/mcp-stdio-remote.ts");
+}
 
 export type Io = {
   log: (...args: unknown[]) => void;
@@ -65,7 +78,7 @@ export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Pr
     io.log(USAGE);
     return argv.length === 0 ? 1 : 0;
   }
-  const [command, ...rest] = argv;
+  const [command = "", ...rest] = argv;
   switch (command) {
     case "init":
       return cmdInit(io);
@@ -300,6 +313,7 @@ async function cmdRun(argv: string[], io: Io): Promise<number> {
 
 async function cmdServe(argv: string[], io: Io): Promise<number> {
   if (process.env.VAULT_MODE === "hosted") {
+    const { startHosted } = await loadHostedMain();
     await startHosted();
     return 0;
   }
@@ -371,6 +385,7 @@ async function cmdMcp(argv: string[], io: Io): Promise<number> {
       io.error("Pass --user-jwt <token> or set VAULT_USER_JWT. Run `vault login`.");
       return 1;
     }
+    const { runRemoteMcpStdio } = await loadRemoteMcp();
     await runRemoteMcpStdio({ publicUrl, userJwt: token });
     return 0;
   }
@@ -409,6 +424,7 @@ async function cmdKekWrap(io: Io): Promise<number> {
   }
   const key = parseMasterKey(raw);
   try {
+    const { awsKmsEncrypt, kekEncryptionContext } = await loadKms();
     const cipher = await awsKmsEncrypt(keyId)(key, kekEncryptionContext({ plane, app }));
     io.log(cipher.toString("base64"));
     return 0;
@@ -430,7 +446,12 @@ async function cmdKekRotate(io: Io): Promise<number> {
   const oldKek = parseMasterKey(oldRaw);
   const newHex = generateMasterKey();
   const newKek = parseMasterKey(newHex);
-  const store = await PostgresStore.open(db);
+  const [{ PostgresStore }, { HostedKernel }, { awsKmsEncrypt, kekEncryptionContext }] = await Promise.all([
+    loadPostgresStore(),
+    loadHostedKernel(),
+    loadKms(),
+  ]);
+  const store = await PostgresStore.open(db, { plane: "kek-rotate" });
   try {
     const kernel = new HostedKernel({ store, kek: oldKek });
     const result = await kernel.rotateKek(oldKek, newKek);
