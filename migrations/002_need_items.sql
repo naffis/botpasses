@@ -1,4 +1,4 @@
--- Expand-only. Applied via HOSTED_SCHEMA_SQLITE at boot (CREATE TABLE IF NOT EXISTS).
+-- Expand-only. Applied by scripts/migrate.ts; mirrored in HOSTED_SCHEMA_SQLITE.
 -- Down: DROP TABLE IF EXISTS need_items;
 
 CREATE TABLE IF NOT EXISTS need_items (

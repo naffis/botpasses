@@ -24,9 +24,25 @@ export type AuditListFilter = {
   action?: string;
 };
 
+/** Rows deleted per table by `sweepExpired`. */
+export type SweepCounts = {
+  emailOtpChallenges: number;
+  operatorSessions: number;
+  approvalChallenges: number;
+  needItems: number;
+  rateHits: number;
+  oidcPayloads: number;
+};
+
 export type VaultStore = {
   ping(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * Delete rows nothing can read again: expired OTP challenges, sessions, approval
+   * challenges, and oidc payloads; cancelled/expired needs older than 24 h; rate_hits
+   * windows older than 2 h. Runs at boot and hourly.
+   */
+  sweepExpired(nowIso: string): Promise<SweepCounts>;
 
   insertOrg(row: OrgRecord): Promise<void>;
   getOrg(id: string): Promise<OrgRecord | undefined>;

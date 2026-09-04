@@ -1,22 +1,49 @@
 name: backup-prod
 
+# GitHub runs `schedule` only from the default branch. That branch must be `dev`
+# (docs/ops/default-branch.md); ci.yml fails on dev/main pushes until it is.
 on:
   schedule:
     - cron: "0 4 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-prod
+  cancel-in-progress: false
+
+env:
+  # Match the Neon project's Postgres major. pg_dump refuses a server newer than itself,
+  # so bump this (and the CI service image) together when the Neon project is upgraded.
+  PG_MAJOR: "16"
+  AWS4FETCH_VERSION: "1.0.20"
+
 jobs:
   dump:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      object_key: ${{ steps.upload.outputs.object_key }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
-      - name: Install pg_dump
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install pg_dump ${{ env.PG_MAJOR }} from PGDG
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "$VERSION_CODENAME")-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-client-${PG_MAJOR}"
+          "/usr/lib/postgresql/${PG_MAJOR}/bin/pg_dump" --version
       - name: Dump, encrypt, upload
+        id: upload
         env:
           DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
           BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
@@ -28,20 +55,70 @@ jobs:
           set -euo pipefail
           node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/hosted-backup.ts require-offsite-env
           STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-          pg_dump "$DATABASE_URL_DIRECT" --no-owner --format=custom --file=vault.dump
+          "/usr/lib/postgresql/${PG_MAJOR}/bin/pg_dump" "$DATABASE_URL_DIRECT" --no-owner --format=custom --file=vault.dump
           node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/hosted-backup.ts encrypt vault.dump vault.dump.enc
-          npm install --no-save aws4fetch
-          STAMP="$STAMP" node --input-type=module <<'NODE'
+          npm install --no-save --no-audit --no-fund "aws4fetch@${AWS4FETCH_VERSION}"
+          KEY="botpasses-${STAMP}.dump.enc"
+          OBJECT_KEY="$KEY" node --input-type=module <<'NODE'
           import { AwsClient } from "aws4fetch";
           import { readFileSync } from "node:fs";
           const account = process.env.R2_ACCOUNT_ID ?? "";
           const bucket = process.env.R2_BUCKET ?? "";
-          const stamp = process.env.STAMP ?? "backup";
+          const key = process.env.OBJECT_KEY ?? "";
           const client = new AwsClient({
             accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
             secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
           });
-          const url = `https://${account}.r2.cloudflarestorage.com/${bucket}/botpasses-${stamp}.dump.enc`;
+          const url = `https://${account}.r2.cloudflarestorage.com/${bucket}/${key}`;
           const res = await client.fetch(url, { method: "PUT", body: readFileSync("vault.dump.enc") });
           if (!res.ok) throw new Error(`R2 put ${res.status}`);
           NODE
+          echo "object_key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "uploaded $KEY ($(stat -c %s vault.dump.enc) bytes)"
+
+  backup-verify:
+    # Download the object just written and decrypt it with the real key. A wrong key, a
+    # truncated upload, or a bad envelope header fails the job (and the nightly run).
+    needs: dump
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - name: Download and decrypt
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          OBJECT_KEY: ${{ needs.dump.outputs.object_key }}
+        run: |
+          set -euo pipefail
+          test -n "$OBJECT_KEY"
+          npm install --no-save --no-audit --no-fund "aws4fetch@${AWS4FETCH_VERSION}"
+          node --input-type=module <<'NODE'
+          import { AwsClient } from "aws4fetch";
+          import { writeFileSync } from "node:fs";
+          const account = process.env.R2_ACCOUNT_ID ?? "";
+          const bucket = process.env.R2_BUCKET ?? "";
+          const key = process.env.OBJECT_KEY ?? "";
+          const client = new AwsClient({
+            accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
+            secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
+          });
+          const res = await client.fetch(`https://${account}.r2.cloudflarestorage.com/${bucket}/${key}`);
+          if (!res.ok) throw new Error(`R2 get ${res.status}`);
+          writeFileSync("verify.dump.enc", Buffer.from(await res.arrayBuffer()));
+          NODE
+          # decrypt fails closed on a wrong header, wrong key, or GCM tag mismatch.
+          node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/hosted-backup.ts decrypt verify.dump.enc verify.dump
+          # A pg_dump custom-format file starts with the literal "PGDMP".
+          if [ "$(head -c 5 verify.dump)" != "PGDMP" ]; then
+            echo "::error::decrypted object is not a pg_dump custom archive"
+            exit 1
+          fi
+          echo "verified $OBJECT_KEY: $(stat -c %s verify.dump) bytes of pg_dump"
+          rm -f verify.dump verify.dump.enc

@@ -5,7 +5,56 @@ on:
     branches: [main, dev, "cursor/**"]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  default-branch:
+    # Scheduled workflows (nightly backup) and Dependabot read from the default branch.
+    # If that is not `dev`, no backup runs and Dependabot is inert. Fail loudly on the trunks.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Default branch must be dev
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$DEFAULT_BRANCH" != "dev" ]; then
+            echo "::error::GitHub default branch is '$DEFAULT_BRANCH', not 'dev'. Nightly backups and Dependabot are not running."
+            echo "Fix: Settings -> Branches -> Default branch -> dev, then dispatch backup-prod. Runbook: docs/ops/default-branch.md"
+            exit 1
+          fi
+          echo "default branch is dev"
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -26,19 +75,21 @@ jobs:
     env:
       DATABASE_URL: postgres://vault:vault@localhost:5432/vault
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: site/package-lock.json
       - run: npm --prefix site ci
-      - run: npm --prefix site run build
-      - run: npm test
-      - run: npm run typecheck
+      - run: npm --prefix site audit --omit=dev --audit-level=high
+      - run: npm run site:build
+      - name: Migrations apply twice and match schema.ts
+        run: npm run migrate && npm run migrate
+      - run: npm run test:coverage

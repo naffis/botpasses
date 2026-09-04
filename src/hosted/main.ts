@@ -4,9 +4,16 @@ import { zeroKey } from "../crypto.ts";
 import { HostedKernel } from "./kernel.ts";
 import { createHostedServer } from "./http.ts";
 import { createResendSender } from "./email.ts";
-import { assertHostedBoot, HOSTED_CONFIG_EXIT, parseOidcPrivateJwk } from "./boot.ts";
+import {
+  assertHostedBoot,
+  createShutdown,
+  HOSTED_CONFIG_EXIT,
+  installProcessGuards,
+  parseOidcPrivateJwk,
+  scheduleSweeps,
+} from "./boot.ts";
 import { selectKekProvider, usedRawKekFallback } from "./kms.ts";
-import { logVaultEvent } from "./observe.ts";
+import { logVaultEvent, packageVersion } from "./observe.ts";
 import { PostgresStore } from "../store/postgres.ts";
 import { hostedAuthResolver, testAuthResolver } from "./auth.ts";
 import { OperatorIdentity } from "./operator-identity.ts";
@@ -32,11 +39,21 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   if (usedRawKekFallback(env)) {
     logVaultEvent("kek_raw_fallback", { plane: env.VAULT_DEPLOY_PLANE ?? "" });
   }
-  const store = await PostgresStore.open(env.DATABASE_URL ?? "");
+  const deployPlane = hostedDeployPlane(env);
+  let store: PostgresStore;
+  try {
+    store = await PostgresStore.open(env.DATABASE_URL ?? "", { plane: deployPlane });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(
+      `Postgres open failed: ${message}. Check DATABASE_URL (Neon pooled host, sslmode=require) and that the release_command migrated the schema.`,
+    );
+    zeroKey(kek);
+    process.exit(HOSTED_CONFIG_EXIT);
+  }
   const sendEmail = env.RESEND_API_KEY
     ? createResendSender(env.RESEND_API_KEY, env.VAULT_EMAIL_FROM ?? "")
     : undefined;
-  const deployPlane = hostedDeployPlane(env);
   const publicUrl = resolvePublicOrigin(env.VAULT_PUBLIC_URL ?? "", {
     plane: deployPlane,
     allowLoopback: false,
@@ -86,22 +103,37 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     deployPlane,
   });
   const addr = await http.listen();
-  console.error(`${PRODUCT_NAME} hosted on ${addr.host}:${addr.port} plane=${deployPlane}`);
-  await new Promise<void>((resolveDone) => {
-    const stop = () => {
-      void http.close().then(() => {
-        void store.close().then(() => {
-          zeroKey(kek);
-          resolveDone();
-        });
-      });
-    };
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
+  logVaultEvent("hosted_listening", {
+    host: addr.host,
+    port: addr.port,
+    plane: deployPlane,
+    version: packageVersion(),
   });
+  console.error(`${PRODUCT_NAME} hosted on ${addr.host}:${addr.port} plane=${deployPlane}`);
+
+  const sweeps = scheduleSweeps(store, { log: logVaultEvent });
+  await sweeps.runOnce();
+
+  const shutdown = createShutdown({
+    http,
+    store,
+    log: logVaultEvent,
+    onDone: () => {
+      sweeps.stop();
+      zeroKey(kek);
+    },
+  });
+  process.on("SIGINT", () => shutdown.stop("SIGINT"));
+  process.on("SIGTERM", () => shutdown.stop("SIGTERM"));
+  await shutdown.done;
 }
 
 const isMain = process.argv[1]?.includes("hosted/main");
 if (isMain) {
-  void startHosted();
+  installProcessGuards();
+  startHosted().catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    logVaultEvent("hosted_boot_failed", { message });
+    process.exit(1);
+  });
 }
