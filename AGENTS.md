@@ -16,10 +16,12 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 
 ## Commands
 
-- Install: `npm install`
+- Install: `npm ci`, then `npm run site:build` once (tests read `site/dist`)
 - Dev / CLI: `npx vault <command>` (set `VAULT_HOME` and `VAULT_MASTER_KEY`)
 - Test: `npm test` (prefer a focused file: `node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=spec test/<file>.test.ts`)
-- Typecheck: `npm run typecheck`
+- Typecheck: `npm run typecheck` · Lint: `npm run lint` · Postgres tests: `npm run test:pg` (needs `DATABASE_URL`)
+- Schema: expand-only; add to `src/store/schema.ts` and a numbered file in `migrations/` (`npm run migrate` applies them; a Postgres test asserts parity)
+- Console client: edit `src/hosted/client/*.ts`, then `node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/build-client.ts` to regenerate the committed bundle
 
 ## Conventions
 

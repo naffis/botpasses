@@ -78,12 +78,15 @@ Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
 | POST | `/api/clients/model` | operator | Issues `avm_…` once. `{ client, token, mcp_url }`. Token is not listed later |
 | POST | `/api/clients/trusted` | operator | Issues `avt_…` once |
 | POST | `/api/clients/:id/rotate` | operator | New plaintext once. Old hash dies |
-| POST | `/api/clients/:id/revoke` | operator | `revoked_at`, grants revoked, JWT `jti` denylist. Later Bearer is 401 |
-| POST | `/api/grants/request` | model or operator | `{ item_name, task_description?, client_id? }`. Rate limit 30 / org / hour (shared with new needs). Returns grant + `approval_code` |
+| POST | `/api/clients/:id/revoke` | operator | `revoked_at`, grants revoked, JWT `jti` denylist. Later Bearer is 401. A later OAuth re-consent reactivates the same row (the `(org_id, oauth_client_id)` pair is unique) |
+| POST | `/api/grants/request` | model or operator | `{ item_name, task_description?, client_id?, operator_email? }`. `operator_email` is ignored for model principals; an operator may pass a member's email (400 otherwise); with none given every verified member is emailed. Returns the existing open grant for the client and item (a pending one gets a fresh `approval_code`). Rate limit 30 / org / hour inside the kernel, shared with `http_request` and new needs |
 | POST | `/api/grants/:id/approve` | operator | `{ policy, confirm_name? }`. `folder_standing` is owner + confirm |
 | POST | `/api/grants/:id/revoke` | operator | Status `revoked`. Row stays listed |
 | POST | `/api/grants/approve-by-code` | operator | `{ code }` 8-digit. Reuse is 409 |
-| GET/POST | `/approve?token=` | operator | Magic-link approve. Token is single use |
+| GET | `/approve?token=` | none | Renders an HTML confirm page (client, item, last-4, policy). No state change |
+| POST | `/approve` | none | `{ token }` JSON or form body. Re-verifies the HMAC token and approves. Exempt from `X-CSRF-Token` (the token is the CSRF defence) |
+| POST | `/api/clients/:id/environment` | operator | `{ environment }`. Moves an agent (including OAuth-issued ones) to another vault environment. 409 if revoked |
+| HEAD | `/console` | none | Same headers as GET |
 
 Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reactivates so the agent can retry), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). DCR `redirect_uris` may be https, loopback http, or a desktop app scheme (`cursor://`, `grok://`).
 
@@ -93,7 +96,7 @@ Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reac
 | --- | --- | --- |
 | GET | `/api/access` | Live snapshot only: `operators`, `clients`, `grants`, `sessions`. Clients and grants include `created_at`, `first_access_at`, `last_access_at`, and `fetched` (item names). Clients include `last4` of the machine bearer when issued. No `events` or `audit` array. No `avm_` / `avt_` / JWT |
 | GET | `/api/access/events` | Ledger newest-first, limit 200: kind, client_id, issued/expires/revoked. `jti` is hashed |
-| POST | `/api/sessions/:id/revoke` | 400 `cannot_revoke_current` if it is this session |
+| POST | `/api/sessions/:id/revoke` | `:id` is the 12-character prefix shown in Access (shorter or ambiguous is 400). Owners may revoke another member's session; operators only their own others (403). 400 `cannot_revoke_current` if it is this session |
 | POST | `/api/sessions/revoke-others` | Deletes every other operator session |
 
 ## Runtime inject (trusted only)
@@ -146,6 +149,8 @@ No `/api/items`, OAuth, or Access panel on the local plane.
 `site/dist` (Astro) is served by [src/hosted/static-site.ts](../../src/hosted/static-site.ts) for `/`, `/design`, `/security`, `/privacy`, `/terms`, `/changelog`, `/docs/**`, `/_astro/**`, `/pagefind/**`, `/sitemap-*.xml`, `/favicon.svg`, `/og.png`, `/llms.txt`, and `/.well-known/security.txt`. `*.html` and trailing-slash forms 308 to the canonical URL (`/console/` is handled by the router, not here). Unknown paths under those prefixes return the Astro `404.html` with status 404. HTML is `no-cache` from the static layer (the router's `no-store` wins today), `_astro/*` is `public, max-age=31536000, immutable`, other assets `public, max-age=3600`.
 
 ## Errors operators see
+
+Unexpected failures are `500 { error: "Internal error", request_id }` with an `x-request-id` header; the detail is in the server log under `request_error`, never in the response. Malformed JSON bodies are `400 { error: "Invalid JSON" }`. Every response carries `x-request-id`.
 
 | Status | When |
 | --- | --- |

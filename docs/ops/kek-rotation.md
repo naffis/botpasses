@@ -1,6 +1,6 @@
 # KEK wrap and rotation
 
-Platform KEK wrap: [ADR 0004](../adr/0004-kms-wrapped-kek.md).
+Platform KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md).
 
 Laptop commands. Fly OIDC (`AWS_ROLE_ARN`) exists only on the Machine. `vault kek-wrap` and `vault kek-rotate` use AWS SSO or a short-lived console Encrypt. Do not put AWS access keys in git or Fly secrets.
 

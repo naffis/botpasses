@@ -25,7 +25,7 @@ Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault 
 
 ## Hosted path
 
-Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http.request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http.request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
+Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http_request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http_request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
 
 Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` is `botpasses`.
 
@@ -33,7 +33,7 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 
 | Client | How |
 | --- | --- |
-| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. After it is connected, ask in plain language (get my Spotify profile). Grok should call `http.request` in the same turn. You approve in the inbox if asked. You do not need to name Botpasses tools. |
+| Grok Bot | Custom connector URL `https://<origin>/mcp` plus `Authorization: Bearer avm_…` (issue from the operator console). Grok Bot is a cloud VM; local stdio MCP is not reachable. After it is connected, ask in plain language (get my Spotify profile). Grok should call `http_request` in the same turn. You approve in the inbox if asked. You do not need to name Botpasses tools. |
 | Grok Build | `grok mcp add --transport http botpasses https://<origin>/mcp --header "Authorization: Bearer ${BOTPASSES_MODEL_TOKEN}"` |
 | Claude | Remote connector named `Botpasses` + OAuth |
 | ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration on this origin |
@@ -61,7 +61,7 @@ npx vault mcp --user-jwt
 | `item_standing` | Later `request_grant` for that client+item is already active |
 | `folder_standing` | Owner only. Requires `confirm_name`. Later requests in that folder/env auto-activate |
 
-Approve via web inbox, Resend magic link, or the 8-digit code returned by `request_grant`.
+Approve via the web inbox, the email sent to every org member (magic link), or the 8-digit code returned by `request_grant`. The MCP tool was named `http.request` before; that name is an alias for one release.
 
 ## What this is not
 
@@ -72,17 +72,17 @@ Approve via web inbox, Resend magic link, or the 8-digit code returned by `reque
 
 ## Threat model
 
-Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0003](docs/adr/0003-grant-vault-trust-model.md), [0004](docs/adr/0004-kms-wrapped-kek.md).
+Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0006](docs/adr/0006-grant-vault-trust-model.md), [0007](docs/adr/0007-kms-wrapped-kek.md).
 
 | Surface | Sees secret value? |
 | --- | --- |
-| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `http.request`) | **No** — names, last-4, username, grant status, `collect_url`, redacted origin body |
+| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `http_request`) | **No** — names, last-4, username, grant status, `collect_url`, redacted origin body |
 | Operator console / HTTP JSON (except trusted resolve) | **No** after submit — name + last-4 |
 | CLI `list` / `grant` / `audit` | **No** |
 | Audit table | **No** — no value column |
 | Items table | Ciphertext only (AES-256-GCM) |
 | `vault run` child env / trusted `/runtime/resolve` / connector origin | **Yes** — that is the inject |
-| Hosted Fly process / KMS role (after unwrap) | **Yes** at inject. Required for `http.request`. |
+| Hosted Fly process / KMS role (after unwrap) | **Yes** at inject. Required for `http_request`. |
 | Botpasses staff without KMS + DB | **No** |
 | Neon dump without the platform KEK / KMS | **No** |
 | Model context / chat transcript | **Must not.** Tests fail if a canary appears |
@@ -90,7 +90,7 @@ Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Deci
 ## Hard rules
 
 - No MCP/API tool returns secret **values** to the model.
-- MCP may list **names**, find by name or host, request a grant, report grant status, call `http.request`. On a miss it returns a Botpasses `collect_url` (no HMAC). The operator types the secret on that origin.
+- MCP may list **names**, find by name or host, request a grant, report grant status, call `http_request`. On a miss it returns a Botpasses `collect_url` (no HMAC). The operator types the secret on that origin.
 - Revoke is operator-only (`POST /api/grants/:id/revoke` or `vault revoke`).
 - Values stay in the vault process until inject.
 - Tests prove a mocked conversation cannot contain the stored secret after store, grant, or use.

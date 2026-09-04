@@ -1,4 +1,6 @@
-# 0004. AWS KMS wraps the platform KEK
+# 0007. AWS KMS wraps the platform KEK
+
+Renumbered from 0004 on 2026-09-04; the number collided with [0004-same-origin-oauth-as](0004-same-origin-oauth-as.md).
 
 - Status: accepted
 - Date: 2026-08-31

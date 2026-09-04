@@ -115,7 +115,7 @@ test("security page carries the trust model, encryption, connector, tests, and d
   assert.match(sec, /canary/);
   assert.match(sec, /security@botpasses\.com/);
   assert.match(sec, /\.well-known\/security\.txt/);
-  assert.match(sec, /adr\/0003-grant-vault-trust-model\.md/);
+  assert.match(sec, /adr\/0006-grant-vault-trust-model\.md/);
   assert.doesNotMatch(sec, /injected into tool or runtime env only/);
   assert.match(sec, /attaches the value to an outbound API call/);
 });

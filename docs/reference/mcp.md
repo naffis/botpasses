@@ -27,7 +27,7 @@ Both planes implement:
 
 Unknown methods: `{ error: { code: -32601 } }`. Tool exceptions: `{ error: { code: -32000 } }` or a tool result with `isError: true`.
 
-Unauthenticated hosted `initialize`, `ping`, `tools/list`, and `notifications/*` succeed so a Grok Bot with only an `avm_` header does not see a connect card. Unauthenticated `tools/call` is **401** with `WWW-Authenticate` `resource_metadata` set to the absolute path-aware PRM URL. A valid `Authorization: Bearer avm_…` is sufficient for every method. MCP hosts on other origins may call `/mcp` and well-known (CORS reflects their Origin; no cookies). Operator `/api` still 403s a foreign Origin. `GET /mcp` is SSE keepalive (auth optional for the stream; tools still require a model principal). DCR redirect URIs may be `https`, loopback `http`, or a desktop app scheme (`cursor://`, `grok://`).
+Unauthenticated hosted `initialize`, `ping`, `tools/list`, and `notifications/*` succeed so a Grok Bot with only an `avm_` header does not see a connect card. Unauthenticated `tools/call` is **401** with `WWW-Authenticate` `resource_metadata` set to the absolute path-aware PRM URL. A valid `Authorization: Bearer avm_…` is sufficient for every method. MCP hosts on other origins may call `/mcp` and well-known (CORS reflects their Origin; no cookies). Operator `/api` still 403s a foreign Origin. `GET /mcp` is an SSE keepalive stream and requires a model or operator principal (401 otherwise). DCR redirect URIs may be `https`, IP-literal loopback `http` (`127.0.0.1`, `[::1]`), or a named desktop scheme (cursor, cursor-mcp, vscode, vscode-insiders, grok, xai, xai-grok). Cookie-authenticated operator sessions may call `POST /mcp` only with `X-CSRF-Token` and a same-origin `Origin`.
 
 `GET /mcp/tools` (hosted, model or operator) returns the same tool list as `tools/list`.
 
@@ -89,6 +89,8 @@ Inventory: `name`, `kind`, `last4`, `username`, `environment`, `inject`. No valu
 
 ### `request_grant`
 
+Returns the existing open grant for this client and item (an active one as-is; a pending one with a fresh `approval_code`). Ten calls yield one grant, not ten. Counted against the org rate limit (30 per hour) inside the kernel, so `http_request` and REST share the same budget.
+
 Requires `item_name`; optional `task_description`. Returns public grant fields (including `task_id`) plus `approval_code` and `notify_failed`. Never the secret. Standing policies may activate immediately.
 
 Public grant fields: `grant_id`, `policy`, `status`, `environment_id`, `expires_at`, `created_at`, `approved_at`, `consumed_at`, `task_id`, `task_description`.
@@ -98,6 +100,8 @@ Public grant fields: `grant_id`, `policy`, `status`, `environment_id`, `expires_
 Grants for **this client** only. Same public grant fields.
 
 ## `next` steering
+
+Origin 4xx: "The request was rejected by the API; change the path, query, or body before retrying. Do not ask for a new approval." Origin 5xx: "Transient origin error; retry once." 401/410 keep the same-approval retry text. A failed connection says what failed (DNS, TLS, connect, timeout, blocked address) without the secret or the raw error message.
 
 [src/hosted/mcp-steer.ts](../../src/hosted/mcp-steer.ts) `attachMcpNext` adds `next.for_model`, optional `next.tool`, and `next.arguments` (retry host/method/path/item_name). The model should follow `next` and not invent a paste-the-secret step.
 
