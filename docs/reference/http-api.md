@@ -105,7 +105,7 @@ Policies: `prompt` (one **successful** origin inject then consumed; 4xx/5xx reac
 
 ## MCP HTTP
 
-`POST /mcp` JSON-RPC (`http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`; `http.request` is an alias for one release). See [mcp.md](./mcp.md). `GET /mcp` is an SSE keepalive stream (auth optional for the stream). `GET /mcp/tools` returns the tool list. There is no `get_secret`.
+`POST /mcp` JSON-RPC (`http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`; `http.request` is an alias for one release). See [mcp.md](./mcp.md). `GET /mcp` is an SSE keepalive stream and requires a model or operator principal (401 otherwise). `GET /mcp/tools` returns the tool list. There is no `get_secret`.
 
 ## OAuth (botpasses.com is the AS)
 

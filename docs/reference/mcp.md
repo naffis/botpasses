@@ -9,7 +9,7 @@ There is no `get_secret`, `read_value`, `read_secret`, `reveal_secret`, `decrypt
 | Plane | Transport | Tools | Auth |
 | --- | --- | --- | --- |
 | Hosted | `POST /mcp` JSON-RPC; stdio via `vault mcp --user-jwt` | `list_items`, `find_items`, `request_grant`, `list_grants`, `http_request` | Model JWT (`aud=${origin}/mcp`) or `avm_…` Bearer. Operator session may call MCP as a model for the chosen environment. |
-| Local | `npx vault mcp` stdio; `POST /mcp` on `vault serve` | `list_secrets`, `request_grant`, `list_grants` | Loopback HMAC Bearer on `POST /mcp` (`vault serve` prints it). Stdio uses the local sqlite vault. |
+| Local | `npx vault mcp` stdio; `POST /mcp` on `vault serve` | Same five tools as hosted (`list_secrets` and `http.request` accepted as aliases for one release) | Loopback HMAC Bearer on `POST /mcp` (`vault serve` prints it). Stdio uses the local sqlite vault. |
 
 Hosted `serverInfo.name` is `botpasses`. Protocol version is `2024-11-05`. Port is **8788** (never 8787).
 
@@ -56,9 +56,7 @@ Call this in the same turn the user asks for an API. Do not `list_items` first. 
 
 Implementation: [src/hosted/mcp-http.ts](../../src/hosted/mcp-http.ts) `runHttpRequest`, [src/hosted/connector.ts](../../src/hosted/connector.ts).
 
-Success body: HTTP `status`, redacted origin `body` (string), optional `hint`, optional `next`. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects.
-
-Success body: `origin_status` (the API's HTTP status), redacted `body` (string), `origin_headers` (only `content-type`, `link`, `retry-after`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`, `x-request-id`), optional `hint`, optional `next`. `status` duplicates `origin_status` for one release and is deprecated. Dry run body: `{ dry_run: true, item_name, host, method, path, would_send, reason, grant_status, inject_mode, provider }` where `reason` is `ok`, `need_item`, `ambiguous`, `host_mismatch`, `grant_required`, `grant_pending`, or `inject_unsupported` and `grant_status` is `standing`, `active`, `pending`, or `none`.
+Success body: `origin_status` (the API's HTTP status), redacted `body` (string), `origin_headers` (only `content-type`, `link`, `retry-after`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`, `x-request-id`), optional `hint`, optional `next`. `status` duplicates `origin_status` for one release and is deprecated. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects. Dry run body: `{ dry_run: true, item_name, host, method, path, would_send, reason, grant_status, inject_mode, provider }` where `reason` is `ok`, `need_item`, `ambiguous`, `host_mismatch`, `grant_required`, `grant_pending`, or `inject_unsupported` and `grant_status` is `standing`, `active`, `pending`, or `none`.
 
 Providers: Botpasses mints and refreshes OAuth tokens for known providers (Spotify, GitHub, Google, Slack, Stripe Connect); pass `client_id` when the item is an OAuth client secret. Client credentials go to the provider token endpoint as HTTP Basic or form fields, per provider, never as Bearer. Paths that need a user token return a hint; a stored `<ITEM>_REFRESH` item is exchanged automatically. Refresh sends `refresh_token` and `client_id` in the form body (RFC 6749 section 6).
 
