@@ -71,7 +71,7 @@ Every counter and one-time value the sign-in path depends on is claimed with one
 
 ## Request path and grant semantics
 
-- One canonical path. `canonicalRequestPath()` rejects backslashes, percent-encoded separators (`%2F`, `%5C`, `%2E`), dot segments (including `..;`), whitespace, and fragments. Its output is the only path used for the SSRF check, the scope comparison, the inbox card, the audit row, and the wire, so the operator approves exactly what is sent.
+- One canonical path. `canonicalRequestPath()` rejects backslashes, percent-encoded separators (`%2F`, `%5C`, `%2E`, in any case and behind any number of `%25` layers), encoded or raw NUL and control characters, dot segments (including `..;`), whitespace, and fragments. Its output is the only path used for the SSRF check, the scope comparison, the inbox card, the audit row, and the wire, so the operator approves exactly what is sent.
 - A prompt grant is spent by any origin response. It comes back to the agent only when the send never left the process (DNS, connect, TLS, or a timeout before any bytes). Retryable work uses `max_calls` or a session grant.
 - The connector dials port 443 only, sends `accept-encoding: identity`, caps a response at 1 MiB of raw bytes (502 `body_too_large`), and fails a call whose origin closes early instead of hanging it. Response headers and bodies are redacted against the secret in every encoding the request could have carried it (raw, percent, form, HTML entity, base64 of `user:secret`).
 - OAuth consent binds an org (`org:<id>` on the grant). A revoked client stays revoked until a fresh authorization-code or device-code issuance; a refresh for a revoked client fails, and revocation destroys the OIDC payloads of every member of the org for that client.
