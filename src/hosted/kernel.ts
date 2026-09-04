@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { resolvePublicOrigin } from "../brand.ts";
+import type { Envelope } from "../crypto.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type {
   AccessEventRecord,
@@ -41,6 +42,8 @@ export type { PreparedItem } from "./kernel-items.ts";
 export type HostedKernelOpts = {
   store: VaultStore;
   kek: Buffer;
+  /** The KEK a rotation is leaving (`VAULT_KEK_PREVIOUS`); DEKs still under it are re-wrapped on read. */
+  previousKek?: Buffer;
   now?: () => Date;
   sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
   publicUrl?: string;
@@ -56,6 +59,7 @@ export type InjectOutcome = "inject" | "inject_denied" | "inject_failed";
 export class HostedKernel {
   readonly store: VaultStore;
   readonly #kek: Buffer;
+  readonly #previousKek: Buffer | undefined;
   readonly now: () => Date;
   readonly sendEmail: HostedKernelOpts["sendEmail"];
   readonly publicUrl: string;
@@ -67,6 +71,7 @@ export class HostedKernel {
   constructor(opts: HostedKernelOpts) {
     this.store = opts.store;
     this.#kek = opts.kek;
+    this.#previousKek = opts.previousKek;
     this.now = opts.now ?? (() => new Date());
     this.sendEmail = opts.sendEmail;
     this.approvalHmac = opts.approvalHmac;
@@ -264,6 +269,11 @@ export class HostedKernel {
 
   async decryptItem(orgId: string, itemId: string): Promise<items.DecryptedItem> {
     return items.decryptItem(this.#itemHost(), orgId, itemId);
+  }
+
+  /** Boot-time one-shot: binds every item envelope still under the legacy `orgId` AAD. See `kernel-items.ts`. */
+  async rebindLegacyItems(): Promise<items.RebindResult> {
+    return items.rebindLegacyItems(this.#itemHost());
   }
 
   async findStoredItem(orgId: string, environment: VaultEnvName, itemName: string) {
@@ -487,11 +497,13 @@ export class HostedKernel {
   }
 
   #orgHost(): orgs.OrgHost {
+    const previous = this.#previousKek;
     return {
       store: this.store,
       now: this.now,
       wrapDek: (dek, orgId) => wrapDek(dek, this.#kek, orgId),
       unwrapDek: (envelope, orgId) => unwrapDek(envelope, this.#kek, orgId),
+      ...(previous ? { unwrapDekPrevious: (envelope: Envelope, orgId: string) => unwrapDek(envelope, previous, orgId) } : {}),
     };
   }
 
@@ -500,6 +512,7 @@ export class HostedKernel {
       store: this.store,
       now: this.now,
       deployPlane: this.deployPlane,
+      assertPlane: (name) => this.#assertPlane(name),
       envFor: (orgId, name) => this.envFor(orgId, name),
       dekForOrg: (orgId) => this.dekForOrg(orgId),
       assertPlanLimit: (orgId, kind) => this.assertPlanLimit(orgId, kind),

@@ -12,7 +12,7 @@ import {
   parseOidcPrivateJwk,
   scheduleSweeps,
 } from "./boot.ts";
-import { selectKekProvider, usedRawKekFallback } from "./kms.ts";
+import { selectKekProvider, selectPreviousKekProvider, usedRawKekFallback } from "./kms.ts";
 import { logVaultEvent, packageVersion } from "./observe.ts";
 import { PostgresStore } from "../store/postgres.ts";
 import { hostedAuthResolver, testAuthResolver } from "./auth.ts";
@@ -39,6 +39,22 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   if (usedRawKekFallback(env)) {
     logVaultEvent("kek_raw_fallback", { plane: env.VAULT_DEPLOY_PLANE ?? "" });
   }
+  let previousKek: Buffer | undefined;
+  try {
+    previousKek = await selectPreviousKekProvider(env)?.unwrap();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Previous KEK unwrap failed: ${message}`);
+    zeroKey(kek);
+    process.exit(HOSTED_CONFIG_EXIT);
+  }
+  if (previousKek && previousKek.equals(kek)) {
+    console.error("VAULT_KEK_PREVIOUS is the current KEK; remove it once the rotation is done.");
+    zeroKey(kek);
+    zeroKey(previousKek);
+    process.exit(HOSTED_CONFIG_EXIT);
+  }
+  if (previousKek) logVaultEvent("kek_previous_loaded", { plane: env.VAULT_DEPLOY_PLANE ?? "" });
   const deployPlane = hostedDeployPlane(env);
   let store: PostgresStore;
   try {
@@ -49,6 +65,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
       `Postgres open failed: ${message}. Check DATABASE_URL (Neon pooled host, sslmode=require) and that the release_command migrated the schema.`,
     );
     zeroKey(kek);
+    if (previousKek) zeroKey(previousKek);
     process.exit(HOSTED_CONFIG_EXIT);
   }
   const sendEmail = env.RESEND_API_KEY
@@ -61,14 +78,19 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   const kernel = new HostedKernel({
     store,
     kek,
+    previousKek,
     sendEmail,
     publicUrl,
     approvalHmac: env.VAULT_APPROVAL_HMAC ? Buffer.from(env.VAULT_APPROVAL_HMAC, "hex") : undefined,
     deployPlane,
   });
+  // One-shot: item envelopes written before AAD binding are rebound now, so the read path
+  // never needs the legacy `orgId` AAD again.
+  const rebind = await kernel.rebindLegacyItems();
+  if (rebind.rebound + rebind.verified + rebind.unreadable > 0) logVaultEvent("aad_rebind", { ...rebind });
   const host = env.VAULT_BIND_HOST ?? "0.0.0.0";
   const sessionSecret = env.VAULT_SESSION_SECRET ?? "";
-  const identity = new OperatorIdentity({ store, sessionSecret, kek, sendEmail });
+  const identity = new OperatorIdentity({ store, sessionSecret, kek, previousKek, sendEmail });
   const jwk = parseOidcPrivateJwk(env.VAULT_OIDC_PRIVATE_JWK);
   const oidcProvider = jwk
     ? createOauthProvider({
@@ -121,6 +143,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     onDone: () => {
       sweeps.stop();
       zeroKey(kek);
+      if (previousKek) zeroKey(previousKek);
     },
   });
   process.on("SIGINT", () => shutdown.stop("SIGINT"));

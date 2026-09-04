@@ -259,11 +259,40 @@ export function deployPlaneRaw(env: NodeJS.ProcessEnv): "staging" | "production"
   return undefined;
 }
 
+/**
+ * `VAULT_KEK_PREVIOUS` / `VAULT_KEK_PREVIOUS_WRAPPED` (the KEK a rotation is leaving) follow the
+ * same rules as the current KEK: one form at a time, raw refused under `VAULT_KEK_REQUIRE_KMS=1`,
+ * the wrapped form only on a plane with `VAULT_KMS_KEY_ID`, and a raw value must parse.
+ */
+export function previousKekBootError(env: NodeJS.ProcessEnv): string | undefined {
+  const plane = deployPlaneRaw(env);
+  const raw = env.VAULT_KEK_PREVIOUS?.trim() ?? "";
+  const wrapped = env.VAULT_KEK_PREVIOUS_WRAPPED?.trim() ?? "";
+  if (!raw && !wrapped) return undefined;
+  if (raw && wrapped) return "Set VAULT_KEK_PREVIOUS or VAULT_KEK_PREVIOUS_WRAPPED, not both.";
+  if (wrapped) {
+    if (!plane || !env.VAULT_KMS_KEY_ID?.trim()) {
+      return "VAULT_KEK_PREVIOUS_WRAPPED requires VAULT_DEPLOY_PLANE and VAULT_KMS_KEY_ID.";
+    }
+    if (!env.FLY_APP_NAME?.trim()) return "VAULT_KEK_PREVIOUS_WRAPPED requires FLY_APP_NAME.";
+    return undefined;
+  }
+  if (plane && env.VAULT_KEK_REQUIRE_KMS === "1") {
+    return "VAULT_KEK_REQUIRE_KMS=1 refuses raw VAULT_KEK_PREVIOUS; use VAULT_KEK_PREVIOUS_WRAPPED.";
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(raw) && Buffer.from(raw, "base64").length !== 32) {
+    return "VAULT_KEK_PREVIOUS must be a 32-byte key (64 hex chars or base64).";
+  }
+  return undefined;
+}
+
 export function hostedKekBootError(env: NodeJS.ProcessEnv): string | undefined {
   const plane = deployPlaneRaw(env);
   if (env.VAULT_AUTH_MODE === "test" && plane) {
     return "VAULT_AUTH_MODE=test is refused when VAULT_DEPLOY_PLANE is staging or production.";
   }
+  const previousErr = previousKekBootError(env);
+  if (previousErr) return previousErr;
   const wrapped = Boolean(env.VAULT_KEK_WRAPPED?.trim() && env.VAULT_KMS_KEY_ID?.trim());
   const raw = Boolean(env.VAULT_KEK?.trim());
   const requireKms = env.VAULT_KEK_REQUIRE_KMS === "1";

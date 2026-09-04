@@ -453,7 +453,9 @@ async function cmdKekRotate(io: Io): Promise<number> {
     return 1;
   }
   const oldKek = parseMasterKey(oldRaw);
-  const newHex = generateMasterKey();
+  // VAULT_KEK_NEW: the KEK the running process already has as current (docs/ops/kek-rotation.md);
+  // without it a fresh key is generated, which is only right before that deploy.
+  const newHex = process.env.VAULT_KEK_NEW?.trim() || generateMasterKey();
   const newKek = parseMasterKey(newHex);
   const [{ PostgresStore }, { HostedKernel }, { awsKmsEncrypt, kekEncryptionContext }] = await Promise.all([
     loadPostgresStore(),

@@ -62,6 +62,8 @@ export type IdentityOpts = {
   store: VaultStore;
   sessionSecret: string;
   kek: Buffer;
+  /** The KEK a rotation is leaving (`VAULT_KEK_PREVIOUS`); rows still under it are re-wrapped on read. */
+  previousKek?: Buffer;
   sendEmail?: EmailSender;
   now?: () => Date;
 };
@@ -191,7 +193,7 @@ export class OperatorIdentity {
     this.sessionSecret = opts.sessionSecret;
     this.sendEmail = opts.sendEmail;
     this.now = opts.now ?? (() => new Date());
-    this.keys = new IdentityKeyring(opts.store, opts.kek, this.now);
+    this.keys = new IdentityKeyring(opts.store, opts.kek, this.now, opts.previousKek);
   }
 
   /**
