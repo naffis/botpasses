@@ -32,7 +32,7 @@ No MCP tool, HTTP route, CLI command, console screen, email, or audit row return
 
 Password managers for people encrypt in the client so the vendor cannot read what you store. Botpasses cannot make that claim: to attach a key to a request, the hosted process has to decrypt it. The parties that can decrypt are the hosted process at inject, and anyone who holds both the AWS KMS role and the database. The model, the chat transcript, logs, and staff without both of those cannot.
 
-We think an honest "grant-vault" is more useful to you than a false "zero-knowledge". The decision is recorded in [ADR 0003](https://github.com/naffis/botpasses/blob/dev/docs/adr/0006-grant-vault-trust-model.md) and the full table of who sees what is on the [Security](/security) page.
+We think an honest "grant-vault" is more useful to you than a false "zero-knowledge". The decision is recorded in [ADR 0006](https://github.com/naffis/botpasses/blob/dev/docs/adr/0006-grant-vault-trust-model.md) and the full table of who sees what is on the [Security](/security) page.
 
 ## What this does not protect against
 
