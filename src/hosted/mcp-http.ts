@@ -110,7 +110,7 @@ function optionalBoolean(args: Record<string, unknown>, key: string): boolean {
 }
 
 /** The two request bodies the connector encodes; anything else is a 400 rather than sent as-is. */
-export const CONTENT_TYPES = ["application/json", "application/x-www-form-urlencoded"] as const;
+const CONTENT_TYPES = ["application/json", "application/x-www-form-urlencoded"] as const;
 
 function optionalContentType(value: unknown): string | undefined {
   const raw = optional(value)?.trim().toLowerCase();

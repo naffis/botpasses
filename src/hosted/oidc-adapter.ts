@@ -19,7 +19,7 @@ const CLIENT_OWNED_OIDC_KINDS = [
 /** Kinds that carry a `grantId` and die with their grant. */
 const GRANT_BOUND_OIDC_KINDS = ["RefreshToken", "AuthorizationCode", "DeviceCode", "AccessToken"] as const;
 
-export type RevokedClientScope = {
+type RevokedClientScope = {
   /** The org whose vault client is being revoked. */
   orgId: string;
   /** Members of that org: legacy grants (no org marker) are matched by account. */

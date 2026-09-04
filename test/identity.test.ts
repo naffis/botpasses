@@ -11,20 +11,7 @@ import { createOauthProvider } from "../src/hosted/oauth-as.ts";
 import { parseOidcPrivateJwk } from "../src/hosted/boot.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
-
-function codeFromEmail(html: string): string {
-  const m = />(\d{8})</.exec(html);
-  assert.ok(m?.[1], "otp missing from email");
-  return m[1];
-}
-
-function cookieJar(res: Response): { cookie: string; csrf: string } {
-  const parts = res.headers.getSetCookie();
-  const cookie = parts.map((p) => p.split(";")[0]).join("; ");
-  const csrfPart = parts.find((p) => p.startsWith("bp_csrf=") || p.startsWith("__Host-bp_csrf="));
-  const csrf = csrfPart ? decodeURIComponent((csrfPart.split(";")[0] ?? "").split("=").slice(1).join("=")) : "";
-  return { cookie, csrf };
-}
+import { codeFromEmail, cookieJar } from "./identity-harness.ts";
 
 async function identityServer() {
   const home = tempHome();

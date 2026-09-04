@@ -1,5 +1,17 @@
+import { createHash } from "node:crypto";
+
 const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
 const ACTOR_ID = /^[a-z][a-z0-9_-]{0,127}$/;
+
+/** ISO-8601 timestamp for store rows and public records. */
+export function nowIso(d: Date): string {
+  return d.toISOString();
+}
+
+/** Lowercase hex SHA-256; the one hash behind every `*_hash` column, fingerprint, and asset tag. */
+export function sha256Hex(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 export function normalizeSecretName(name: string): string {
   const n = name.trim().toUpperCase();

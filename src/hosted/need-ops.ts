@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { encrypt } from "../crypto.ts";
-import { last4, normalizeSecretName, suggestedNameFromHost } from "../ids.ts";
+import { last4, normalizeSecretName, nowIso, suggestedNameFromHost } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   scopeFromPolicy,
@@ -52,10 +52,6 @@ export type NeedHost = {
     clientId: string | null,
   ) => Promise<void>;
 };
-
-function nowIso(d: Date): string {
-  return d.toISOString();
-}
 
 function truncateTask(raw: string | undefined): string | null {
   if (!raw) return null;

@@ -1,5 +1,4 @@
 import {
-  createHash,
   createHmac,
   randomBytes,
   randomInt,
@@ -8,6 +7,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import type { EmailOtpRecord, UserRecord } from "../hosted-types.ts";
+import { sha256Hex } from "../ids.ts";
 import type { OperatorSessionRow, UserRow, VaultStore } from "../store/types.ts";
 import { HttpError } from "./errors.ts";
 import type { EmailSender } from "./email.ts";
@@ -15,7 +15,7 @@ import { buildOtpEmail } from "./otp-email.ts";
 import { otpauthQrSvg } from "./totp-qr.ts";
 import { IdentityKeyring } from "./identity-keys.ts";
 import { logAuthEvent } from "./observe.ts";
-import { IpWindowLimiter, clientIpFrom, trustsProxyHeaders } from "./identity-limiter.ts";
+import { IpWindowLimiter } from "./identity-limiter.ts";
 import {
   BACKUP_CODE_COUNT,
   TOTP_LOCK_MS,
@@ -33,7 +33,7 @@ import {
   withoutPending,
 } from "./identity-totp.ts";
 
-export { IpWindowLimiter, totpEnabled };
+export { totpEnabled };
 
 const SCRYPT_OPTS = { N: 16384, r: 8, p: 1 } as const;
 
@@ -80,8 +80,9 @@ export type AccountSummary = {
   created_at: string;
 };
 
+/** Session tokens and JTIs are stored by this hash; the plaintext never reaches a row. */
 export function hashToken(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+  return sha256Hex(value);
 }
 
 export function sessionCookieName(secure: boolean): string {
@@ -147,7 +148,7 @@ export function signCsrf(secret: string, raw: string, sessionHash: string): stri
   return `${raw}.${hmac(secret, `${sessionHash}.${raw}`)}`;
 }
 
-export function verifyCsrfToken(
+function verifyCsrfToken(
   secret: string,
   cookieVal: string | undefined,
   headerVal: string | undefined,
@@ -205,14 +206,6 @@ export class OperatorIdentity {
     this.sendEmail = opts.sendEmail;
     this.now = opts.now ?? (() => new Date());
     this.keys = new IdentityKeyring(opts.store, opts.kek, this.now, opts.previousKek);
-  }
-
-  /**
-   * Header-only variant kept for `http.ts`, which cannot see `Fly-Client-IP` from here.
-   * Prefer `requestClientIp(req)` from `identity-limiter.ts`.
-   */
-  clientIp(forwarded: string | undefined, remote: string | undefined): string {
-    return clientIpFrom(undefined, forwarded, remote, trustsProxyHeaders());
   }
 
   /**

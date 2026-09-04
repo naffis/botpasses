@@ -8,6 +8,7 @@
  * link, and approval email in `kernel-grant-approval.ts`. Both are re-exported from here.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { nowIso } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   publicGrantScope,
@@ -113,12 +114,8 @@ export type InboxGrantCard = {
   allowed_hosts: string[];
 };
 
-function nowIso(d: Date): string {
-  return d.toISOString();
-}
-
 /** Inbox and email copy: the agent's reason is cut to what a card can show (same cap as needs). */
-export const TASK_DESCRIPTION_MAX = 500;
+const TASK_DESCRIPTION_MAX = 500;
 
 function truncateTask(raw: string | undefined): string | undefined {
   const t = raw?.trim();
@@ -372,7 +369,7 @@ async function dropStalePolicy(
   if (stale) await host.store.deletePolicy(stale.id);
 }
 
-export const APPROVE_CODE_LIMIT_MESSAGE = "approve-by-code rate limit: 20 attempts per org per 15 minutes";
+const APPROVE_CODE_LIMIT_MESSAGE = "approve-by-code rate limit: 20 attempts per org per 15 minutes";
 
 /**
  * Finds the pending challenge whose code matches. A wrong code charges one attempt against the

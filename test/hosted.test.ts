@@ -10,7 +10,7 @@ import { HostedKernel } from "../src/hosted/kernel.ts";
 import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
 import { assertAllowedHostname, isBlockedIp } from "../src/hosted/ssrf.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
-import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
+import { CANARY, TEST_SESSION_SECRET, cleanup, hostedBootEnv, tempHome, testOidcPrivateJwk } from "./helpers.ts";
 
 const HMAC = Buffer.from("aa".repeat(32), "hex");
 
@@ -697,21 +697,9 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
   );
 });
 
-function bootEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    VAULT_MODE: "hosted",
-    DATABASE_URL: "postgres://x",
-    VAULT_PUBLIC_URL: STAGING_ORIGIN,
-    VAULT_DEPLOY_PLANE: "staging",
-    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
-    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
-    ...extra,
-  };
-}
-
 test("AC-02 REQUIRE_KMS refuses raw-only on a production plane", () => {
   const err = hostedBootError(
-    bootEnv({
+    hostedBootEnv({
       VAULT_DEPLOY_PLANE: "production",
       VAULT_PUBLIC_URL: "https://botpasses.com",
       VAULT_KEK: "aa".repeat(32),
@@ -724,7 +712,7 @@ test("AC-02 REQUIRE_KMS refuses raw-only on a production plane", () => {
 test("AC-02b raw-only on a plane boots when REQUIRE_KMS is unset", () => {
   assert.equal(
     hostedBootError(
-      bootEnv({
+      hostedBootEnv({
         VAULT_DEPLOY_PLANE: "production",
         VAULT_PUBLIC_URL: "https://botpasses.com",
         VAULT_KEK: "aa".repeat(32),
@@ -737,7 +725,7 @@ test("AC-02b raw-only on a plane boots when REQUIRE_KMS is unset", () => {
 test("AC-02c both wrapped and raw prefer wrapped and do not fail boot", () => {
   assert.equal(
     hostedBootError(
-      bootEnv({
+      hostedBootEnv({
         VAULT_KEK: "aa".repeat(32),
         VAULT_KEK_WRAPPED: "d3JhcA==",
         VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
@@ -751,7 +739,7 @@ test("AC-02c both wrapped and raw prefer wrapped and do not fail boot", () => {
 test("AC-12 test auth mode is refused on a deploy plane", () => {
   assert.match(
     hostedBootError(
-      bootEnv({
+      hostedBootEnv({
         VAULT_KEK: "aa".repeat(32),
         VAULT_AUTH_MODE: "test",
         VAULT_DEPLOY_PLANE: "production",

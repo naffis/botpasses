@@ -285,7 +285,7 @@ export async function persistIssuedRefresh(
   return persistIssuedOauth(kernel, "oauth_refresh", input, environment);
 }
 
-export type TokenRefView = {
+type TokenRefView = {
   jti?: string;
   clientId?: string;
   accountId?: string;

@@ -16,6 +16,7 @@ import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import type { VaultEnvName } from "../src/hosted-types.ts";
 import { TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
+import { codeFromEmail } from "./identity-harness.ts";
 
 export const ISSUER = "http://127.0.0.1:8788";
 export const AUDIENCE = `${ISSUER}/mcp`;
@@ -58,12 +59,6 @@ export function pkce(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
-}
-
-export function codeFromEmail(html: string): string {
-  const m = />(\d{8})</.exec(html);
-  assert.ok(m?.[1], "otp missing from email");
-  return m[1];
 }
 
 /** A second RS256 private JWK, distinct from `testOidcPrivateJwk()`, for key-rotation tests. */

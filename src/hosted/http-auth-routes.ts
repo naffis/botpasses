@@ -6,6 +6,7 @@ import { totpEnabled } from "./operator-identity.ts";
 import { otpauthUrl, pendingEnvelope } from "./identity-totp.ts";
 import { otpauthQrSvg } from "./totp-qr.ts";
 import { requestClientIp } from "./identity-limiter.ts";
+import { sendHtml } from "./http-util.ts";
 import { logAuthEvent } from "./observe.ts";
 import { needsTotpVerify } from "./identity.ts";
 import { HttpError } from "./errors.ts";
@@ -20,23 +21,9 @@ export type AuthRouteOpts = {
   readJson: (req: IncomingMessage) => Promise<Record<string, unknown>>;
   json: (res: ServerResponse, status: number, body: unknown) => void;
   setCookies: (res: ServerResponse, cookies: string[], status: number, body: unknown) => void;
-  /**
-   * Superseded by `requestClientIp(req)`, which also reads `Fly-Client-IP`. Still accepted so
-   * `http.ts` keeps compiling; drop it there and here together.
-   */
-  clientIp?: (req: IncomingMessage) => string;
   /** When set, logout also ends the OAuth server's own session (S12). */
   oidcProvider?: Provider;
 };
-
-export function sendHtml(res: ServerResponse, html: string, extra: Record<string, string>, noStore = true): void {
-  res.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "cache-control": noStore ? "no-store" : "no-cache",
-    ...extra,
-  });
-  res.end(html);
-}
 
 function redirect(res: ServerResponse, location: string): true {
   res.writeHead(302, { location });
@@ -60,7 +47,7 @@ export async function hasPendingTotp(identity: OperatorIdentity, userId: string)
  * or the re-enroll page (which cannot call `start` again without a current code) shows the same
  * QR that the pending secret will be confirmed against. Undefined when none is in flight.
  */
-export async function pendingTotpEnrollment(
+async function pendingTotpEnrollment(
   identity: OperatorIdentity,
   userId: string,
 ): Promise<{ otpauth_url: string; qr_svg: string } | undefined> {
@@ -90,7 +77,7 @@ export async function tryAuthPage(
   if (path === "/sign-in" || path === "/sign-up") {
     if (op?.ready) return redirect(res, "/console");
     if (op && op.ready === false) return redirect(res, pendingStep(op));
-    sendHtml(res, authEntryHtml(path === "/sign-up" ? "sign-up" : "sign-in"), extra);
+    sendHtml(res, 200, authEntryHtml(path === "/sign-up" ? "sign-up" : "sign-in"), extra);
     return true;
   }
   if (path === "/enroll-totp") {
@@ -99,14 +86,14 @@ export async function tryAuthPage(
     // current code); otherwise the page has nothing to show and the console is the place to be.
     if (op.ready && !(pendingTotp && (await pendingTotp(op.userId)))) return redirect(res, "/console");
     if (needsTotpVerify(op)) return redirect(res, "/verify-totp");
-    sendHtml(res, enrollTotpHtml(), extra);
+    sendHtml(res, 200, enrollTotpHtml(), extra);
     return true;
   }
   if (path === "/verify-totp") {
     if (op?.ready) return redirect(res, "/console");
     if (!op) return redirect(res, "/sign-in");
     if (!needsTotpVerify(op)) return redirect(res, "/enroll-totp");
-    sendHtml(res, verifyTotpHtml(), extra);
+    sendHtml(res, 200, verifyTotpHtml(), extra);
     return true;
   }
   return false;

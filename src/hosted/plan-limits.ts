@@ -13,7 +13,7 @@ export type PlanLimitKind = "credentials" | "agents" | "members" | "calls" | "or
 /** Kinds counted against one org (the plan report); `orgs` is counted per user instead. */
 export type OrgUsageKind = Exclude<PlanLimitKind, "orgs">;
 
-export const PLAN_LIMIT_KINDS: readonly PlanLimitKind[] = ["credentials", "agents", "members", "calls", "orgs"];
+const PLAN_LIMIT_KINDS: readonly PlanLimitKind[] = ["credentials", "agents", "members", "calls", "orgs"];
 
 export type PlanLimits = Record<PlanLimitKind, number>;
 

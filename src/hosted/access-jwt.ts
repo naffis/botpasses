@@ -8,7 +8,7 @@ import type { OidcPrivateJwk } from "./boot.ts";
 import { logVaultEvent } from "./observe.ts";
 
 /** Skew allowed on `exp`, `nbf`, and `iat` (seconds). Access tokens live 600 s. */
-export const ACCESS_JWT_CLOCK_TOLERANCE_S = 30;
+const ACCESS_JWT_CLOCK_TOLERANCE_S = 30;
 
 /** Claim carrying the org the operator consented in. Set by `extraTokenClaims`. */
 export const ORG_CLAIM = "org_id";

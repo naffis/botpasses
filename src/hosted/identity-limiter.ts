@@ -129,7 +129,7 @@ function ipv6ToBigInt(ip: string): bigint {
 }
 
 /** IPv4 or IPv6 (zone ids and IPv4-mapped IPv6 handled). Undefined for anything else. */
-export function parseIp(raw: string | undefined): ParsedIp | undefined {
+function parseIp(raw: string | undefined): ParsedIp | undefined {
   const ip = stripZone((raw ?? "").trim());
   if (!ip) return undefined;
   if (isIPv4(ip)) return { bits: 32, value: ipv4ToBigInt(ip) };

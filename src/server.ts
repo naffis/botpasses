@@ -1,6 +1,7 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "./brand.ts";
+import { tokensEqual } from "./crypto.ts";
 import { handleMcpRpc, newMcpSession, type JsonRpcRequest, type McpSession } from "./mcp.ts";
 import { operatorHtml } from "./operator-page.ts";
 import type { LoopbackRole, Vault } from "./vault.ts";
@@ -82,12 +83,6 @@ function describeError(err: unknown): { status: number; message: string } {
   }
   console.error(JSON.stringify({ event: "local_request_error", message: err instanceof Error ? err.message.slice(0, 500) : String(err).slice(0, 500), at: new Date().toISOString() }));
   return { status: 500, message: "Internal error" };
-}
-
-function tokensEqual(a: string, b: string): boolean {
-  const left = createHash("sha256").update(a).digest();
-  const right = createHash("sha256").update(b).digest();
-  return timingSafeEqual(left, right);
 }
 
 function readBearer(req: IncomingMessage): string | undefined {

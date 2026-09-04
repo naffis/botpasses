@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { decrypt, encrypt } from "../crypto.ts";
-import { last4, normalizeSecretName } from "../ids.ts";
+import { last4, normalizeSecretName, nowIso } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { ClientRecord, EnvironmentRecord, HostedGrantRecord, ItemKind, ItemPublic, ItemRecord, VaultEnvName } from "../hosted-types.ts";
 import { ITEM_AAD_VERSION } from "../store/rows.ts";
@@ -107,10 +107,6 @@ type PublicItemSource = Pick<
   ItemRecord,
   "id" | "name" | "kind" | "last4" | "username" | "inject" | "allowedHostsJson" | "folderId" | "createdAt" | "updatedAt"
 >;
-
-function nowIso(d: Date): string {
-  return d.toISOString();
-}
 
 /** Item names from clients are user input; a bad name is a 400, not a 500. */
 export function normalizeItemName(raw: string): string {

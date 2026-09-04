@@ -66,14 +66,14 @@ export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 /** Open `GET /mcp` SSE streams one principal may hold at once. */
 export const SSE_MAX_PER_PRINCIPAL = 4;
 /** `/ready` answers from the last database ping for this long; the probe cannot be used to hammer the pool. */
-export const READY_CACHE_MS = 5_000;
+const READY_CACHE_MS = 5_000;
 
 /**
  * The resolver a server gets when none is passed: nobody is authenticated. Production always
  * passes the identity resolver; tests pass `testAuthResolver` explicitly. Header principals
  * are never a default.
  */
-export const anonymousAuthResolver: AuthResolver = async () => undefined;
+const anonymousAuthResolver: AuthResolver = async () => undefined;
 
 export type HostedHttpOpts = {
   kernel: HostedKernel;

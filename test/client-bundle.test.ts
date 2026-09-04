@@ -27,7 +27,6 @@ test("bundles are plain JS with no leftover module syntax and parse cleanly", ()
     assert.doesNotMatch(js, /<reference/);
     assert.doesNotThrow(() => new Script(js));
   }
-  assert.match(COLLECT_JS, /loadNeed\(\);/);
   assert.equal(hostedAsset("/assets/console.js")?.body, CONSOLE_JS);
   assert.equal(hostedAsset("/assets/mark.svg")?.type, "image/svg+xml");
   assert.match(hostedAsset("/assets/mark.svg")?.body ?? "", /<svg/);

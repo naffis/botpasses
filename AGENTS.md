@@ -8,7 +8,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 
 - TypeScript (Node.js 22.14+, ESM, `--experimental-strip-types` — no compile step for run)
 - SQLite vault at `$VAULT_HOME` (default `$HOME/.botpasses`) · AES-256-GCM envelope encryption
-- MCP (stdio + HTTP) + CLI (`npx vault` / `npm run botpasses`) + loopback operator console
+- MCP (stdio + HTTP) + CLI (`npx vault` / `npm run vault -- <command>`) + loopback operator console
 - Hosted origins: `https://botpasses.com`, `https://staging.botpasses.com`. Never a platform default hostname.
 - Hosted identity is first-party (email OTP + TOTP). This origin is the MCP OAuth authorization server. No Clerk.
 - Hosted plane KEK: prefer `VAULT_KEK_WRAPPED` + KMS. `VAULT_KEK_REQUIRE_KMS=1` refuses raw-only. Do not claim zero-knowledge.

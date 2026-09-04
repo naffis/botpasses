@@ -5,7 +5,7 @@ section: reference
 order: 3
 ---
 
-Run `npx vault` from the cloned repository (or `npm run botpasses -- <command>`) until the npm package is published. Process environment names are `VAULT_*`. The local server listens on **8788**.
+Run `npx vault` from the cloned repository (or `npm run vault -- <command>`) until the npm package is published. Process environment names are `VAULT_*`. The local server listens on **8788**.
 
 ## Environment
 
