@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: the threat model covers trust decided at boot, proxy trust, single-use sign-in state, the canonical request path, and prompt-grant semantics; ADR 0008 records the hardening decisions and their consequences. The security page links it and names ADR 0006 correctly.
 - Security: a personal org gets a random id and records who created it (`orgs.created_by`, migration 010). An owner who was removed from the org they created no longer regains it by signing in; they land in a fresh org. An org a user created that has no members at all (a provisioning that stopped before the owner insert) is reclaimed instead of duplicated.
 - Security: item envelopes written before AAD binding (bound to the org id alone) are re-encrypted under `org_id|item_id|allowed_hosts_json|inject` once at boot (`aad_rebind` log with `rebound`, `verified`, `unreadable`; `items.aad_version`, migration 010). The inject path no longer falls back to the legacy binding. `updateItem` writes a re-encrypted envelope and the columns it is bound to in one statement.
 - Security: `rotateItem` enforces the 64 KiB value cap, and rotate, update, and delete by item id refuse production items on the staging deploy (404) like list and inject already did.

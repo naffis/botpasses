@@ -72,7 +72,7 @@ Approve via the web inbox, the email sent to every org member (magic link), or t
 
 ## Threat model
 
-Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0006](docs/adr/0006-grant-vault-trust-model.md), [0007](docs/adr/0007-kms-wrapped-kek.md).
+Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0006](docs/adr/0006-grant-vault-trust-model.md), [0007](docs/adr/0007-kms-wrapped-kek.md), [0008](docs/adr/0008-security-hardening.md).
 
 | Surface | Sees secret value? |
 | --- | --- |
