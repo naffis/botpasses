@@ -243,6 +243,7 @@ export function mapAccess(r: Row): AccessEventRecord {
     issuedAt: String(r.issued_at),
     expiresAt: text(r.expires_at),
     revokedAt: text(r.revoked_at),
+    grantId: text(r.grant_id),
   };
 }
 

@@ -70,12 +70,17 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   const sessionSecret = env.VAULT_SESSION_SECRET ?? "";
   const identity = new OperatorIdentity({ store, sessionSecret, kek, sendEmail });
   const jwk = parseOidcPrivateJwk(env.VAULT_OIDC_PRIVATE_JWK);
+  const previousJwk = parseOidcPrivateJwk(env.VAULT_OIDC_PREVIOUS_JWK);
+  if (env.VAULT_OIDC_PREVIOUS_JWK?.trim() && !previousJwk) {
+    throw new Error("VAULT_OIDC_PREVIOUS_JWK is set but is not a private RS256 JWK");
+  }
   const oidcProvider = jwk
     ? createOauthProvider({
         issuer: publicUrl.replace(/\/$/, ""),
         kernel,
         sessionSecret,
         jwk,
+        previousJwk,
         secureCookies: true,
       })
     : undefined;
@@ -87,6 +92,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
           kernel,
           secureCookies: true,
           oidcJwk: jwk,
+          oidcPreviousJwk: previousJwk,
           issuer: publicUrl.replace(/\/$/, ""),
         });
   const authResolver = hostedAuthResolver(env, inner);

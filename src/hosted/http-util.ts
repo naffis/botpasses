@@ -188,7 +188,6 @@ export function robotsTxt(plane: "staging" | "production"): string {
     "Disallow: /approve",
     "Disallow: /runtime",
     "Disallow: /oauth",
-    "Disallow: /agentpass",
     "",
   ].join("\n");
 }

@@ -223,7 +223,8 @@ for (const backend of backends) {
       const oauth = await kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging" });
       assert.equal((await store.findClientByOrgAndOauthId(orgId, id("dcr")))?.id, oauth.id);
       await store.setClientRevoked(oauth.id, "2026-01-01T00:00:00.000Z");
-      const revived = await kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging" });
+      await assert.rejects(kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging" }));
+      const revived = await kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging", reactivateRevoked: true });
       assert.equal(revived.id, oauth.id);
       assert.equal(revived.revokedAt, null);
       assert.equal(await store.findClientByOrgAndOauthId(id("other-org"), id("dcr")), undefined);

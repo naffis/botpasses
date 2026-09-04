@@ -26,6 +26,8 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
   HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
+  HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_SQLITE,
@@ -85,6 +87,7 @@ const SQLITE_ALTERS = [
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+  HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
 ];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
@@ -115,6 +118,7 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   }
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
   db.exec(HOSTED_SCHEMA_TEAM);
+  db.exec(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
   return new SqliteHostedStore(db);
 }
 
@@ -198,7 +202,6 @@ export class SqliteHostedStore implements VaultStore {
       this.#db.prepare("DELETE FROM policies WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM clients WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM audit WHERE org_id = ?").run(orgId);
-      this.#db.prepare("DELETE FROM agentpass_passes WHERE org_id = ?").run(orgId);
       this.#db
         .prepare(
           `DELETE FROM items WHERE environment_id IN (
@@ -681,79 +684,6 @@ export class SqliteHostedStore implements VaultStore {
       .run(row.id, row.orgId, row.action, row.actor, row.itemName, row.clientId, row.at);
   }
 
-  async insertAgentPass(row: {
-    id: string;
-    orgId: string;
-    status: string;
-    holderCnf: string | null;
-    scopeJson: string;
-    taskId: string | null;
-    createdAt: string;
-    consumedAt: string | null;
-  }): Promise<void> {
-    this.#db
-      .prepare(
-        `INSERT INTO agentpass_passes (id, org_id, status, holder_cnf, scope_json, task_id, created_at, consumed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.orgId,
-        row.status,
-        row.holderCnf,
-        row.scopeJson,
-        row.taskId,
-        row.createdAt,
-        row.consumedAt,
-      );
-  }
-
-  async getAgentPass(id: string) {
-    const r = this.#db.prepare("SELECT * FROM agentpass_passes WHERE id = ?").get(id) as
-      | Record<string, unknown>
-      | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r.id),
-      orgId: String(r.org_id),
-      status: String(r.status),
-      holderCnf: r.holder_cnf == null ? null : String(r.holder_cnf),
-      scopeJson: String(r.scope_json),
-      taskId: r.task_id == null ? null : String(r.task_id),
-      createdAt: String(r.created_at),
-      consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
-    };
-  }
-
-  async updateAgentPassStatus(id: string, status: string): Promise<void> {
-    this.#db.prepare("UPDATE agentpass_passes SET status = ? WHERE id = ?").run(status, id);
-  }
-
-  async consumeAgentPass(id: string, consumedAt: string): Promise<boolean> {
-    const result = this.#db
-      .prepare(
-        "UPDATE agentpass_passes SET status = 'consumed', consumed_at = ? WHERE id = ? AND status = 'approved'",
-      )
-      .run(consumedAt, id);
-    return result.changes === 1;
-  }
-
-  async listAgentPasses(orgId: string) {
-    const rows = this.#db
-      .prepare("SELECT * FROM agentpass_passes WHERE org_id = ? ORDER BY created_at DESC")
-      .all(orgId) as Record<string, unknown>[];
-    return rows.map((r) => ({
-      id: String(r.id),
-      orgId: String(r.org_id),
-      status: String(r.status),
-      holderCnf: r.holder_cnf == null ? null : String(r.holder_cnf),
-      scopeJson: String(r.scope_json),
-      taskId: r.task_id == null ? null : String(r.task_id),
-      createdAt: String(r.created_at),
-      consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
-    }));
-  }
-
   async listAudit(orgId: string, limit = 200, filter?: AuditListFilter): Promise<HostedAuditRecord[]> {
     const clauses = ["org_id = ?"];
     const params: Array<string | number> = [orgId];
@@ -1150,8 +1080,8 @@ export class SqliteHostedStore implements VaultStore {
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at, grant_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1163,6 +1093,7 @@ export class SqliteHostedStore implements VaultStore {
         row.issuedAt,
         row.expiresAt,
         row.revokedAt,
+        row.grantId ?? null,
       );
   }
 
@@ -1188,6 +1119,13 @@ export class SqliteHostedStore implements VaultStore {
 
   async revokeAccessEvent(jtiHash: string, at: string): Promise<void> {
     this.#db.prepare("UPDATE access_events SET revoked_at = ? WHERE jti_hash = ?").run(at, jtiHash);
+  }
+
+  async revokeAccessEventsForGrant(grantId: string, at: string): Promise<AccessEventRecord[]> {
+    const rows = this.#db
+      .prepare("UPDATE access_events SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL RETURNING *")
+      .all(at, grantId) as Record<string, unknown>[];
+    return rows.map(mapAccess);
   }
 
   async setClientRevoked(id: string, at: string | null): Promise<void> {
@@ -1272,6 +1210,25 @@ export class SqliteHostedStore implements VaultStore {
          AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)`,
       )
       .run(kind, ...clientIds, accountId, accountId);
+  }
+
+  async listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]> {
+    if (clientIds.length === 0) return [];
+    const marks = clientIds.map(() => "?").join(", ");
+    const rows = this.#db
+      .prepare(`SELECT id, payload FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})`)
+      .all(kind, ...clientIds) as Record<string, unknown>[];
+    return rows.map((r) => ({ id: String(r.id), payload: String(r.payload) }));
+  }
+
+  async consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean> {
+    const r = this.#db
+      .prepare(
+        `UPDATE oidc_payloads SET payload = json_set(payload, '$.consumed', ?)
+         WHERE id = ? AND kind = ? AND json_extract(payload, '$.consumed') IS NULL`,
+      )
+      .run(consumedAt, id, kind);
+    return Number(r.changes) === 1;
   }
 
   async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {

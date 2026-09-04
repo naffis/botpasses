@@ -16,6 +16,8 @@ Limits are fixed per organisation or per IP address. Hitting one returns HTTP 42
 | Email code sends (`POST /api/auth/otp/send`) | 5 per email per 15 minutes | Email address |
 | Wrong email codes | 5, then the code is void and a new one must be sent | Challenge |
 | OAuth dynamic client registration (`POST /oauth/register`) | 20 per hour | IP address |
+| Device sign-in code attempts (`POST /device`) | 10 per 15 minutes | IP address, and the browser session |
+| OAuth client metadata document fetches (an `https` `client_id`) | 30 per hour per document host, 10 per hour per requesting IP, 4 in flight at once | Host, IP address, server |
 | Approval code reuse | A code works once. Reuse is 409, expired is 410 | Code |
 
 ## Lifetimes
@@ -26,7 +28,7 @@ Limits are fixed per organisation or per IP address. Hitting one returns HTTP 42
 | `prompt` approval | Until one successful API call |
 | `session` approval | 8 hours |
 | `item_standing`, `folder_standing` | Until revoked |
-| OAuth access token | 600 seconds. Refresh tokens rotate on use |
+| OAuth access token | 600 seconds (30 seconds of clock skew allowed). Refresh tokens rotate on use; revoking one, or replaying a rotated one, ends every access token issued with it |
 | Operator session | Until sign-out or revoke from the Access panel |
 
 ## Sizes and timeouts
@@ -38,6 +40,7 @@ Limits are fixed per organisation or per IP address. Hitting one returns HTTP 42
 | `task_description` shown in the Inbox | 500 characters (longer text is truncated) |
 | Origin response returned to the agent | 256 KiB |
 | Origin call timeout | 10 seconds |
+| OAuth client metadata document fetch | 1 MiB, 3 seconds |
 | Access ledger read (`GET /api/access/events`) | 200 newest rows |
 
 ## What an agent should do on 429

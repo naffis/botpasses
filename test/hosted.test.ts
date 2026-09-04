@@ -1422,16 +1422,32 @@ test("client rotate invalidates the old secret (AC-15)", async () => {
   }
 });
 
-test("AgentPass stays dark when VAULT_AGENTPASS is unset", async () => {
+test("O10 the AgentPass surface is gone: /agentpass/* is 404 even with VAULT_AGENTPASS=1 and the inbox has no agentpass list", async () => {
   const prev = process.env.VAULT_AGENTPASS;
-  delete process.env.VAULT_AGENTPASS;
+  process.env.VAULT_AGENTPASS = "1";
   const ctx = await setup();
   try {
-    const res = await fetch(`${ctx.base}/agentpass/configuration`);
-    assert.notEqual(res.status, 200);
+    for (const path of ["/agentpass/configuration", "/agentpass/jwks"]) {
+      const res = await fetch(`${ctx.base}${path}`);
+      assert.equal(res.status, 404, path);
+    }
+    const created = await fetch(`${ctx.base}/agentpass/requests`, {
+      method: "POST",
+      headers: ctx.op,
+      body: JSON.stringify({ holder_cnf: "cnf-1", scope: ["read"] }),
+    });
+    assert.equal(created.status, 404);
+    const validate = await fetch(`${ctx.base}/agentpass/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "ap_x", holder_proof: { cnf: "cnf-1" } }),
+    });
+    assert.equal(validate.status, 404);
     const inbox = await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op });
-    const body = (await inbox.json()) as { agentpass?: unknown[] };
-    assert.deepEqual(body.agentpass, []);
+    assert.equal(inbox.status, 200);
+    const body = (await inbox.json()) as Record<string, unknown>;
+    assert.ok(!("agentpass" in body), "inbox no longer carries an agentpass list");
+    assert.ok(Array.isArray(body.grants) && Array.isArray(body.needs));
   } finally {
     if (prev === undefined) delete process.env.VAULT_AGENTPASS;
     else process.env.VAULT_AGENTPASS = prev;

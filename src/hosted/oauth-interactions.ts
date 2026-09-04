@@ -5,6 +5,7 @@ import type { OperatorPrincipal, Principal } from "./auth.ts";
 import { requireOperator } from "./auth.ts";
 import { HttpError } from "./errors.ts";
 import { kernelForProvider, redirectHosts } from "./oauth-as.ts";
+import { orgScope } from "./oauth-clients.ts";
 import { consentExpiredHtml, consentHtml, type ConsentView } from "./oauth-pages.ts";
 import { sendHtml } from "./http-auth-routes.ts";
 import { needsTotpVerify } from "./identity.ts";
@@ -97,7 +98,10 @@ export async function handleConsentPost(
   const requested = typeof details.params.scope === "string" ? details.params.scope.split(/\s+/) : [];
   const granted = requested.filter((s) => GRANTABLE_SCOPES.has(s));
   grant.addOIDCScope((granted.length > 0 ? granted : ["openid"]).join(" "));
-  grant.addResourceScope(audience, "mcp");
+  // The org this operator session acts in is bound into the Grant. Every token issued
+  // under it carries that org, and /mcp checks the account is still a member; the org is
+  // never inferred from the account's first membership at verification time.
+  grant.addResourceScope(audience, `mcp ${orgScope(op.orgId)}`);
   const grantId = await grant.save();
   // remember: false keeps the OP login transient; Botpasses owns the durable session.
   await provider.interactionFinished(req, res, {

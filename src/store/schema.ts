@@ -412,3 +412,20 @@ export const HOSTED_SCHEMA_TEAM_ALTER_PG = `
 ALTER TABLE operator_sessions ADD COLUMN IF NOT EXISTS active_org_id TEXT;
 ALTER TABLE org_members ADD COLUMN IF NOT EXISTS joined_at TEXT;
 `;
+
+/**
+ * `access_events.grant_id`: the oidc-provider grant an OAuth token was issued under, so
+ * revoking a refresh token (RFC 7009, or reuse detection) marks its sibling access tokens.
+ * Null for machine bearers and operator sessions. Mirrored by migrations/012_access_events_grant_id.sql.
+ */
+export const HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE = `
+ALTER TABLE access_events ADD COLUMN grant_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG = `
+ALTER TABLE access_events ADD COLUMN IF NOT EXISTS grant_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_LEDGER_GRANT_INDEXES = `
+CREATE INDEX IF NOT EXISTS access_events_grant ON access_events (grant_id) WHERE grant_id IS NOT NULL;
+`;

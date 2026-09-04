@@ -13,6 +13,8 @@ export type IdentityResolverOpts = {
   kernel: HostedKernel;
   secureCookies: boolean;
   oidcJwk?: OidcPrivateJwk;
+  /** Key being rotated out: still verifies access tokens it signed. See docs/ops/oidc-key-rotation.md. */
+  oidcPreviousJwk?: OidcPrivateJwk;
   issuer?: string;
 };
 
@@ -48,7 +50,7 @@ export function identityAuthResolver(opts: IdentityResolverOpts): AuthResolver {
     }
     const bearer = readBearer(req);
     if (bearer && opts.oidcJwk && opts.issuer) {
-      return principalFromAccessJwt(kernel, bearer, opts.oidcJwk, opts.issuer);
+      return principalFromAccessJwt(kernel, bearer, opts.oidcJwk, opts.issuer, opts.oidcPreviousJwk);
     }
     const secure = opts.secureCookies || requestSecure(req);
     const loaded = await opts.identity.loadSession(req.headers.cookie, secure);

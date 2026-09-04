@@ -4,7 +4,7 @@ Named credentials for **agents and tools**, injected into the **runtime** (child
 
 This is not a human password manager. It does not do browser autofill, TOTP, passkeys, or sharing secrets with other people. If the LLM can see a secret value, the product failed.
 
-Hosted origins: **https://botpasses.com** (prod) and **https://staging.botpasses.com**. MCP collect URLs, CLI login, OAuth resource, and emails use those origins only. Process env names stay `VAULT_*`. AgentPass (`/agentpass/*`) is a separate protocol, not the product name.
+Hosted origins: **https://botpasses.com** (prod) and **https://staging.botpasses.com**. MCP collect URLs, CLI login, OAuth resource, and emails use those origins only. Process env names stay `VAULT_*`.
 
 An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAULT_HOME` to that path.
 
@@ -181,7 +181,7 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 
 **DNS:** orange-cloud `A`/`AAAA` for `botpasses.com` and `staging.botpasses.com`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.com` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
+**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK; `VAULT_OIDC_PREVIOUS_JWK` only while rotating it, see [docs/ops/oidc-key-rotation.md](docs/ops/oidc-key-rotation.md)), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
 
 **Schema:** `migrations/NNN_*.sql` is applied by `scripts/migrate.ts` as the Fly `release_command` (advisory lock, one transaction per file, recorded in `schema_migrations`). Boot runs no DDL once that table exists. Runbook: [docs/ops/migrations.md](docs/ops/migrations.md).
 
@@ -190,8 +190,6 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong. **One Machine per app.** TOTP enrollment state and per-IP limiters live in process memory; do not `fly scale count` above 1 until they are store-backed (plan task 1.5).
 
 `ci.yml` runs lint, typecheck, gitleaks, `npm audit` (root and `site/`), migrations twice against Postgres 16, and the suite with an 80 percent line-coverage gate. `deploy-staging.yml` deploys the SHA that `ci` just passed on `dev`. `deploy-prod.yml` is `workflow_dispatch` behind the `production` environment (required reviewer) and refuses a `staging_sha` that is not on `dev`. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT` with PGDG `pg_dump` 16, encrypts with `BACKUP_KEY` (not the vault KEK), uploads to R2, then a `backup-verify` job downloads and decrypts the object. GitHub only runs `schedule` and `workflow_dispatch` from the default branch; that branch must be `dev`, and `ci` fails on `dev` pushes until it is ([docs/ops/default-branch.md](docs/ops/default-branch.md)). Alerts: [docs/ops/alerts.md](docs/ops/alerts.md).
-
-AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
 
 ## Documentation
 
