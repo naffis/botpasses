@@ -126,10 +126,10 @@ test("AC-02 GET /console is the hosted console", async () => {
     const res = await fetch(`${ctx.base}/console`);
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.match(html, /Issue Grok Bot token/);
+    assert.match(html, /Issue agent token/);
     assert.match(html, /data-testid="console-signin"/);
     assert.match(html, /data-testid="access-panel"/);
-    assert.match(html, /data-testid="access-revoke-confirm"/);
+    assert.match(html, /data-testid="item-delete-confirm"/);
     assert.match(html, /data-testid="app-shell"/);
     assert.match(res.headers.get("content-security-policy") ?? "", /font-src 'self'/);
     assert.match(res.headers.get("content-security-policy") ?? "", /img-src 'self'/);
