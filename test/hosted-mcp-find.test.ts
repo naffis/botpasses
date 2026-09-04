@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { COLLECT_JS } from "../src/hosted/hosted-assets.ts";
 import { handleHostedMcpRpc } from "../src/hosted/mcp.ts";
@@ -28,6 +29,7 @@ async function setup() {
   });
   let lastAuth = "";
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,

@@ -25,6 +25,10 @@ SELECT version, applied_at FROM schema_migrations ORDER BY version;
 
 A release stuck on the advisory lock means another runner is mid-migration; wait, do not kill it. Neon's pooled `-pooler` host can drop session state between statements, which is why the runner uses the direct URL.
 
+### Statement timeouts
+
+The runner connects with `statement_timeout = 60000` (60 s per statement); the app pool runs with 15 s. A single statement that takes longer than 60 s (a backfill over a large table, an index build without `CONCURRENTLY`) fails the release and the old image keeps serving. For such a step, either split the work into batches that each finish well under a minute, or raise the limit for that file only with `SET LOCAL statement_timeout = '10min';` as its first statement (it applies to the file's transaction and nothing else). Do not raise the pool's timeout for a migration.
+
 ## Before deploying the inject-mode grammar (0.5.0)
 
 Items whose `inject` string is outside the grammar (`bearer`, `basic`, `client_credentials`, `refresh`, `sigv4`, `header:<name>`, `query:<param>`, `cookie:<name>`, `hmac:stripe_sig|slack_sig|github_sig`) fail at send time with `500 inject_unsupported` instead of falling through to Bearer. Find them first:

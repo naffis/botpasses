@@ -45,10 +45,11 @@ test("CLI init / set / list / grant / audit never print the value", async () => 
   const home = tempHome();
   const keyHex = generateMasterKey();
   const io = captureIo();
+  io.readStdin = async () => CANARY;
   try {
     await withEnv(home, keyHex, async () => {
       assert.equal(await main(["init"], io), 0);
-      assert.equal(await main(["set", "STRIPE_KEY", "--value", CANARY], io), 0);
+      assert.equal(await main(["set", "STRIPE_KEY"], io), 0);
       assert.equal(await main(["list"], io), 0);
       assert.equal(
         await main(
@@ -87,8 +88,9 @@ test("CLI run injects into the child without printing the secret", async () => {
 
   await withEnv(home, keyHex, async () => {
     const io = captureIo();
+  io.readStdin = async () => CANARY;
     assert.equal(await main(["init"], io), 0);
-    assert.equal(await main(["set", "STRIPE_KEY", "--value", CANARY], io), 0);
+    assert.equal(await main(["set", "STRIPE_KEY"], io), 0);
     assert.equal(
       await main(
         ["grant", "--secret", "STRIPE_KEY", "--agent", "invoicer", "--tool", "stripe", "--session"],
@@ -200,16 +202,17 @@ test("CLI set --host --inject stores connector metadata and list shows it, never
   const home = tempHome();
   const keyHex = generateMasterKey();
   const io = captureIo();
+  io.readStdin = async () => CANARY;
   try {
     await withEnv(home, keyHex, async () => {
       assert.equal(await main(["init"], io), 0);
       assert.equal(
-        await main(["set", "STRIPE_KEY", "--value", CANARY, "--host", "api.stripe.com", "--host", "files.stripe.com", "--inject", "basic"], io),
+        await main(["set", "STRIPE_KEY", "--host", "api.stripe.com", "--host", "files.stripe.com", "--inject", "basic"], io),
         0,
       );
-      assert.equal(await main(["set", "PLAIN_KEY", "--value", CANARY], io), 0);
+      assert.equal(await main(["set", "PLAIN_KEY"], io), 0);
       assert.equal(await main(["list"], io), 0);
-      assert.equal(await main(["set", "BAD", "--value", CANARY, "--inject", "cookie"], io).catch(() => 1), 1);
+      assert.equal(await main(["set", "BAD", "--inject", "cookie"], io).catch(() => 1), 1);
     });
     const out = [...io.stdout, ...io.stderr].join("\n");
     assert.ok(!out.includes(CANARY));

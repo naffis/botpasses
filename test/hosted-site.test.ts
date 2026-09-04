@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HOSTED_CONFIG_EXIT, hostedBootError } from "../src/hosted/boot.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { identityAuthResolver } from "../src/hosted/identity.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
@@ -23,6 +24,7 @@ async function siteServer(plane: "staging" | "production" = "staging") {
     deployPlane: plane,
   });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,

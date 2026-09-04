@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { hostedBootError, HOSTED_CONFIG_EXIT } from "../src/hosted/boot.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer, KEEPALIVE_MS } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
@@ -67,6 +68,7 @@ async function setup() {
   let lastAuth = "";
   let lastUrl = "";
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,
@@ -945,6 +947,7 @@ test("prompt grant reactivates when origin fetch fails", async () => {
       actor: "user_owner",
     });
     const http = createHostedServer({
+    authResolver: testAuthResolver,
       kernel: ctx.kernel,
       host: "127.0.0.1",
       port: 0,
@@ -1267,6 +1270,7 @@ test("MCP CORS reflects foreign Origin; operator /api still 403 (AC-10)", async 
     assert.equal(note.status, 202);
     assert.equal(note.headers.get("access-control-allow-origin"), "https://grok.x.ai");
     const prod = createHostedServer({
+    authResolver: testAuthResolver,
       kernel: ctx.kernel,
       host: "127.0.0.1",
       port: 0,

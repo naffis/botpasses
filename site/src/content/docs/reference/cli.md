@@ -21,14 +21,15 @@ Run `npx vault` from the cloned repository (or `npm run botpasses -- <command>`)
 | Command | Purpose |
 | --- | --- |
 | `vault init` | Create `$VAULT_HOME`, the SQLite schema, and a master key if needed |
-| `vault set NAME` | Read the value from stdin, encrypt, and store. Prints the name and last-4, never the value |
+| `vault set NAME` | Read the value from stdin (or a no-echo prompt on a terminal), encrypt, and store. There is no `--value` flag: argv is visible to every process. Prints the name and last-4, never the value |
 | `vault list` | Names and last-4 |
 | `vault grant --secret NAME --agent A --tool T [--once, --session] [--ttl 8h]` | Approve a pending request |
 | `vault revoke --id GRANT_ID` (or `--secret NAME --agent A --tool T`) | Stop later injects |
 | `vault audit` | Store, grant, revoke, and inject events. No values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject the value into the child process environment and run the command. Nothing is printed |
-| `vault serve [--host 127.0.0.1] [--port 8788]` | Loopback HTTP, the local console, and `POST /mcp`. Prints a loopback bearer required on `/api` and `POST /mcp` |
+| `vault serve [--host 127.0.0.1] [--port 8788]` | Loopback HTTP, the local console, and `POST /mcp`. Prints two loopback bearers: the operator bearer for `/api` and the console, the model bearer for `POST /mcp`. Neither opens the other surface |
 | `vault mcp` | MCP over stdio against the local vault |
+| `vault mcp --remote [URL]` | MCP over stdio forwarded to a running `vault serve` (default `http://127.0.0.1:8788`) with the model bearer, derived from the master key so nothing is pasted into a client config |
 | `vault mcp --user-jwt` | MCP over stdio proxied to the hosted server with `VAULT_USER_JWT` |
 | `vault login` | Print the hosted `/sign-in`, `/console`, and `/device` URLs |
 | `vault kek-wrap`, `vault kek-rotate` | Self-hosting only. Wrap or rotate the platform key with AWS KMS. See [Self-hosting](/docs/self-hosting) |

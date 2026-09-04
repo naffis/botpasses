@@ -15,8 +15,19 @@ export function originForPlane(plane: DeployPlane): string {
   return plane === "staging" ? STAGING_ORIGIN : PRODUCTION_ORIGIN;
 }
 
+export const DEPLOY_PLANE_REQUIRED = "VAULT_MODE=hosted requires VAULT_DEPLOY_PLANE=staging or production.";
+
+/**
+ * The plane this process serves. Hosted mode never guesses: an unset `VAULT_DEPLOY_PLANE`
+ * would otherwise mean "production" and skip every plane guard (KMS, test auth, origins).
+ * Outside hosted mode (local tests, tooling) the default is production.
+ */
 export function hostedDeployPlane(env: NodeJS.ProcessEnv): DeployPlane {
-  return env.VAULT_DEPLOY_PLANE === "staging" ? "staging" : "production";
+  if (env.VAULT_DEPLOY_PLANE === "staging" || env.VAULT_DEPLOY_PLANE === "production") {
+    return env.VAULT_DEPLOY_PLANE;
+  }
+  if (env.VAULT_MODE === "hosted") throw new Error(DEPLOY_PLANE_REQUIRED);
+  return "production";
 }
 
 function isLoopbackHost(hostname: string): boolean {

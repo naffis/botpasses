@@ -9,7 +9,7 @@ There is no `get_secret`, `read_value`, `read_secret`, `reveal_secret`, `decrypt
 | Plane | Transport | Tools | Auth |
 | --- | --- | --- | --- |
 | Hosted | `POST /mcp` JSON-RPC; stdio via `vault mcp --user-jwt` | `list_items`, `find_items`, `request_grant`, `list_grants`, `http_request` | Model JWT (`aud=${origin}/mcp`) or `avm_…` Bearer. Operator session may call MCP as a model for the chosen environment. |
-| Local | `npx vault mcp` stdio; `POST /mcp` on `vault serve` | Same five tools as hosted (`list_secrets` and `http.request` accepted as aliases for one release) | Loopback HMAC Bearer on `POST /mcp` (`vault serve` prints it). Stdio uses the local sqlite vault. |
+| Local | `npx vault mcp` stdio; `POST /mcp` on `vault serve` | Same five tools as hosted (`list_secrets` and `http.request` accepted as aliases for one release) | Loopback **model** Bearer on `POST /mcp` (`vault serve` prints it next to the operator bearer; the operator bearer is refused there). `vault mcp --remote` forwards stdio to `vault serve` with the model bearer. Plain `vault mcp` stdio uses the local sqlite vault directly. |
 
 Hosted `serverInfo.name` is `botpasses`. Protocol version is `2024-11-05`. Port is **8788** (never 8787).
 

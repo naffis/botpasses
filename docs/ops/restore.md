@@ -6,7 +6,7 @@ Nightly `backup-prod.yml` only runs from GitHub's default branch. Trunk is `dev`
 
 `pg_dump` comes from the PGDG `postgresql-client-16` package to match the Neon project's major (`PG_MAJOR` in the workflow). Bump it with the Neon upgrade.
 
-GitHub Actions secret names: `DATABASE_URL_DIRECT`, `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. These are not Fly secrets.
+GitHub Actions secret names: `DATABASE_URL_DIRECT`, `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. They are environment secrets of the `backup` environment (deployment branch `dev` only), not repository secrets and not Fly secrets; both jobs of the workflow declare `environment: backup`. Setup: [default-branch.md](default-branch.md).
 
 ## Decrypt a dump
 

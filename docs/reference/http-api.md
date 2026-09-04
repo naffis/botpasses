@@ -125,7 +125,7 @@ Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenCl
 
 ## Local `vault serve` (loopback)
 
-`GET /` is the local console. Auth: HMAC loopback Bearer on `/api/*` and `POST /mcp`.
+`GET /` is the local console. Auth: two HMAC loopback Bearers printed by `vault serve`. The operator bearer opens `/api/*` (and is what the console stores); the model bearer opens `POST /mcp` (and is what `vault mcp --remote` sends). Each is refused on the other surface (401). The server answers only to a loopback `Host` (403 otherwise), reads at most 128 KiB of JSON body (413), and answers malformed JSON with `400 Invalid JSON` without echoing the bytes. Unexpected failures are `500 { error: "Internal error" }`; only the vault's own validation messages reach the client.
 
 | Method | Path | Notes |
 | --- | --- | --- |

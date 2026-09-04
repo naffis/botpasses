@@ -77,6 +77,9 @@ export class HostedKernel {
     this.#previousKek = opts.previousKek;
     this.now = opts.now ?? (() => new Date());
     this.sendEmail = opts.sendEmail;
+    if (opts.approvalHmac && opts.approvalHmac.length < 32) {
+      throw new Error("approvalHmac must be at least 32 bytes (VAULT_APPROVAL_HMAC is 64 hex characters).");
+    }
     this.approvalHmac = opts.approvalHmac;
     this.planLimits = opts.planLimits ?? planLimits();
     this.deployPlane = opts.deployPlane ?? "production";

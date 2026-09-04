@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { dbPath } from "../src/db.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
@@ -166,6 +167,7 @@ test("hosted MCP REST email audit never contain the stored canary", async () => 
   });
   const { client: model } = await kernel.createModelClient({ orgId, name: "grok", environment: "staging" });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,
@@ -248,6 +250,7 @@ test("hosted find then operator fulfill never leaks canary into MCP collect HTML
     environment: "staging",
   });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,

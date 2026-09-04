@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import {
@@ -125,7 +126,7 @@ test("kernel refuses the credential, agent, and call over the plan limit with 40
 
 test("HTTP: GET /api/plan reports usage; POST /api/items over the limit is 402 plan_limit", async () => {
   const ctx = await kernelWithLimits({ credentials: 1, agents: 10, members: 3, calls: 5000, orgs: 10 });
-  const http = createHostedServer({ kernel: ctx.kernel, host: "127.0.0.1", port: 0 });
+  const http = createHostedServer({ kernel: ctx.kernel, host: "127.0.0.1", port: 0, authResolver: testAuthResolver });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;
   const op = {

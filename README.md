@@ -129,6 +129,8 @@ npx vault serve --host 127.0.0.1 --port 8788
 - MCP JSON-RPC: `POST /mcp`
 - `GET /health` — `{ ok, product: "botpasses" }` with **no** key fingerprint
 
+`vault serve` prints two loopback bearers, both HMACs of the master key with different labels. The **operator** bearer is the `Authorization` for `/api/*` and the console (paste it there). The **model** bearer is the `Authorization` for `POST /mcp` and is what `vault mcp --remote` sends. Neither opens the other surface: an MCP client holding the model bearer cannot approve its own grants through `/api`. The server answers only to a loopback `Host`.
+
 ### MCP (stdio)
 
 ```json
@@ -159,15 +161,15 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 | Command | Purpose |
 | --- | --- |
 | `vault init` | Create `$VAULT_HOME` + SQLite schema; generate key if needed |
-| `vault set NAME` | Encrypt and store. Prints name + last-4 |
+| `vault set NAME` | Encrypt and store. Reads the value from stdin, or prompts without echo on a terminal; there is no `--value` (argv is visible in `ps`). Prints name + last-4 |
 | `vault list` | Names + last-4 |
 | `vault grant --secret NAME --agent A --tool T [--once\|--session] [--ttl 8h]` | Human approval |
 | `vault revoke --id GRANT_ID` | Stop future injects |
 | `vault audit` | Grant/revoke/store/inject events, no values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject into child env without printing |
-| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788). Prints an HMAC loopback bearer. Required on `/api` and `POST /mcp`. |
+| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788). Prints two HMAC loopback bearers: operator (`/api`, console) and model (`POST /mcp`). |
 | `vault login` | Print `/sign-in`, `/console`, and `/device` on the hosted origin |
-| `vault mcp` | MCP stdio (local sqlite). `vault mcp --user-jwt` proxies hosted MCP over an access token |
+| `vault mcp` | MCP stdio (local sqlite). `vault mcp --remote` forwards stdio to a running `vault serve` with the model bearer. `vault mcp --user-jwt` proxies hosted MCP over an access token |
 
 `VAULT_MODE=hosted` on `vault serve` starts the hosted process (Postgres). Do not set `VAULT_HOME` in that mode (exit 78).
 
@@ -185,11 +187,11 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 
 **Schema:** `migrations/NNN_*.sql` is applied by `scripts/migrate.ts` as the Fly `release_command` (advisory lock, one transaction per file, recorded in `schema_migrations`). Boot runs no DDL once that table exists. Runbook: [docs/ops/migrations.md](docs/ops/migrations.md).
 
-**GitHub Actions secrets for `backup-prod.yml`:** `DATABASE_URL_DIRECT`, `BACKUP_KEY` (32-byte hex, not the vault KEK), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. The workflow reads repo Actions secrets, not Fly secrets. Missing R2 fails the job.
+**GitHub Actions secrets for `backup-prod.yml`:** `DATABASE_URL_DIRECT`, `BACKUP_KEY` (32-byte hex, not the vault KEK), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. They are environment secrets of the `backup` environment; `FLY_API_TOKEN` lives in `staging` and `production` (app-scoped deploy tokens, `-a <app>` on every `flyctl deploy`). Nothing is a repository secret. Missing R2 fails the job. Setup: [docs/ops/default-branch.md](docs/ops/default-branch.md).
 
-Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong. **One Machine per app.** TOTP enrollment state and per-IP limiters live in process memory; do not `fly scale count` above 1 until they are store-backed (plan task 1.5).
+Every plane must set `VAULT_DEPLOY_PLANE` (`staging` or `production`); an unset plane is exit 78, not a silent production default. Behind Cloudflare the visitor address for rate limits comes from `CF-Connecting-IP`, read only when the address Fly saw is inside `VAULT_TRUSTED_PROXY_CIDRS` (default: Cloudflare's published ranges). A plane without `SENTRY_DSN` logs `sentry_dsn_missing` at boot. Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong. **One Machine per app.** TOTP enrollment state and per-IP limiters live in process memory; do not `fly scale count` above 1 until they are store-backed (plan task 1.5).
 
-`ci.yml` runs lint, typecheck, gitleaks, `npm audit` (root and `site/`), migrations twice against Postgres 16, and the suite with an 80 percent line-coverage gate. `deploy-staging.yml` deploys the SHA that `ci` just passed on `dev`. `deploy-prod.yml` is `workflow_dispatch` behind the `production` environment (required reviewer) and refuses a `staging_sha` that is not on `dev`. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT` with PGDG `pg_dump` 16, encrypts with `BACKUP_KEY` (not the vault KEK), uploads to R2, then a `backup-verify` job downloads and decrypts the object. GitHub only runs `schedule` and `workflow_dispatch` from the default branch; that branch must be `dev`, and `ci` fails on `dev` pushes until it is ([docs/ops/default-branch.md](docs/ops/default-branch.md)). Alerts: [docs/ops/alerts.md](docs/ops/alerts.md).
+`ci.yml` runs lint, typecheck, gitleaks, `npm audit` (root and `site/`), migrations twice against Postgres 16, and the suite with an 80 percent line-coverage gate. `deploy-staging.yml` deploys the SHA that `ci` just passed on `dev`. `deploy-prod.yml` is `workflow_dispatch` behind the `production` environment (required reviewer) and refuses a `staging_sha` that is not on `dev` or that has no successful `deploy-staging` run. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT` with PGDG `pg_dump` 16, encrypts with `BACKUP_KEY` (not the vault KEK), uploads to R2, then a `backup-verify` job downloads and decrypts the object. GitHub only runs `schedule` and `workflow_dispatch` from the default branch; that branch must be `dev`, and `ci` fails on `dev` pushes until it is ([docs/ops/default-branch.md](docs/ops/default-branch.md)). Alerts: [docs/ops/alerts.md](docs/ops/alerts.md).
 
 AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
 

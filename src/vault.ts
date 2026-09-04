@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_HOME_DIRNAME } from "./brand.ts";
 import { decrypt, encrypt, generateMasterKey, keyFingerprint, parseMasterKey } from "./crypto.ts";
@@ -88,8 +88,9 @@ export class Vault {
     migrateNameAad(this.#db, this.#key);
   }
 
-  loopbackToken(): string {
-    return loopbackBearer(this.#key);
+  /** The loopback bearer for one surface: `operator` (console, `/api`) or `model` (`POST /mcp`). */
+  loopbackToken(role: LoopbackRole): string {
+    return loopbackBearer(this.#key, role);
   }
 
   close(): void {
@@ -427,11 +428,26 @@ export function loadMasterKey(home: string): { key: Buffer; source: string } {
   }
   const keyPath = join(home, "master.key");
   if (existsSync(keyPath)) {
+    assertPrivateKeyFile(keyPath);
     return { key: parseMasterKey(readFileSync(keyPath, "utf8")), source: "file" };
   }
   throw new Error(
     "No master key. Set VAULT_MASTER_KEY or run `vault init` to write master.key under VAULT_HOME.",
   );
+}
+
+/** The mode bits that make a key file readable or writable by group or others. */
+export function masterKeyModeError(keyPath: string, mode: number): string | undefined {
+  const shared = mode & 0o077;
+  if (shared === 0) return undefined;
+  return `master.key at ${keyPath} is readable by other users (mode ${(mode & 0o777).toString(8)}). Run: chmod 600 ${keyPath}`;
+}
+
+/** Refuses a master.key that group or others can read. Windows has no POSIX mode bits; skipped there. */
+function assertPrivateKeyFile(keyPath: string): void {
+  if (process.platform === "win32") return;
+  const err = masterKeyModeError(keyPath, statSync(keyPath).mode);
+  if (err) throw new Error(err);
 }
 
 export function initVaultHome(home: string): {
@@ -448,6 +464,7 @@ export function initVaultHome(home: string): {
     key = parseMasterKey(process.env.VAULT_MASTER_KEY);
     keySource = "env";
   } else if (existsSync(keyPath)) {
+    assertPrivateKeyFile(keyPath);
     key = parseMasterKey(readFileSync(keyPath, "utf8"));
     keySource = "file";
   } else {
@@ -462,8 +479,16 @@ export function initVaultHome(home: string): {
   return { home, keySource, fingerprint, generatedKey };
 }
 
-export function loopbackBearer(masterKey: Buffer): string {
-  return createHmac("sha256", masterKey).update("botpasses-loopback").digest("hex");
+/** Which loopback surface a bearer opens. The two tokens are derived with distinct labels. */
+export type LoopbackRole = "operator" | "model";
+
+/**
+ * Loopback bearers for `vault serve`. `operator` is required on `/api/*` (the console);
+ * `model` on `POST /mcp`. Neither opens the other surface, so an MCP client that holds the
+ * model token cannot approve its own grants through the operator API.
+ */
+export function loopbackBearer(masterKey: Buffer, role: LoopbackRole): string {
+  return createHmac("sha256", masterKey).update(`botpasses-loopback-${role}`).digest("hex");
 }
 
 function decryptLocalSecret(
