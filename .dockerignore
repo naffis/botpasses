@@ -5,7 +5,9 @@ site/dist
 .git
 .github
 *.md
+!CHANGELOG.md
 docs
+!docs/security/threat-model.md
 processes
 test
 coverage

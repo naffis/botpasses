@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: the production image builds again. The site stage now carries the three repository files the site build reads (`src/brand-visual.ts`, `CHANGELOG.md`, `docs/security/threat-model.md`); `.dockerignore` lets those two Markdown files through. CI gained an `image` job that runs `docker build` and checks the image exits 78 on an unsafe configuration.
+
 ## 0.5.0 — 2026-09-04
 
 - Console: the sidebar sign-in links are hidden while signed in; the Connect account action shows only on OAuth client secrets; the credential drawer shows created and updated times (`created_at`, `updated_at` on `/api/items`); approving or denying re-renders the inbox even while another card's limits form is open; a pending approval's button reads Deny. Site: homepage spacing and shorter examples in How it works; docs name the Credentials panel; the docs breadcrumb no longer repeats a section that matches the page.
