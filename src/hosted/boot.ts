@@ -1,10 +1,178 @@
-/** Hosted boot invariants. Exit 78 = EX_CONFIG. */
+/** Hosted boot invariants, shutdown, and background sweeps. Exit 78 = EX_CONFIG. */
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { hostedDeployPlane, originForPlane, publicOriginError } from "../brand.ts";
+import type { SweepCounts } from "../store/types.ts";
 
 export const HOSTED_CONFIG_EXIT = 78;
+
+/** Fly `kill_timeout` is 30 s; give open SSE streams 25 s, then cut them. */
+export const SHUTDOWN_DRAIN_MS = 25_000;
+/** After the drain deadline the server should close within this margin, or we exit anyway. */
+export const SHUTDOWN_FORCE_MARGIN_MS = 3_000;
+export const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+export type ShutdownHttp = {
+  close(): Promise<void>;
+  /** `node:http` Server#closeAllConnections; optional so a fake server can omit it. */
+  server?: { closeAllConnections?: () => void };
+};
+
+export type ShutdownDeps = {
+  http: ShutdownHttp;
+  store: { close(): Promise<void> };
+  /** Runs after the store is closed (zero the KEK, clear timers). */
+  onDone?: () => void;
+  log?: (event: string, fields: Record<string, unknown>) => void;
+  exit?: (code: number) => void;
+  drainMs?: number;
+  forceMarginMs?: number;
+};
+
+export type Shutdown = {
+  /** Idempotent. The first call starts the drain; later calls are logged and ignored. */
+  stop: (signal: string) => void;
+  /** Resolves once the drain finished (or was forced). Never rejects. */
+  done: Promise<void>;
+};
+
+/**
+ * Drain order: stop accepting, wait up to `drainMs` for in-flight requests and SSE streams,
+ * `closeAllConnections()`, then end the pool, then `onDone` (zero the KEK), then exit 0.
+ * A second SIGTERM does not start a second drain or double-close the pool.
+ */
+export function createShutdown(deps: ShutdownDeps): Shutdown {
+  const log = deps.log ?? (() => undefined);
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
+  const drainMs = deps.drainMs ?? SHUTDOWN_DRAIN_MS;
+  const forceMarginMs = deps.forceMarginMs ?? SHUTDOWN_FORCE_MARGIN_MS;
+  let started = false;
+  let resolveDone: () => void = () => undefined;
+  const done = new Promise<void>((resolveFn) => {
+    resolveDone = resolveFn;
+  });
+
+  async function drain(signal: string): Promise<void> {
+    const startedAt = Date.now();
+    log("shutdown_begin", { signal, drain_ms: drainMs });
+    let forced = false;
+    // Not unref'd on purpose: during a drain these timers are what guarantee the process
+    // reaches `exit` with a logged outcome even if every socket has already gone away.
+    const cut = setTimeout(() => {
+      forced = true;
+      log("shutdown_cut_connections", { after_ms: Date.now() - startedAt });
+      deps.http.server?.closeAllConnections?.();
+    }, drainMs);
+    const force = setTimeout(() => {
+      log("shutdown_forced", { after_ms: Date.now() - startedAt });
+      resolveDone();
+      exit(1);
+    }, drainMs + forceMarginMs);
+    let code = 0;
+    try {
+      await deps.http.close();
+    } catch (err) {
+      code = 1;
+      log("shutdown_http_close_failed", { message: err instanceof Error ? err.message : String(err) });
+    }
+    clearTimeout(cut);
+    try {
+      await deps.store.close();
+    } catch (err) {
+      code = 1;
+      log("shutdown_store_close_failed", { message: err instanceof Error ? err.message : String(err) });
+    }
+    clearTimeout(force);
+    try {
+      deps.onDone?.();
+    } catch {
+      code = 1;
+    }
+    log("shutdown_done", { ms: Date.now() - startedAt, forced, code });
+    resolveDone();
+    exit(code);
+  }
+
+  return {
+    done,
+    stop(signal: string): void {
+      if (started) {
+        log("shutdown_repeat_signal", { signal });
+        return;
+      }
+      started = true;
+      void drain(signal);
+    },
+  };
+}
+
+export type SweepStore = { sweepExpired(nowIso: string): Promise<SweepCounts> };
+
+export type SweepSchedule = {
+  /** One sweep now. Errors are logged, never thrown. */
+  runOnce(): Promise<SweepCounts | undefined>;
+  stop(): void;
+};
+
+/**
+ * Run `store.sweepExpired` now and every `intervalMs` (default hourly). The timer is
+ * unref'd so it never keeps the process alive.
+ */
+export function scheduleSweeps(
+  store: SweepStore,
+  opts: {
+    intervalMs?: number;
+    log?: (event: string, fields: Record<string, unknown>) => void;
+    now?: () => Date;
+  } = {},
+): SweepSchedule {
+  const log = opts.log ?? (() => undefined);
+  const now = opts.now ?? (() => new Date());
+  let running = false;
+  async function runOnce(): Promise<SweepCounts | undefined> {
+    if (running) return undefined;
+    running = true;
+    const startedAt = Date.now();
+    try {
+      const counts = await store.sweepExpired(now().toISOString());
+      log("sweep_expired", { ...counts, ms: Date.now() - startedAt });
+      return counts;
+    } catch (err) {
+      log("sweep_failed", { message: err instanceof Error ? err.message : String(err) });
+      return undefined;
+    } finally {
+      running = false;
+    }
+  }
+  const timer = setInterval(() => {
+    void runOnce();
+  }, opts.intervalMs ?? SWEEP_INTERVAL_MS);
+  timer.unref();
+  return {
+    runOnce,
+    stop: () => clearInterval(timer),
+  };
+}
+
+/**
+ * Last-resort handlers. A hosted process with an unknown broken invariant must not keep
+ * serving; log one line and exit 1 so Fly restarts it.
+ */
+export function installProcessGuards(
+  proc: Pick<NodeJS.Process, "on" | "exit"> = process,
+  log: (event: string, fields: Record<string, unknown>) => void = (event, fields) =>
+    console.error(JSON.stringify({ event, ...fields, at: new Date().toISOString() })),
+): void {
+  proc.on("unhandledRejection", (reason: unknown) => {
+    log("unhandled_rejection", { message: reason instanceof Error ? reason.message : String(reason) });
+    proc.exit(1);
+  });
+  proc.on("uncaughtException", (err: Error) => {
+    log("uncaught_exception", { message: err.message, name: err.name });
+    proc.exit(1);
+  });
+}
 
 export type OidcPrivateJwk = {
   kty: "RSA";
