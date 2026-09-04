@@ -1,12 +1,18 @@
-import { CONSOLE_ACCESS_JS } from "./console-access-js.ts";
-import { CONSOLE_CSS } from "./console-css.ts";
-import { CONSOLE_JS as CONSOLE_CORE_JS } from "./console-js.ts";
-
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AUTH_JS } from "./auth-js.ts";
-import { COLLECT_JS } from "./collect-js.ts";
+import { COLLECT_BUNDLE_JS, CONSOLE_BUNDLE_JS } from "./client-bundle.ts";
+import { CONSOLE_CSS } from "./console-css.ts";
 
-export { CONSOLE_CSS, AUTH_JS, COLLECT_JS };
-export const CONSOLE_JS = CONSOLE_CORE_JS + CONSOLE_ACCESS_JS;
+export { CONSOLE_CSS, AUTH_JS };
+/** Browser bundles are generated from src/hosted/client/*.ts by scripts/build-client.ts. */
+export const CONSOLE_JS = CONSOLE_BUNDLE_JS;
+export const COLLECT_JS = COLLECT_BUNDLE_JS;
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+/** Brand mark, served so the console rail does not depend on the marketing root's favicon. */
+export const MARK_SVG = readFileSync(join(HERE, "..", "brand-assets", "mark.svg"), "utf8");
 
 export const AUTH_CSS = `.auth-body {
   min-height: 100vh;
@@ -45,15 +51,15 @@ figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 0.4rem; }
 #backups:empty, #otpauth:empty { display: none; }
 `;
 
+const ASSETS: Record<string, { type: string; body: string }> = {
+  "/assets/auth.css": { type: "text/css; charset=utf-8", body: AUTH_CSS },
+  "/assets/console.css": { type: "text/css; charset=utf-8", body: CONSOLE_CSS },
+  "/assets/auth.js": { type: "text/javascript; charset=utf-8", body: AUTH_JS },
+  "/assets/console.js": { type: "text/javascript; charset=utf-8", body: CONSOLE_JS },
+  "/assets/collect.js": { type: "text/javascript; charset=utf-8", body: COLLECT_JS },
+  "/assets/mark.svg": { type: "image/svg+xml", body: MARK_SVG },
+};
+
 export function hostedAsset(path: string): { type: string; body: string } | undefined {
-  if (path === "/assets/auth.css") {
-    return { type: "text/css; charset=utf-8", body: AUTH_CSS };
-  }
-  if (path === "/assets/console.css") {
-    return { type: "text/css; charset=utf-8", body: CONSOLE_CSS };
-  }
-  if (path === "/assets/auth.js") return { type: "text/javascript; charset=utf-8", body: AUTH_JS };
-  if (path === "/assets/console.js") return { type: "text/javascript; charset=utf-8", body: CONSOLE_JS };
-  if (path === "/assets/collect.js") return { type: "text/javascript; charset=utf-8", body: COLLECT_JS };
-  return undefined;
+  return ASSETS[path];
 }

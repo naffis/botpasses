@@ -4,71 +4,132 @@ import { STAGING_ORIGIN } from "../src/brand.ts";
 import { COLLECT_JS, CONSOLE_CSS, CONSOLE_JS } from "../src/hosted/hosted-assets.ts";
 import { hostedFont } from "../src/hosted/console-fonts.ts";
 import { hostedCollectHtml } from "../src/hosted/collect-page.ts";
-import { hostedOperatorHtml } from "../src/hosted/operator-page.ts";
+import { defaultEnvironmentForPlane, hostedOperatorHtml } from "../src/hosted/operator-page.ts";
 
-test("operator page can list both environments and edit, rotate, or delete", () => {
+test("operator page uses the product vocabulary and no vendor names in generic copy", () => {
   const html = hostedOperatorHtml();
   assert.match(html, /Botpasses/);
   assert.doesNotMatch(html, /Agent Grant Vault/);
-  assert.match(CONSOLE_JS, /api\("\/api\/items"\)/);
-  assert.doesNotMatch(CONSOLE_JS, /\/api\/items\?environment=/);
-  assert.match(html, /data-environments="staging,production"/);
-  assert.match(html, /Issue Grok Bot token/);
-  assert.match(html, /avm_/);
-  assert.match(html, /Authorization: Bearer/);
-  assert.match(html, /Client Secret is not a user access token/);
-  assert.match(html, /data-testid="console-signin"/);
-  assert.match(html, /Authorization/);
-  assert.match(html, /<select name="inject">/);
-  assert.match(html, /api\.spotify\.com/);
+  assert.match(html, /data-testid="nav-inbox"/);
+  assert.match(html, /data-testid="nav-credentials"/);
+  assert.match(html, /data-testid="nav-agents"/);
+  assert.match(html, /data-testid="nav-account"/);
+  assert.match(html, /data-testid="sign-out"/);
+  assert.doesNotMatch(html, /data-testid="nav-vault"|data-testid="nav-access"/);
+  assert.match(html, />Issue agent token</);
+  assert.match(html, /placeholder="claude-desktop"/);
+  assert.doesNotMatch(html, /Issue Grok Bot token|value="grok"|Environment plane/);
+  assert.doesNotMatch(html, /—/);
+  // Vendor tips only inside collapsed disclosures.
+  const grok = html.match(/<details class="vendor-tip">\s*<summary>Connecting Grok\?<\/summary>[\s\S]*?<\/details>/);
+  assert.ok(grok, "Grok tip is a collapsed details");
+  const withoutTips = html.replace(/<details class="vendor-tip">[\s\S]*?<\/details>/g, "").replace(/<dialog id="spotify-dialog"[\s\S]*?<\/dialog>/, "");
+  assert.doesNotMatch(withoutTips, /Grok|Spotify|spotify/);
   assert.match(html, /data-testid="item-delete-confirm"/);
-  assert.match(CONSOLE_JS, /data-testid", "item-edit"/);
-  assert.match(html, />Client ID and secret</);
-  assert.doesNotMatch(html, /Username and password/);
+  assert.doesNotMatch(html, /access-revoke/);
   assert.match(html, /data-testid="access-panel"/);
   assert.match(html, /data-testid="access-audit"/);
-  assert.match(html, /data-testid="access-revoke-confirm"/);
-  assert.match(CONSOLE_JS, /\/api\/audit/);
-  assert.match(CONSOLE_JS, /access-log-link/);
-  assert.match(CONSOLE_JS, /First access/);
-  assert.match(CONSOLE_JS, /Fetched /);
-  assert.match(html, /<dialog/);
 });
 
-test("operator console is an app shell with jobs, empty states, and brand fonts", () => {
+test("console shell: routed panels, tabs, account, breakglass hidden, mark from assets", () => {
   const html = hostedOperatorHtml();
   assert.match(html, /data-testid="app-shell"/);
-  assert.match(html, /data-testid="nav-inbox"/);
-  assert.match(html, /data-testid="nav-vault"/);
-  assert.doesNotMatch(html, /data-testid="nav-connect"/);
-  assert.match(html, /data-testid="nav-access"/);
-  assert.match(html, /Issue token/);
-  assert.match(CONSOLE_JS, /Token ••••/);
-  assert.match(CONSOLE_JS, /client-rotate/);
-  assert.match(html, /data-testid="open-store"/);
-  assert.match(html, /data-testid="store-dialog"/);
-  assert.match(html, /data-testid="items-empty"/);
-  assert.match(html, /data-testid="items-error"/);
-  assert.match(html, /data-testid="access-error"/);
-  assert.match(html, /data-testid="inbox-empty"/);
-  assert.match(html, /<tbody id="items">/);
-  assert.match(html, /data-testid="empty-store"/);
+  assert.match(html, /src="\/assets\/mark\.svg"/);
+  assert.match(html, /<link rel="icon" href="\/assets\/mark\.svg"/);
+  assert.match(html, /<meta name="color-scheme" content="light dark"/);
+  for (const panel of ["inbox", "credentials", "agents", "account"]) assert.match(html, new RegExp(`data-panel="${panel}"`));
+  assert.match(html, /role="tablist"/);
+  for (const tab of ["agents", "approvals", "sessions", "activity"]) {
+    assert.match(html, new RegExp(`href="#agents/${tab}" data-tab="${tab}"`));
+    assert.match(html, new RegExp(`id="tabpanel-${tab}" role="tabpanel"`));
+  }
+  assert.match(html, /<details id="breakglass" hidden/);
+  assert.match(html, /data-testid="connect-card"/);
   assert.match(html, /id="copy-mcp"/);
   assert.match(html, /id="signed-out-gate"/);
-  assert.match(html, /<label hidden>Item id/);
+  assert.match(html, /data-testid="account-card"/);
+  assert.match(html, /data-testid="account-reenroll"/);
+  assert.match(html, /data-testid="account-regen"/);
+  assert.match(html, /id="items-filters" role="search"/);
+  assert.match(html, /<select name="sort">/);
+});
+
+test("console accessibility: dialogs named, alerts, th scope, hidden inputs, live region", () => {
+  const html = hostedOperatorHtml();
+  const dialogs = html.match(/<dialog [^>]*>/g) ?? [];
+  assert.ok(dialogs.length >= 7);
+  for (const d of dialogs) assert.match(d, /aria-labelledby="/, d);
+  for (const id of ["inbox-error", "items-error", "access-error", "account-error"]) {
+    assert.match(html, new RegExp(`id="${id}" class="error-box" role="alert"`));
+  }
+  assert.ok((html.match(/<th[\s>]/g) ?? []).length >= 6, "table has headers");
+  assert.equal((html.match(/<th(?=[\s>])(?![^>]*scope="col")[^>]*>/g) ?? []).length, 0, "every th has scope=col");
+  assert.doesNotMatch(html, /<label hidden/);
+  assert.match(html, /<input type="hidden" name="item_id"/);
+  assert.match(html, /<input type="hidden" name="id"/);
+  assert.match(html, /id="token-live" class="visually-hidden" role="status" aria-live="polite"/);
+  assert.doesNotMatch(html, /onclick=/);
+  assert.match(html, /data-close data-testid="store-cancel"/);
+  assert.match(html, /data-close data-testid="rotate-cancel"/);
+  assert.match(html, /data-close data-testid="confirm-cancel"/);
+  assert.match(html, /<button type="button" class="btn-ghost" data-close data-testid="token-saved">I saved it</);
+});
+
+test("staging plane shows a small label and defaults store and issue to staging", () => {
+  const staging = hostedOperatorHtml({ deployPlane: "staging" });
+  assert.match(staging, /data-testid="plane-label">Staging</);
+  assert.match(staging, /data-default-environment="staging"/);
+  assert.match(staging, /id="store-env"[^>]*><option value="staging" selected>/);
+  assert.doesNotMatch(staging, /<option value="production"/);
+  const production = hostedOperatorHtml({ deployPlane: "production" });
+  assert.doesNotMatch(production, /plane-label/);
+  assert.match(production, /data-default-environment="production"/);
+  assert.match(production, /id="store-env"[^>]*>[^]*?<option value="production" selected>/);
+  assert.match(production, /id="issue-env"[^>]*>[^]*?<option value="production" selected>/);
+  assert.match(production, /Defaults to production, the environment agents on this deployment use/);
+  assert.equal(defaultEnvironmentForPlane("staging"), "staging");
+  assert.equal(defaultEnvironmentForPlane("production"), "production");
+});
+
+test("console css: two themes, action accent, warn and success surfaces, fixed table, title size", () => {
   assert.match(CONSOLE_CSS, /\.app-shell/);
   assert.match(CONSOLE_CSS, /ibm-plex-sans-400\.woff2/);
-  assert.match(CONSOLE_CSS, /background: var\(--accent\)/);
-  assert.match(CONSOLE_JS, /items-error/);
-  assert.match(CONSOLE_JS, /inbox-empty/);
-  assert.match(CONSOLE_JS, /showPanel/);
-  assert.match(CONSOLE_JS, /Store the credential/);
-  assert.match(CONSOLE_JS, /copyText/);
-  assert.match(CONSOLE_JS, /sessionOut\(true\)/);
+  assert.match(CONSOLE_CSS, /color-scheme: light dark/);
+  assert.match(CONSOLE_CSS, /@media \(prefers-color-scheme: dark\)/);
+  assert.match(CONSOLE_CSS, /:root\[data-theme="dark"\]/);
+  assert.match(CONSOLE_CSS, /\.btn-primary \{ background: var\(--accent\); color: var\(--accent-fg\)/);
+  assert.match(CONSOLE_CSS, /\.flash\.is-ok \{ color: var\(--ok\)[^}]*background: var\(--ok-dim\)/);
+  assert.match(CONSOLE_CSS, /\.once-shown \{[^}]*var\(--warn-dim\)/);
+  assert.match(CONSOLE_CSS, /\.pill-warn \{ background: var\(--warn-dim\)/);
+  assert.match(CONSOLE_CSS, /\.items-table \{ table-layout: fixed/);
+  assert.match(CONSOLE_CSS, /overflow-wrap: anywhere/);
+  assert.doesNotMatch(CONSOLE_CSS, /\.table-wrap td \{\s*display: flex/);
+  assert.match(CONSOLE_CSS, /--title-size: 1\.25rem/);
+  assert.match(CONSOLE_CSS, /th \{ color: var\(--muted\); font-size: 0\.85rem/);
+  assert.match(CONSOLE_CSS, /\.pill \{[^}]*background:/);
+  assert.match(CONSOLE_CSS, /a \{ color: var\(--fg\); text-decoration: underline/);
   const font = hostedFont("/assets/fonts/ibm-plex-sans-400.woff2");
   assert.ok(font);
   assert.equal(font.type, "font/woff2");
   assert.ok(font.body.length > 1000);
+});
+
+test("console bundle carries the routed behaviours", () => {
+  assert.match(CONSOLE_JS, /api\("\/api\/items"\)/);
+  assert.doesNotMatch(CONSOLE_JS, /\/api\/items\?environment=/);
+  assert.match(CONSOLE_JS, /history\.pushState/);
+  assert.match(CONSOLE_JS, /addEventListener\("hashchange"/);
+  assert.match(CONSOLE_JS, /addEventListener\("popstate"/);
+  assert.match(CONSOLE_JS, /\/api\/auth\/logout/);
+  assert.match(CONSOLE_JS, /\/api\/auth\/me/);
+  assert.match(CONSOLE_JS, /\/api\/auth\/backup-codes\/regenerate/);
+  assert.match(CONSOLE_JS, /\/environment`/);
+  assert.match(CONSOLE_JS, /INBOX_POLL_MS = 15_000/);
+  assert.match(CONSOLE_JS, /FLASH_CLEAR_MS = 6000/);
+  assert.match(CONSOLE_JS, /Agents with an approval lose access now/);
+  assert.match(CONSOLE_JS, /The current token stops working now/);
+  assert.doesNotMatch(CONSOLE_JS, /—/);
+  assert.doesNotMatch(CONSOLE_JS, /innerHTML = [^;]*\+/, "no string-concatenated innerHTML");
 });
 
 test("collect HTML is a shell until the operator loads need details", () => {
@@ -83,7 +144,7 @@ test("collect HTML is a shell until the operator loads need details", () => {
   assert.match(html, /nid_test/);
   assert.match(html, /nonce="n1"/);
   assert.match(COLLECT_JS, /\/api\/need-items\//);
-  assert.match(COLLECT_JS, /data\.error/);
+  assert.match(COLLECT_JS, /errorMessage\(r, "Store failed"\)/);
   assert.match(html, /\/sign-in/);
   assert.match(html, /\/assets\/console\.css/);
   assert.match(html, /class="auth-body"/);
