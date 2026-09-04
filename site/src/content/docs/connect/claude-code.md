@@ -1,0 +1,55 @@
+---
+title: Connect Claude Code
+label: Claude Code
+description: Register Botpasses in Claude Code with one claude mcp add command, sign in from the /mcp menu, and call APIs from the terminal without keys in your shell.
+section: connect
+order: 2
+---
+
+Claude Code (the terminal client) connects to Botpasses as a remote MCP server over HTTP with OAuth. Nothing secret goes into your shell history or your project files.
+
+## Add the server
+
+```bash
+claude mcp add --transport http botpasses https://botpasses.com/mcp
+```
+
+Add `--scope user` to make it available in every project instead of the current one.
+
+## Sign in
+
+1. Start `claude` and run `/mcp`.
+2. Pick **botpasses** and choose **Authenticate**. A browser window opens on botpasses.com.
+3. Sign in with your email code and authenticator, then allow the connection on the consent page.
+
+Back in the terminal, the server shows as connected. `claude mcp list` prints it as well.
+
+## Use it
+
+Ask for the task: "list my open Stripe disputes". Claude Code calls `http_request` with the host, method, and path. Botpasses attaches the credential and returns a redacted response.
+
+- Pending approval: Claude Code shows an 8-digit code. Approve in the [console](/console) Inbox or type the code under **Approve by code**. Then let it retry.
+- Missing credential: it shows a `collect_url`. Open it in a browser, sign in, and store the key there. Never paste a key into the terminal chat.
+
+## Team projects
+
+You can commit a project-scoped server entry in `.mcp.json` at the repo root. Each person authenticates on their own account; the file holds only the URL.
+
+```json
+{
+  "mcpServers": {
+    "botpasses": {
+      "type": "http",
+      "url": "https://botpasses.com/mcp"
+    }
+  }
+}
+```
+
+## Remove or revoke
+
+`claude mcp remove botpasses` removes the local entry. To stop the tokens it already holds, revoke the agent in the console **Access** panel.
+
+## Local vault instead
+
+If you want a local SQLite vault with no account, register the stdio server from [Install](/docs/install#local-mcp-server-stdio). The local server lists and requests but has no `http_request`; inject is `vault run`.

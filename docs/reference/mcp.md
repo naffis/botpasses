@@ -1,6 +1,6 @@
 # MCP reference (internal)
 
-Canonical tool list, JSON-RPC, and payload contracts. Public copy: [site MCP tools](../../site/src/pages/docs/reference/mcp-tools.astro). Implementation: [src/hosted/mcp.ts](../../src/hosted/mcp.ts) (hosted), [src/mcp.ts](../../src/mcp.ts) (local). Steering copy: [src/prompts/mcp-hosted.ts](../../src/prompts/mcp-hosted.ts).
+Canonical tool list, JSON-RPC, and payload contracts. Public copy: [site MCP tools](../../site/src/content/docs/reference/mcp-tools.md). Implementation: [src/hosted/mcp.ts](../../src/hosted/mcp.ts) (hosted), [src/mcp.ts](../../src/mcp.ts) (local). Steering copy: [src/prompts/mcp-hosted.ts](../../src/prompts/mcp-hosted.ts).
 
 There is no `get_secret`, `read_value`, `read_secret`, `reveal_secret`, `decrypt_secret`, `export_secret`, or `revoke_grant` on MCP. Revoke is operator-only.
 
@@ -8,7 +8,7 @@ There is no `get_secret`, `read_value`, `read_secret`, `reveal_secret`, `decrypt
 
 | Plane | Transport | Tools | Auth |
 | --- | --- | --- | --- |
-| Hosted | `POST /mcp` JSON-RPC; stdio via `vault mcp --user-jwt` | `list_items`, `find_items`, `request_grant`, `list_grants`, `http.request` | Model JWT (`aud=${origin}/mcp`) or `avm_…` Bearer. Operator session may call MCP as a model for the chosen environment. |
+| Hosted | `POST /mcp` JSON-RPC; stdio via `vault mcp --user-jwt` | `list_items`, `find_items`, `request_grant`, `list_grants`, `http_request` | Model JWT (`aud=${origin}/mcp`) or `avm_…` Bearer. Operator session may call MCP as a model for the chosen environment. |
 | Local | `npx vault mcp` stdio; `POST /mcp` on `vault serve` | `list_secrets`, `request_grant`, `list_grants` | Loopback HMAC Bearer on `POST /mcp` (`vault serve` prints it). Stdio uses the local sqlite vault. |
 
 Hosted `serverInfo.name` is `botpasses`. Protocol version is `2024-11-05`. Port is **8788** (never 8787).
@@ -33,11 +33,13 @@ Unauthenticated hosted `initialize`, `ping`, `tools/list`, and `notifications/*`
 
 ## Hosted tools
 
-Environment on every hosted tool is the **client's** vault environment (`staging` or `production`), not the argument. The `environment` schema field is accepted and ignored for isolation.
+Environment on every hosted tool is the **client's** vault environment (`staging` or `production`). There is no `environment` argument; the field was removed from the tool schemas because it was always ignored.
 
-### `http.request` (primary)
+### `http_request` (primary)
 
-Call this in the same turn the user asks for an API. Do not `list_items` first.
+The tool was named `http.request` before; that name is kept as an alias for one release because some hosts reject a dot in a tool name. Docs, prompts, and `next.tool` use `http_request`.
+
+Call this in the same turn the user asks for an API. Do not `list_items` first. Public URL: `https://botpasses.com/mcp` (staging `https://staging.botpasses.com/mcp`).
 
 | Argument | Required | Notes |
 | --- | --- | --- |
@@ -52,7 +54,7 @@ Call this in the same turn the user asks for an API. Do not `list_items` first.
 
 Implementation: [src/hosted/mcp-http.ts](../../src/hosted/mcp-http.ts) `runHttpRequest`, [src/hosted/connector.ts](../../src/hosted/connector.ts).
 
-Success body: HTTP `status`, redacted origin `body`, optional `next`. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects.
+Success body: HTTP `status`, redacted origin `body` (string), optional `hint`, optional `next`. Never the secret. Connector rules: exact `allowed_hosts`, no IP literals, DNS pin to public addresses, no redirects.
 
 If the item is missing, the result is `need_item` (not MCP `isError`) with `collect_url` (`${origin}/collect/:needId`, no HMAC). If a grant is required, the result is a pending grant plus `approval_code`. `host_mismatch` is MCP `isError`.
 
@@ -62,7 +64,7 @@ Prompt grants stay reusable after a failed origin 4xx (401/410). Retry with `nex
 
 ### `find_items`
 
-Lookup only. Prefer `http.request`.
+Lookup only. Prefer `http_request`.
 
 | Argument | Required |
 | --- | --- |
@@ -74,7 +76,7 @@ Statuses ([src/hosted-types.ts](../../src/hosted-types.ts) `FindItemsResult`):
 
 | `status` | Meaning | `isError` |
 | --- | --- | --- |
-| `found` | One item. Fields: name, kind, last4, allowed_hosts, inject, environment | no |
+| `found` | One item (`item`). Fields: `name`, `kind`, `last4`, `allowed_hosts`, `inject`, `environment` | no |
 | `ambiguous` | More than one host match (`truncated` if more than five) | no |
 | `need_item` | Miss. `collect_url`, `suggested_name`, `host`, `client_name`, `need_id`, `message` | no |
 | `host_mismatch` | Named item is not allowlisted for that host | **yes** |
@@ -87,7 +89,7 @@ Inventory: `name`, `kind`, `last4`, `username`, `environment`, `inject`. No valu
 
 ### `request_grant`
 
-Requires `item_name`. Returns public grant fields plus `approval_code` and `notify_failed`. Never the secret. Standing policies may activate immediately.
+Requires `item_name`; optional `task_description`. Returns public grant fields (including `task_id`) plus `approval_code` and `notify_failed`. Never the secret. Standing policies may activate immediately.
 
 Public grant fields: `grant_id`, `policy`, `status`, `environment_id`, `expires_at`, `created_at`, `approved_at`, `consumed_at`, `task_id`, `task_description`.
 
@@ -107,7 +109,7 @@ Grants for **this client** only. Same public grant fields.
 | `request_grant` | `secret_name`, `agent_id`, `tool_id`, optional `scope` (`once` \| `session`) | Public grant, or `need_item` with a store message (no `collect_url`) |
 | `list_grants` | optional `agent_id`, `tool_id` | `{ grants }` with secret_name, agent_id, tool_id, scope, status, timestamps |
 
-Local inject is `vault run`, not `http.request`. Local `need_item` is MCP `isError`.
+Local inject is `vault run`, not `http_request`. Local `need_item` is MCP `isError`.
 
 ## Auth and isolation
 
@@ -120,5 +122,5 @@ Local inject is `vault run`, not `http.request`. Local `need_item` is MCP `isErr
 ## Related
 
 - HTTP routes that wrap the same kernel: [http-api.md](./http-api.md)
-- Why values stay out of context: [site explanation](../../site/src/pages/docs/explanation/why-the-model-never-sees-the-value.astro)
+- Why values stay out of context: [site explanation](../../site/src/content/docs/explanation/why-the-model-never-sees-the-value.md)
 - ADR [0004](../adr/0004-same-origin-oauth-as.md)

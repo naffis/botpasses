@@ -120,6 +120,97 @@ test("AC-03 docs and pagefind exist", async () => {
   }
 });
 
+test("site: .html and trailing-slash URLs 308 to the canonical path; /console/ is untouched", async () => {
+  const ctx = await siteServer();
+  try {
+    const cases: [string, string][] = [
+      ["/index.html", "/"],
+      ["/docs/start.html", "/docs/start"],
+      ["/docs/", "/docs"],
+      ["/security/", "/security"],
+      ["/docs/connect/grok.html?x=1", "/docs/connect/grok?x=1"],
+    ];
+    for (const [from, to] of cases) {
+      const res = await fetch(`${ctx.base}${from}`, { redirect: "manual" });
+      assert.equal(res.status, 308, from);
+      assert.equal(res.headers.get("location"), to, from);
+    }
+    const console_ = await fetch(`${ctx.base}/console/`, { redirect: "manual" });
+    assert.equal(console_.status, 308);
+    assert.equal(console_.headers.get("location"), "/console");
+    const canonical = await fetch(`${ctx.base}/docs/start`);
+    assert.equal(canonical.status, 200);
+    assert.match(await canonical.text(), /<link rel="canonical" href="https:\/\/botpasses\.com\/docs\/start">/);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("site: unknown docs path is the HTML 404 page, not JSON", async () => {
+  const ctx = await siteServer();
+  try {
+    for (const path of ["/docs/does-not-exist", "/docs/how-to/nope.html", "/_astro/missing.css"]) {
+      const res = await fetch(`${ctx.base}${path}`);
+      assert.equal(res.status, 404, path);
+      assert.match(res.headers.get("content-type") ?? "", /text\/html/, path);
+      assert.match(await res.text(), /<h1>Page not found<\/h1>/, path);
+      assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'/, path);
+    }
+    const head = await fetch(`${ctx.base}/docs/does-not-exist`, { method: "HEAD" });
+    assert.equal(head.status, 404);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("site: hashed assets are immutable, sitemaps and text files are served, sitemap.xml is gone", async () => {
+  const ctx = await siteServer();
+  try {
+    const home = await (await fetch(`${ctx.base}/`)).text();
+    const font = /href="(\/_astro\/[^"]+\.woff2)"/.exec(home)?.[1];
+    assert.ok(font, "preloaded font href");
+    const asset = await fetch(`${ctx.base}${font}`);
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    assert.equal(asset.headers.get("content-type"), "font/woff2");
+    assert.equal(asset.headers.get("x-content-type-options"), "nosniff");
+
+    const favicon = await fetch(`${ctx.base}/favicon.svg`);
+    assert.equal(favicon.headers.get("cache-control"), "public, max-age=3600");
+
+    for (const [path, type] of [
+      ["/sitemap-index.xml", /application\/xml/],
+      ["/sitemap-0.xml", /application\/xml/],
+      ["/llms.txt", /text\/plain/],
+      ["/.well-known/security.txt", /text\/plain/],
+      ["/og.png", /image\/png/],
+    ] as const) {
+      const res = await fetch(`${ctx.base}${path}`);
+      assert.equal(res.status, 200, path);
+      assert.match(res.headers.get("content-type") ?? "", type, path);
+    }
+    const sec = await (await fetch(`${ctx.base}/.well-known/security.txt`)).text();
+    assert.match(sec, /Contact: mailto:security@botpasses\.com/);
+    const gone = await fetch(`${ctx.base}/sitemap.xml`);
+    assert.equal(gone.status, 404);
+
+    const pf = await fetch(`${ctx.base}/pagefind/pagefind-ui.js`);
+    assert.equal(pf.status, 200);
+    assert.match(pf.headers.get("content-type") ?? "", /text\/javascript/);
+    const wasm = await fetch(`${ctx.base}/pagefind/wasm.en.pagefind`);
+    assert.equal(wasm.status, 200);
+    assert.equal(wasm.headers.get("content-type"), "application/octet-stream");
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
 test("AC-02 GET /console is the hosted console", async () => {
   const ctx = await siteServer();
   try {
