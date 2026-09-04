@@ -2,7 +2,9 @@
 
 Hosted rows live in Neon. Instant restore on the root branch covers the history window (7 days on staging). This runbook is the offsite copy: a `pg_dump` custom file encrypted with `BACKUP_KEY`, not the vault KEK.
 
-Nightly `backup-prod.yml` only runs from GitHub’s default branch. Trunk is `dev`. Set the default branch to `dev` after the Actions secrets below exist. A job without R2 secrets is a failure (`require-offsite-env`). Do not enable the cron while those secrets are missing (it will fail every night).
+Nightly `backup-prod.yml` only runs from GitHub's default branch. Trunk is `dev`. Until the default branch is `dev` no backup runs; the steps are in [default-branch.md](default-branch.md) and `ci.yml` fails on `dev` pushes until it is done. A job without R2 secrets is a failure (`require-offsite-env`). Every run ends with a `backup-verify` job that downloads the object just written and decrypts it with `BACKUP_KEY`; a wrong key, a truncated upload, or a bad envelope header fails the run. Alerting: [alerts.md](alerts.md).
+
+`pg_dump` comes from the PGDG `postgresql-client-16` package to match the Neon project's major (`PG_MAJOR` in the workflow). Bump it with the Neon upgrade.
 
 GitHub Actions secret names: `DATABASE_URL_DIRECT`, `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. These are not Fly secrets.
 
