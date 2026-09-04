@@ -6,9 +6,11 @@ Both `fly.*.toml` run it as `[deploy] release_command` so DDL happens once per r
 
 `src/store/schema.ts` holds the same DDL as string constants. They are the SQLite schema for tests and the bootstrap for a database that has no `schema_migrations` table (local Postgres, CI without the migrate step). `PostgresStore.migrate()` checks for `schema_migrations` first: if it exists the release command owns DDL and boot does nothing; otherwise it runs the constants and logs `schema_bootstrap`. `test/migrations.test.ts` asserts that a database migrated by the files has every table, index, and column that a `schema.ts` bootstrap creates.
 
+The runner sorts the files by name and records each by its three-digit number, so a gap in the numbering is fine: there is no `011_*.sql` (the number was retired before it shipped), and `010` is followed by `012`. Do not fill the gap; pick the next free number after the highest file.
+
 ## Adding a migration
 
-1. Create `migrations/00N_short_name.sql`. Expand-only: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`. Put the down steps in a trailing comment.
+1. Create `migrations/00N_short_name.sql` with the next free number (a gap in the sequence is not an error). Expand-only: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`. Put the down steps in a trailing comment.
 2. Mirror the change in `schema.ts` (`HOSTED_SCHEMA_*` constants) so SQLite tests and the bootstrap path stay in parity. SQLite has no `ADD COLUMN IF NOT EXISTS`; follow the existing `_ALTER_SQLITE` / `_ALTER_PG` split.
 3. `npm run migrate` twice against local Postgres (second run applies nothing), then `npm run test:pg`.
 4. Ship. The release command applies it on staging, then production.

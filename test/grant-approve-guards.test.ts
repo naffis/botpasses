@@ -59,7 +59,7 @@ async function status(fn: () => Promise<unknown>): Promise<{ status: number; mes
   }
 }
 
-test("method, path, and host limits are refused on a trusted client's grant; max_calls and ttl stay (G6)", async () => {
+test("explicit method, path, and host limits are refused on a trusted client's grant; a plain approve is unrestricted; max_calls and ttl stay (G6, R3-7)", async () => {
   const ctx = await setup();
   try {
     const { client: trusted } = await ctx.kernel.createTrustedClient({ orgId: ctx.orgId, name: "runtime", environment: "staging" });
@@ -73,20 +73,34 @@ test("method, path, and host limits are refused on a trusted client's grant; max
     const approve = (scope?: Record<string, unknown>) =>
       ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: asked.grant.id, policy: "session", role: "owner", actor: "user_owner", scope });
 
-    const inherited = await status(() => approve());
-    assert.equal(inherited.status, 400, "inheriting the requested call would write limits nothing enforces");
-    assert.equal(inherited.payload.status, "scope_unenforceable");
-    assert.match(inherited.message, /trusted runtime client/);
-    assert.equal((await ctx.store.getGrant(asked.grant.id))?.status, "pending");
-
     const explicit = await status(() => approve({ methods: ["GET"] }));
-    assert.equal(explicit.status, 400);
+    assert.equal(explicit.status, 400, "an explicit limit would show the operator a restriction nothing enforces");
+    assert.equal(explicit.payload.status, "scope_unenforceable");
+    assert.match(explicit.message, /trusted runtime client/);
     assert.equal((await status(() => approve({ hosts: ["api.example.com"] }))).status, 400);
     assert.equal((await status(() => approve({ pathPrefixes: ["/v1"] }))).status, 400);
+    assert.equal((await ctx.store.getGrant(asked.grant.id))?.status, "pending");
 
+    // R3-7: the console's plain Approve (no scope) must work even though the agent stated a call;
+    // the requested call is not inherited, the approval is written unrestricted.
+    assert.equal(asked.grant.requestedScope?.method, "GET", "the request carried a scope to inherit");
+    const inherited = await status(() => approve());
+    assert.equal(inherited.status, 200, inherited.message);
+    const plain = await ctx.store.getGrant(asked.grant.id);
+    assert.equal(plain?.status, "active");
+    assert.deepEqual([plain?.methods, plain?.pathPrefixes, plain?.hosts, plain?.maxCalls], [null, null, null, null]);
+
+    await ctx.mk("OTHER_KEY");
+    const second = await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: trusted.id,
+      itemName: "OTHER_KEY",
+      environment: "staging",
+      request: { host: "api.example.com", method: "POST", path: "/v1/charges" },
+    });
     const ok = await ctx.kernel.approveGrant({
       orgId: ctx.orgId,
-      grantId: asked.grant.id,
+      grantId: second.grant.id,
       policy: "session",
       role: "owner",
       actor: "user_owner",

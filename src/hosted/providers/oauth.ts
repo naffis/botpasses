@@ -4,6 +4,7 @@
  * every body returned to a caller is redacted.
  */
 import type { OauthGrantType } from "../../hosted-types.ts";
+import { last4 } from "../../ids.ts";
 import { redactOauthJson } from "../../redact.ts";
 import { executeConnector, redactConnectorBody, type ConnectorFetch, type ConnectorItem, type ConnectorResult, type PinnedTlsOpts, redactOriginHeaders } from "../connector.ts";
 import { HttpError, InjectDeniedError } from "../errors.ts";
@@ -17,11 +18,6 @@ export type TokenEngineDeps = {
 
 export type MintOutcome = { minted: MintedToken; origin: ConnectorResult };
 
-function last4(value: string): string {
-  return value.length <= 4 ? value : value.slice(-4);
-}
-
-/** Parse a token endpoint's JSON. Throws 502 on anything that is not a bearer token payload. */
 /** The token endpoint is a send like any other: the operator must have allowlisted it. */
 function assertTokenHostAllowed(item: { allowedHosts: string[] }, provider: Provider): string[] {
   if (!item.allowedHosts.includes(provider.tokenHost)) {
@@ -36,6 +32,7 @@ function assertTokenHostAllowed(item: { allowedHosts: string[] }, provider: Prov
   return item.allowedHosts;
 }
 
+/** Parse a token endpoint's JSON. Throws 502 on anything that is not a bearer token payload. */
 export function readMintedAccessToken(body: string): MintedToken {
   let parsed: unknown;
   try {
@@ -66,12 +63,15 @@ export function readMintedAccessToken(body: string): MintedToken {
   };
 }
 
-/** The stored client-secret item, retargeted at the provider token host with the public client id. */
-function tokenEndpointItem(provider: Provider, item: ConnectorItem, clientId: string, inject: "client_credentials" | "refresh"): ConnectorItem {
+/**
+ * The stored client-secret item, retargeted at the provider token host with the public client
+ * id. `client_credentials` at a token endpoint places the id and secret per `provider.tokenAuth`.
+ */
+function tokenEndpointItem(provider: Provider, item: ConnectorItem, clientId: string): ConnectorItem {
   return {
     ...item,
     username: clientId,
-    inject,
+    inject: "client_credentials",
     allowedHosts: assertTokenHostAllowed(item, provider),
   };
 }
@@ -80,12 +80,18 @@ function failedMint(): MintedToken {
   return { accessToken: "", expiresAt: 0, last4: "", tokenType: "Bearer" };
 }
 
+/**
+ * One POST to the provider token endpoint as `tokenItem`. The body and headers handed back are
+ * redacted for `originalItem` under the client id actually sent, for `extraSecrets` (a refresh
+ * token that travelled in the form), and for the tokens the endpoint minted.
+ */
 async function postTokenRequest(
   provider: Provider,
   tokenItem: ConnectorItem,
   originalItem: ConnectorItem,
   fields: Record<string, string>,
   deps: TokenEngineDeps,
+  extraSecrets: readonly string[] = [],
 ): Promise<MintOutcome> {
   const origin = await executeConnector(
     tokenItem,
@@ -100,25 +106,18 @@ async function postTokenRequest(
   );
   // Redact against the client id the request carried, not only the stored username.
   const sentAs = tokenItem.username;
+  const redacted = (extra: readonly string[]): ConnectorResult => ({
+    ...origin,
+    body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra, undefined, sentAs),
+    headers: redactOriginHeaders(origin.headers, originalItem, [...extra], sentAs),
+  });
   if (origin.status < 200 || origin.status >= 300) {
-    return {
-      minted: failedMint(),
-      origin: {
-        ...origin,
-        body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, [], undefined, sentAs),
-        headers: redactOriginHeaders(origin.headers, originalItem, [], sentAs),
-      },
-    };
+    return { minted: failedMint(), origin: redacted(extraSecrets) };
   }
   const minted = readMintedAccessToken(origin.body);
-  const extra = [minted.accessToken, ...(minted.refreshToken ? [minted.refreshToken] : [])];
   return {
     minted,
-    origin: {
-      ...origin,
-      body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra, undefined, sentAs),
-      headers: redactOriginHeaders(origin.headers, originalItem, extra, sentAs),
-    },
+    origin: redacted([...extraSecrets, minted.accessToken, ...(minted.refreshToken ? [minted.refreshToken] : [])]),
   };
 }
 
@@ -142,21 +141,33 @@ export async function mintClientCredentials(
   assertGrant(provider, "client_credentials");
   const fields: Record<string, string> = { grant_type: "client_credentials" };
   if (scopes && scopes.length > 0 && provider.scopesParam) fields[provider.scopesParam] = scopes.join(" ");
-  return postTokenRequest(provider, tokenEndpointItem(provider, item, clientId, "client_credentials"), item, fields, deps);
+  return postTokenRequest(provider, tokenEndpointItem(provider, item, clientId), item, fields, deps);
 }
 
 /**
- * RFC 6749 section 6: a fresh access token from a stored refresh token. The refresh item's value
- * is placed in the form body by the connector (`refresh` mode); `clientId` identifies the app.
+ * RFC 6749 section 6: a fresh access token from a stored refresh token. The exchange authenticates
+ * the app exactly as the code exchange did: `clientSecretItem` (the `<ITEM>` whose
+ * `<ITEM>_REFRESH` this is) goes out per `provider.tokenAuth` (HTTP Basic, or `client_id` and
+ * `client_secret` form fields), and the refresh item's value rides in the form as `refresh_token`.
+ * Both items must allow the token host. Neither value reaches the returned body or headers.
  */
 export async function refreshAccessToken(
   provider: Provider,
   refreshItem: ConnectorItem,
+  clientSecretItem: ConnectorItem,
   clientId: string,
   deps: TokenEngineDeps = {},
 ): Promise<MintOutcome> {
   assertGrant(provider, "refresh_token");
-  return postTokenRequest(provider, tokenEndpointItem(provider, refreshItem, clientId, "refresh"), refreshItem, {}, deps);
+  assertTokenHostAllowed(refreshItem, provider);
+  return postTokenRequest(
+    provider,
+    tokenEndpointItem(provider, clientSecretItem, clientId),
+    clientSecretItem,
+    { grant_type: "refresh_token", refresh_token: refreshItem.secret },
+    deps,
+    [refreshItem.secret],
+  );
 }
 
 /** RFC 6749 section 4.1.3 (+ RFC 7636 code_verifier): exchange a code with the client secret item. */
@@ -173,13 +184,7 @@ export async function exchangeAuthorizationCode(
     redirect_uri: input.redirectUri,
   };
   if (input.codeVerifier) fields.code_verifier = input.codeVerifier;
-  return postTokenRequest(
-    provider,
-    tokenEndpointItem(provider, clientSecretItem, input.clientId, "client_credentials"),
-    clientSecretItem,
-    fields,
-    deps,
-  );
+  return postTokenRequest(provider, tokenEndpointItem(provider, clientSecretItem, input.clientId), clientSecretItem, fields, deps);
 }
 
 /** The API-call item: a minted token sent as Bearer, with nothing of the client secret left. */

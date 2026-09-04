@@ -11,6 +11,7 @@ import { clampTimeoutMs } from "../src/hosted/connector.ts";
 import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
+import { unscopedFields } from "../src/hosted-types.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
 
@@ -207,6 +208,48 @@ test("dry_run resolves item, host, mode, provider, and grant without sending, co
     assert.equal(ctx.hits.length, 0, "the origin was never called");
     const audit = await ctx.kernel.store.listAudit(ctx.orgId, 200);
     assert.equal(audit.filter((a) => a.action.startsWith("inject")).length, 0, "no inject audit rows");
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("dry_run counts a standing policy only while it is live: expired or spent reads as no approval, and nothing is deleted (R3-5)", async () => {
+  const ctx = await setup(async () => new Response("{}", { status: 200 }));
+  try {
+    const env = await ctx.kernel.envFor(ctx.orgId, "staging");
+    const policy = (id: string, extra: { expiresAt: string | null; maxCalls?: number; callsUsed?: number }) => ({
+      id,
+      orgId: ctx.orgId,
+      clientId: ctx.model.id,
+      itemId: ctx.echoId,
+      folderId: null,
+      environmentId: env.id,
+      kind: "item_standing" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ...unscopedFields(),
+      ...extra,
+    });
+    const dry = () => ctx.call({ item_name: "ECHO_TOKEN", method: "GET", path: "/v1/items", dry_run: true });
+
+    await ctx.kernel.store.insertPolicy(policy("pol_expired", { expiresAt: "2026-02-01T00:00:00.000Z" }));
+    const expired = await dry();
+    assert.equal(expired.payload.grant_status, "none", JSON.stringify(expired.payload));
+    assert.equal(expired.payload.reason, "grant_required");
+    assert.equal(expired.payload.would_send, false);
+    assert.ok(await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, ctx.echoId), "a dry run reads past a stale policy; it does not delete it");
+    await ctx.kernel.store.deletePolicy("pol_expired");
+
+    await ctx.kernel.store.insertPolicy(policy("pol_spent", { expiresAt: null, maxCalls: 1, callsUsed: 1 }));
+    const spent = await dry();
+    assert.equal(spent.payload.grant_status, "none");
+    assert.equal(spent.payload.reason, "grant_required");
+    await ctx.kernel.store.deletePolicy("pol_spent");
+
+    await ctx.kernel.store.insertPolicy(policy("pol_live", { expiresAt: null, maxCalls: 3, callsUsed: 1 }));
+    const live = await dry();
+    assert.equal(live.payload.grant_status, "standing");
+    assert.equal(live.payload.would_send, true);
+    assert.equal(ctx.hits.length, 0);
   } finally {
     await ctx.close();
   }

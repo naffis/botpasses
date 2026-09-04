@@ -23,8 +23,8 @@ export const BODY_TOO_LARGE = "body_too_large";
  */
 export class OriginUnreachableError extends HttpError {
   readonly credentialSent: boolean;
-  constructor(message: string, credentialSent: boolean) {
-    super(502, message);
+  constructor(message: string, credentialSent: boolean, extra: Record<string, unknown> = {}) {
+    super(502, message, extra);
     this.name = "OriginUnreachableError";
     this.credentialSent = credentialSent;
   }
@@ -127,6 +127,17 @@ export type ConnectorResult = {
   headers: Record<string, string>;
 };
 
+/**
+ * What both network paths hand back: the origin status, its headers (lowercase names, repeated
+ * values joined), and the raw body. A plain record on purpose: the WHATWG `Response` refuses a
+ * body on 204/205/304 and any status outside 200-599, and an origin decides both.
+ */
+export type OriginResponse = {
+  status: number;
+  headers: Record<string, string>;
+  body: Buffer;
+};
+
 /** Test-only overrides for the pinned TLS path: trust a local CA and dial a non-443 port. */
 export type PinnedTlsOpts = {
   ca?: string | Buffer;
@@ -226,12 +237,21 @@ function credentialForms(
 }
 
 /** Only the allowlisted names, lowercased, in allowlist order. */
-export function pickOriginHeaders(headers: Headers): Record<string, string> {
+export function pickOriginHeaders(headers: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of ORIGIN_HEADER_ALLOWLIST) {
-    const value = headers.get(name);
-    if (value !== null && value !== "") out[name] = value;
+    const value = headers[name];
+    if (value !== undefined && value !== "") out[name] = value;
   }
+  return out;
+}
+
+/** `Headers` (a fetch mock's) as the plain lowercase record the pinned path produces. */
+function headerRecord(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    out[name.toLowerCase()] = value;
+  });
   return out;
 }
 
@@ -332,13 +352,15 @@ export async function executeConnector(
   const fetchImpl = opts.fetchImpl;
   try {
     const res = fetchImpl
-      ? await fetchImpl(url, {
-          method,
-          headers,
-          body: injected.body,
-          redirect: "manual",
-          signal: ac.signal,
-        })
+      ? await readCapped(
+          await fetchImpl(url, {
+            method,
+            headers,
+            body: injected.body,
+            redirect: "manual",
+            signal: ac.signal,
+          }),
+        )
       : await fetchPinned(url, {
           method,
           headers,
@@ -348,21 +370,18 @@ export async function executeConnector(
           timeoutMs,
           ...opts.tls,
         });
-    const read = await readCapped(res);
-    if (read === undefined) return bodyTooLarge(res.headers);
-    const full = read.toString("utf8");
+    const full = res.body.toString("utf8");
     const redacted = opts.redact === false ? full : redactConnectorBody(full, item, [], host);
     const body = redacted.length > RESPONSE_CAP ? redacted.slice(0, RESPONSE_CAP) : redacted;
-    const originHeaders = pickOriginHeaders(res.headers);
     return {
       status: res.status,
       body,
       // Headers are never the payload a caller needs verbatim: redact them for the item even
       // when the caller hand-redacts the body (token endpoints add the minted tokens too).
-      headers: redactOriginHeaders(originHeaders, item),
+      headers: redactOriginHeaders(pickOriginHeaders(res.headers), item),
     };
   } catch (err) {
-    if (err instanceof OriginBodyTooLarge) return bodyTooLarge(err.headers);
+    if (err instanceof OriginBodyTooLarge) return bodyTooLarge(err.headers, item);
     if (err instanceof HttpError) throw err;
     const aborted = ac.signal.aborted;
     throw new OriginUnreachableError(describeOriginFailure(err, host, aborted, timeoutMs), credentialSentBefore(err));
@@ -371,10 +390,10 @@ export async function executeConnector(
   }
 }
 
-/** Raised inside `fetchPinned` when the origin body passes `RAW_RESPONSE_CAP`; the socket is destroyed. */
+/** Raised when the origin body passes `RAW_RESPONSE_CAP`; the socket (or stream) is destroyed. */
 class OriginBodyTooLarge extends Error {
-  readonly headers: Headers;
-  constructor(headers: Headers) {
+  readonly headers: Record<string, string>;
+  constructor(headers: Record<string, string>) {
     super(BODY_TOO_LARGE);
     this.name = "OriginBodyTooLarge";
     this.headers = headers;
@@ -384,29 +403,32 @@ class OriginBodyTooLarge extends Error {
 /**
  * The result for an origin body past `RAW_RESPONSE_CAP`: a 502 the model can act on. The origin
  * answered, so the credential was sent and a one-call approval is spent like any other status.
+ * Its headers are redacted like any other answer's: a `Link` after a `query:` inject echoes the key.
  */
-function bodyTooLarge(headers: Headers): ConnectorResult {
+function bodyTooLarge(headers: Record<string, string>, item: Pick<ConnectorItem, "secret" | "username">): ConnectorResult {
   return {
     status: 502,
     body: JSON.stringify({
       error: BODY_TOO_LARGE,
       hint: `The origin response exceeded ${RAW_RESPONSE_CAP} bytes and was discarded. Ask for a smaller page (limit, page size, or fields).`,
     }),
-    headers: pickOriginHeaders(headers),
+    headers: redactOriginHeaders(pickOriginHeaders(headers), item),
   };
 }
 
 /**
- * Reads at most `RAW_RESPONSE_CAP` bytes; returns undefined (and cancels the stream) past it.
- * `fetchPinned` already enforced the cap on the socket; this covers any other fetch.
+ * Reads a fetch `Response` into the plain shape, at most `RAW_RESPONSE_CAP` bytes; past it the
+ * stream is cancelled and `OriginBodyTooLarge` carries the headers. `fetchPinned` enforces the
+ * same cap on the socket; this covers any other fetch.
  */
-async function readCapped(res: Response): Promise<Buffer | undefined> {
-  const declared = Number(res.headers.get("content-length") ?? "");
+async function readCapped(res: Response): Promise<OriginResponse> {
+  const headers = headerRecord(res.headers);
+  const declared = Number(headers["content-length"] ?? "");
   if (Number.isFinite(declared) && declared > RAW_RESPONSE_CAP) {
     await res.body?.cancel().catch(() => undefined);
-    return undefined;
+    throw new OriginBodyTooLarge(headers);
   }
-  if (!res.body) return Buffer.alloc(0);
+  if (!res.body) return { status: res.status, headers, body: Buffer.alloc(0) };
   const reader = res.body.getReader();
   const chunks: Buffer[] = [];
   let total = 0;
@@ -416,17 +438,23 @@ async function readCapped(res: Response): Promise<Buffer | undefined> {
     total += value.byteLength;
     if (total > RAW_RESPONSE_CAP) {
       await reader.cancel().catch(() => undefined);
-      return undefined;
+      throw new OriginBodyTooLarge(headers);
     }
     chunks.push(Buffer.from(value));
   }
-  return Buffer.concat(chunks);
+  return { status: res.status, headers, body: Buffer.concat(chunks) };
+}
+
+/** The status codes an HTTP/1.1 parser may hand us that no HTTP client should pass on. */
+function isValidOriginStatus(status: number): boolean {
+  return Number.isInteger(status) && status >= 100 && status <= 599;
 }
 
 /**
  * Dial the resolved (public) IP directly so DNS cannot rebind between resolve and connect, while
  * presenting the hostname for SNI, certificate verification, and the Host header. Redirects are
- * returned as-is, never followed.
+ * returned as-is, never followed. Every outcome settles the promise: nothing in the parser
+ * callbacks may throw, because an exception there is uncaught and ends the process.
  */
 export async function fetchPinned(
   url: string,
@@ -438,7 +466,7 @@ export async function fetchPinned(
     addresses: string[];
     timeoutMs?: number;
   } & PinnedTlsOpts,
-): Promise<Response> {
+): Promise<OriginResponse> {
   const parsed = new URL(url);
   const ip = init.addresses[0];
   if (!ip) throw new HttpError(400, "Host resolves to a private or blocked address");
@@ -447,7 +475,7 @@ export async function fetchPinned(
     // is on the wire, so a later failure is not "never sent".
     let credentialSent = false;
     let settled = false;
-    const settle = (outcome: { ok: Response } | { err: Error }) => {
+    const settle = (outcome: { ok: OriginResponse } | { err: Error }) => {
       if (settled) return;
       settled = true;
       init.signal.removeEventListener("abort", onAbort);
@@ -471,14 +499,27 @@ export async function fetchPinned(
         ...(init.ca ? { ca: init.ca } : {}),
       },
       (res) => {
-        const headers = new Headers();
+        const headers: Record<string, string> = {};
         for (const [name, value] of Object.entries(res.headers)) {
-          if (typeof value === "string") headers.set(name, value);
-          else if (Array.isArray(value)) headers.set(name, value.join(", "));
+          if (typeof value === "string") headers[name.toLowerCase()] = value;
+          else if (Array.isArray(value)) headers[name.toLowerCase()] = value.join(", ");
         }
-        if (!headers.has("content-type")) headers.set("content-type", "text/plain");
+        headers["content-type"] ??= "text/plain";
         const status = res.statusCode ?? 502;
-        const declared = Number(headers.get("content-length") ?? "");
+        if (!isValidOriginStatus(status)) {
+          // The parser accepts any three digits; a status no client could carry is an origin
+          // fault (502) that keeps the approval spent: the credential was answered.
+          settle({
+            err: new OriginUnreachableError(
+              `Origin request failed: ${parsed.hostname} answered with an invalid HTTP status (${status})`,
+              true,
+              { status: "bad_status", origin_status: status },
+            ),
+          });
+          req.destroy();
+          return;
+        }
+        const declared = Number(headers["content-length"] ?? "");
         const tooLarge = () => {
           settle({ err: new OriginBodyTooLarge(headers) });
           req.destroy();
@@ -499,7 +540,7 @@ export async function fetchPinned(
           chunks.push(chunk);
         });
         res.on("end", () => {
-          settle({ ok: new Response(Buffer.concat(chunks), { status, headers }) });
+          settle({ ok: { status, headers, body: Buffer.concat(chunks) } });
         });
         const premature = () => {
           if (settled || res.complete) return;
