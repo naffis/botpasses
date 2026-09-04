@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import type {
   AccessEventRecord,
   ApprovalChallengeRecord,
@@ -26,11 +26,20 @@ import {
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import type { AuditListFilter, SweepCounts, VaultStore } from "./types.ts";
 
 function asRecord(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
 }
+
+export type PostgresOpenOptions = {
+  /** Suffix for application_name (`botpasses-<plane>`), visible in pg_stat_activity. */
+  plane?: string;
+  /** Override the pool size (default 10). */
+  max?: number;
+  /** Per-statement timeout in ms (default 15 s). */
+  statementTimeoutMs?: number;
+};
 
 export class PostgresStore implements VaultStore {
   readonly #pool: Pool;
@@ -38,22 +47,83 @@ export class PostgresStore implements VaultStore {
     this.#pool = pool;
   }
 
-  static async open(connectionString: string): Promise<PostgresStore> {
-    const pool = new Pool({ connectionString, max: 10 });
+  static poolOptions(connectionString: string, opts: PostgresOpenOptions = {}): PoolConfig {
+    const statementTimeout = opts.statementTimeoutMs ?? 15_000;
+    return {
+      connectionString,
+      max: opts.max ?? 10,
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+      keepAlive: true,
+      application_name: `botpasses-${opts.plane ?? "hosted"}`,
+      statement_timeout: statementTimeout,
+      options: `-c statement_timeout=${statementTimeout}`,
+    };
+  }
+
+  /**
+   * Connect and make sure the schema is present. Throws (does not exit) on a bad URL or an
+   * unreachable database; the caller decides the exit code.
+   */
+  static async open(connectionString: string, opts: PostgresOpenOptions = {}): Promise<PostgresStore> {
+    const pool = new Pool(PostgresStore.poolOptions(connectionString, opts));
+    // Without this a lost connection in the idle pool becomes an uncaught 'error' event.
+    pool.on("error", (err) => {
+      console.error(JSON.stringify({ event: "pg_pool_error", message: err.message, at: new Date().toISOString() }));
+    });
     const store = new PostgresStore(pool);
-    await store.migrate();
+    try {
+      await store.migrate();
+    } catch (err) {
+      await pool.end().catch(() => undefined);
+      throw err;
+    }
     return store;
   }
 
+  /**
+   * If `schema_migrations` exists, scripts/migrate.ts (the Fly release_command) owns DDL and
+   * this is a no-op. Otherwise this is a dev/test database: bootstrap from the schema.ts
+   * constants, as before, and say so.
+   */
   async migrate(): Promise<void> {
+    const r = await this.#pool.query<{ ok: boolean }>(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ok",
+    );
+    if (r.rows[0]?.ok) return;
     await this.#pool.query(HOSTED_SCHEMA_SQLITE);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
+    console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
   async ping(): Promise<void> {
     await this.#pool.query("SELECT 1");
+  }
+
+  async sweepExpired(nowIso: string): Promise<SweepCounts> {
+    const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
+    const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
+    const count = async (sql: string, params: string[]): Promise<number> => {
+      const res = await this.#pool.query(sql, params);
+      return res.rowCount ?? 0;
+    };
+    return {
+      emailOtpChallenges: await count("DELETE FROM email_otp_challenges WHERE expires_at < $1", [nowIso]),
+      operatorSessions: await count("DELETE FROM operator_sessions WHERE expires_at < $1", [nowIso]),
+      approvalChallenges: await count("DELETE FROM approval_challenges WHERE expires_at < $1", [nowIso]),
+      needItems: await count(
+        `DELETE FROM need_items
+         WHERE (status = 'cancelled' AND created_at < $1)
+            OR (status = 'pending' AND expires_at < $1)`,
+        [dayAgo],
+      ),
+      rateHits: await count("DELETE FROM rate_hits WHERE window_start < $1", [twoHoursAgo]),
+      oidcPayloads: await count("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < $1", [
+        nowIso,
+      ]),
+    };
   }
 
   async close(): Promise<void> {

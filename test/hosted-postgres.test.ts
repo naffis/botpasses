@@ -79,6 +79,73 @@ test("AC-10 two processes: exactly one prompt consume on Postgres", async (t) =>
   await store.close();
 });
 
+test("PostgresStore.open rejects (does not exit) on an unreachable database", async (t) => {
+  if (!dbUrl) {
+    t.skip("DATABASE_URL not set");
+    return;
+  }
+  const bad = dbUrl.replace(/\/\/([^@]*@)?[^/:]+(:\d+)?/, "//vault:vault@127.0.0.1:1");
+  await assert.rejects(PostgresStore.open(bad, { plane: "test" }));
+});
+
+test("pool options carry timeouts and an application_name per plane", () => {
+  const opts = PostgresStore.poolOptions("postgres://u:p@h/db", { plane: "staging" });
+  assert.equal(opts.connectionTimeoutMillis, 5000);
+  assert.equal(opts.idleTimeoutMillis, 30000);
+  assert.equal(opts.statement_timeout, 15000);
+  assert.equal(opts.options, "-c statement_timeout=15000");
+  assert.equal(opts.application_name, "botpasses-staging");
+  assert.equal(opts.keepAlive, true);
+});
+
+test("sweepExpired on Postgres deletes expired OTP, sessions, challenges, needs, rate hits, oidc payloads", async (t) => {
+  if (!dbUrl) {
+    t.skip("DATABASE_URL not set");
+    return;
+  }
+  const store = await PostgresStore.open(dbUrl, { plane: "test" });
+  const now = new Date();
+  const iso = (offsetMs: number) => new Date(now.getTime() + offsetMs).toISOString();
+  const HOUR = 3_600_000;
+  const tag = randomUUID().slice(0, 8);
+  try {
+    await store.insertEmailOtp({ id: `otp_old_${tag}`, email: `${tag}@x.io`, codeScrypt: "h", expiresAt: iso(-HOUR), attempts: 0, sentAt: iso(-2 * HOUR) });
+    await store.insertEmailOtp({ id: `otp_live_${tag}`, email: `${tag}@x.io`, codeScrypt: "h", expiresAt: iso(HOUR), attempts: 0, sentAt: iso(-1000) });
+    await store.insertSession({ idHash: `s_old_${tag}`, userId: `u_${tag}`, createdAt: iso(-48 * HOUR), lastSeenAt: iso(-30 * HOUR), expiresAt: iso(-HOUR) });
+    await store.insertSession({ idHash: `s_live_${tag}`, userId: `u_${tag}`, createdAt: iso(-HOUR), lastSeenAt: iso(-1000), expiresAt: iso(8 * HOUR) });
+    await store.insertChallenge({ id: `c_old_${tag}`, grantId: `g_${tag}`, codeHash: "h", expiresAt: iso(-HOUR), attempts: 0, kind: "code" });
+    await store.insertChallenge({ id: `c_live_${tag}`, grantId: `g2_${tag}`, codeHash: "h", expiresAt: iso(HOUR), attempts: 0, kind: "code" });
+    await store.incrementRateHit(`org_${tag}`, "grant", iso(-3 * HOUR));
+    await store.incrementRateHit(`org_${tag}`, "grant", iso(-10 * 60_000));
+    await store.upsertOidcPayload({ id: `p_old_${tag}`, kind: "AccessToken", payload: "{}", expiresAt: iso(-HOUR) });
+    await store.upsertOidcPayload({ id: `p_live_${tag}`, kind: "AccessToken", payload: "{}", expiresAt: iso(HOUR) });
+    await store.upsertOidcPayload({ id: `p_forever_${tag}`, kind: "Client", payload: "{}", expiresAt: null });
+
+    const counts = await store.sweepExpired(now.toISOString());
+    assert.ok(counts.emailOtpChallenges >= 1);
+    assert.ok(counts.operatorSessions >= 1);
+    assert.ok(counts.approvalChallenges >= 1);
+    assert.ok(counts.rateHits >= 1);
+    assert.ok(counts.oidcPayloads >= 1);
+    assert.equal((await store.latestEmailOtp(`${tag}@x.io`))?.id, `otp_live_${tag}`);
+    assert.equal(await store.getSession(`s_old_${tag}`), undefined);
+    assert.ok(await store.getSession(`s_live_${tag}`));
+    assert.equal(await store.getChallenge(`c_old_${tag}`), undefined);
+    assert.ok(await store.getChallenge(`c_live_${tag}`));
+    assert.equal(await store.countRateHits(`org_${tag}`, "grant", iso(-3 * HOUR)), 0);
+    assert.equal(await store.countRateHits(`org_${tag}`, "grant", iso(-10 * 60_000)), 1);
+    assert.equal(await store.getOidcPayload(`p_old_${tag}`, "AccessToken"), undefined);
+    assert.ok(await store.getOidcPayload(`p_live_${tag}`, "AccessToken"));
+    assert.ok(await store.getOidcPayload(`p_forever_${tag}`, "Client"));
+    await store.deleteOidcPayload(`p_forever_${tag}`, "Client");
+    await store.deleteOidcPayload(`p_live_${tag}`, "AccessToken");
+    await store.deleteSession(`s_live_${tag}`);
+    await store.deleteChallenge(`c_live_${tag}`);
+  } finally {
+    await store.close();
+  }
+});
+
 test("AC-11 GET /ready is 200 against Postgres", async (t) => {
   if (!dbUrl) {
     t.skip("DATABASE_URL not set");

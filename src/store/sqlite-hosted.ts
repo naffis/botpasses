@@ -28,7 +28,7 @@ import {
   HOSTED_SCHEMA_SQLITE,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
-import type { AuditListFilter, VaultStore } from "./types.ts";
+import type { AuditListFilter, SweepCounts, VaultStore } from "./types.ts";
 
 function mapOrg(r: Record<string, unknown>): OrgRecord {
   return {
@@ -1199,6 +1199,27 @@ export class SqliteHostedStore implements VaultStore {
 
   async setClientLastTokenAt(id: string, at: string): Promise<void> {
     this.#db.prepare("UPDATE clients SET last_token_at = ? WHERE id = ?").run(at, id);
+  }
+
+  async sweepExpired(nowIso: string): Promise<SweepCounts> {
+    const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
+    const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
+    const run = (sql: string, ...params: string[]): number =>
+      Number(this.#db.prepare(sql).run(...params).changes);
+    return {
+      emailOtpChallenges: run("DELETE FROM email_otp_challenges WHERE expires_at < ?", nowIso),
+      operatorSessions: run("DELETE FROM operator_sessions WHERE expires_at < ?", nowIso),
+      approvalChallenges: run("DELETE FROM approval_challenges WHERE expires_at < ?", nowIso),
+      needItems: run(
+        `DELETE FROM need_items
+         WHERE (status = 'cancelled' AND created_at < ?)
+            OR (status = 'pending' AND expires_at < ?)`,
+        dayAgo,
+        dayAgo,
+      ),
+      rateHits: run("DELETE FROM rate_hits WHERE window_start < ?", twoHoursAgo),
+      oidcPayloads: run("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < ?", nowIso),
+    };
   }
 }
 
