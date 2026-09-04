@@ -34,11 +34,34 @@ import {
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
+  GRANT_INSERT_COLUMNS,
+  grantValues,
+  ITEM_INSERT_COLUMNS,
+  itemValues,
+  mapAccess,
+  mapChallenge,
+  mapEnv,
+  mapFolder,
+  mapGrant,
+  mapIdentityKey,
+  mapInvite,
+  mapItem,
+  mapMember,
+  mapMemberRecord,
+  mapNeed,
+  mapOidcRow,
+  mapOrg,
+  mapOtp,
+  mapPolicy,
+  mapSess,
+  mapUser,
+  mapVault,
+  NEED_INSERT_COLUMNS,
+  needValues,
+  placeholders,
+} from "./rows.ts";
+import {
   oidcPayloadIndex,
-  parseCallsUsed,
-  parseNullableInt,
-  parseRequestedScope,
-  parseScopeList,
   requestedScopeJson,
   scopeListJson,
   type AuditListFilter,
@@ -53,60 +76,16 @@ import {
   type VaultStore,
 } from "./types.ts";
 
-function mapOrg(r: Record<string, unknown>): OrgRecord {
-  return {
-    id: String(r.id),
-    name: String(r.name),
-    wrappedDekIv: String(r.wrapped_dek_iv),
-    wrappedDekCiphertext: String(r.wrapped_dek_ciphertext),
-    wrappedDekTag: String(r.wrapped_dek_tag),
-    createdAt: String(r.created_at),
-  };
-}
+const GRANT_INSERT_SQL = `INSERT INTO grants (${GRANT_INSERT_COLUMNS}) VALUES (${placeholders(20, "sqlite")})`;
 
-function mapItem(r: Record<string, unknown>): ItemRecord {
-  return {
-    id: String(r.id),
-    environmentId: String(r.environment_id),
-    folderId: r.folder_id == null ? null : String(r.folder_id),
-    kind: r.kind as ItemRecord["kind"],
-    name: String(r.name),
-    last4: String(r.last4),
-    username: r.username == null ? null : String(r.username),
-    allowedHostsJson: String(r.allowed_hosts_json),
-    inject: String(r.inject),
-    iv: String(r.iv),
-    ciphertext: String(r.ciphertext),
-    tag: String(r.tag),
-    createdAt: String(r.created_at),
-    updatedAt: String(r.updated_at),
-  };
-}
-
-function mapGrant(r: Record<string, unknown>): HostedGrantRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: String(r.client_id),
-    itemId: r.item_id == null ? null : String(r.item_id),
-    folderId: r.folder_id == null ? null : String(r.folder_id),
-    environmentId: String(r.environment_id),
-    policy: r.policy as HostedGrantRecord["policy"],
-    status: r.status as HostedGrantRecord["status"],
-    expiresAt: r.expires_at == null ? null : String(r.expires_at),
-    createdAt: String(r.created_at),
-    approvedAt: r.approved_at == null ? null : String(r.approved_at),
-    consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
-    taskId: r.task_id == null ? null : String(r.task_id),
-    taskDescription: r.task_description == null ? null : String(r.task_description),
-    methods: parseScopeList(r.methods),
-    pathPrefixes: parseScopeList(r.path_prefixes),
-    hosts: parseScopeList(r.hosts),
-    maxCalls: parseNullableInt(r.max_calls),
-    callsUsed: parseCallsUsed(r.calls_used),
-    requestedScope: parseRequestedScope(r.requested_scope_json),
-  };
-}
+/** Column additions shipped after the base schema; "duplicate column" means the database has them. */
+const SQLITE_ALTERS = [
+  HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
+  HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
+  HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
+  HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
+  HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -122,23 +101,7 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   if (orgOauthIndex && !/UNIQUE/i.test(orgOauthIndex.sql ?? "")) {
     db.exec("DROP INDEX clients_org_oauth");
   }
-  for (const alter of [
-    HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
-    HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
-    HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
-  ]) {
-    for (const stmt of alter.trim().split(";")) {
-      const sql = stmt.trim();
-      if (!sql) continue;
-      try {
-        db.exec(sql);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("duplicate column")) throw err;
-      }
-    }
-  }
-  for (const alter of [HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE, HOSTED_SCHEMA_TEAM_ALTER_SQLITE]) {
+  for (const alter of SQLITE_ALTERS) {
     for (const stmt of alter.trim().split(";")) {
       const sql = stmt.trim();
       if (!sql) continue;
@@ -153,29 +116,6 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
   db.exec(HOSTED_SCHEMA_TEAM);
   return new SqliteHostedStore(db);
-}
-
-function mapInvite(r: Record<string, unknown>): InviteRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    email: String(r.email),
-    role: r.role as InviteRecord["role"],
-    tokenHash: String(r.token_hash),
-    invitedBy: String(r.invited_by),
-    createdAt: String(r.created_at),
-    expiresAt: String(r.expires_at),
-    acceptedAt: r.accepted_at == null ? null : String(r.accepted_at),
-  };
-}
-
-function mapMember(r: Record<string, unknown>): MemberRow {
-  return {
-    orgId: String(r.org_id),
-    userId: String(r.user_id),
-    role: r.role as MemberRow["role"],
-    joinedAt: r.joined_at == null ? null : String(r.joined_at),
-  };
 }
 
 export class SqliteHostedStore implements VaultStore {
@@ -294,8 +234,7 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db
       .prepare("SELECT * FROM org_members WHERE org_id = ? AND user_id = ?")
       .get(orgId, userId) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return { orgId: String(r.org_id), userId: String(r.user_id), role: r.role as MemberRecord["role"] };
+    return r ? mapMemberRecord(r) : undefined;
   }
 
   async insertVault(row: VaultRecord): Promise<void> {
@@ -307,7 +246,7 @@ export class SqliteHostedStore implements VaultStore {
       string,
       unknown
     >[];
-    return rows.map((r) => ({ id: String(r.id), orgId: String(r.org_id), name: String(r.name) }));
+    return rows.map(mapVault);
   }
 
   async insertEnvironment(row: EnvironmentRecord): Promise<void> {
@@ -320,12 +259,7 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db.prepare("SELECT * FROM environments WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r.id),
-      vaultId: String(r.vault_id),
-      name: r.name as EnvironmentRecord["name"],
-    };
+    return r ? mapEnv(r) : undefined;
   }
 
   async getEnvironmentByName(
@@ -335,23 +269,14 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db
       .prepare("SELECT * FROM environments WHERE vault_id = ? AND name = ?")
       .get(vaultId, name) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r.id),
-      vaultId: String(r.vault_id),
-      name: r.name as EnvironmentRecord["name"],
-    };
+    return r ? mapEnv(r) : undefined;
   }
 
   async listEnvironments(vaultId: string): Promise<EnvironmentRecord[]> {
     const rows = this.#db
       .prepare("SELECT * FROM environments WHERE vault_id = ?")
       .all(vaultId) as Record<string, unknown>[];
-    return rows.map((r) => ({
-      id: String(r.id),
-      vaultId: String(r.vault_id),
-      name: r.name as EnvironmentRecord["name"],
-    }));
+    return rows.map(mapEnv);
   }
 
   async insertFolder(row: FolderRecord): Promise<void> {
@@ -364,42 +289,20 @@ export class SqliteHostedStore implements VaultStore {
     const r = this.#db.prepare("SELECT * FROM folders WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
-    if (!r) return undefined;
-    return { id: String(r.id), environmentId: String(r.environment_id), name: String(r.name) };
+    return r ? mapFolder(r) : undefined;
   }
 
   async getFolderByName(environmentId: string, name: string): Promise<FolderRecord | undefined> {
     const r = this.#db
       .prepare("SELECT * FROM folders WHERE environment_id = ? AND name = ?")
       .get(environmentId, name) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return { id: String(r.id), environmentId: String(r.environment_id), name: String(r.name) };
+    return r ? mapFolder(r) : undefined;
   }
 
   async insertItem(row: ItemRecord): Promise<void> {
     this.#db
-      .prepare(
-        `INSERT INTO items (
-          id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
-          inject, iv, ciphertext, tag, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.environmentId,
-        row.folderId,
-        row.kind,
-        row.name,
-        row.last4,
-        row.username,
-        row.allowedHostsJson,
-        row.inject,
-        row.iv,
-        row.ciphertext,
-        row.tag,
-        row.createdAt,
-        row.updatedAt,
-      );
+      .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+      .run(...itemValues(row));
   }
 
   async updateItemEnvelope(
@@ -639,7 +542,7 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async insertGrant(row: HostedGrantRecord): Promise<void> {
-    this.#db.prepare(GRANT_INSERT_SQL).run(...grantInsertValues(row));
+    this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(row));
   }
 
   async getGrant(id: string): Promise<HostedGrantRecord | undefined> {
@@ -879,27 +782,8 @@ export class SqliteHostedStore implements VaultStore {
   async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
     try {
       this.#db
-        .prepare(
-          `INSERT INTO need_items (
-            id, org_id, client_id, environment_id, suggested_name, host, task_description,
-            status, item_id, grant_id, expires_at, created_at, fulfilled_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          row.id,
-          row.orgId,
-          row.clientId,
-          row.environmentId,
-          row.suggestedName,
-          row.host,
-          row.taskDescription,
-          row.status,
-          row.itemId,
-          row.grantId,
-          row.expiresAt,
-          row.createdAt,
-          row.fulfilledAt,
-        );
+        .prepare(`INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(13, "sqlite")})`)
+        .run(...needValues(row));
       return row;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
@@ -963,29 +847,9 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.exec("BEGIN");
     try {
       this.#db
-        .prepare(
-          `INSERT INTO items (
-            id, environment_id, folder_id, kind, name, last4, username, allowed_hosts_json,
-            inject, iv, ciphertext, tag, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.item.id,
-          input.item.environmentId,
-          input.item.folderId,
-          input.item.kind,
-          input.item.name,
-          input.item.last4,
-          input.item.username,
-          input.item.allowedHostsJson,
-          input.item.inject,
-          input.item.iv,
-          input.item.ciphertext,
-          input.item.tag,
-          input.item.createdAt,
-          input.item.updatedAt,
-        );
-      this.#db.prepare(GRANT_INSERT_SQL).run(...grantInsertValues(input.grant));
+        .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+        .run(...itemValues(input.item));
+      this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(input.grant));
       const claimed = this.#db
         .prepare(
           `UPDATE need_items SET status = 'fulfilled', item_id = ?, grant_id = ?, fulfilled_at = ?
@@ -1031,11 +895,7 @@ export class SqliteHostedStore implements VaultStore {
       string,
       unknown
     >[];
-    return rows.map((r) => ({
-      orgId: String(r.org_id),
-      userId: String(r.user_id),
-      role: r.role as MemberRecord["role"],
-    }));
+    return rows.map(mapMemberRecord);
   }
 
   async listMemberEmails(orgId: string): Promise<string[]> {
@@ -1499,156 +1359,3 @@ export class SqliteHostedStore implements VaultStore {
   }
 }
 
-function mapOidcRow(r: Record<string, unknown>): OidcPayloadRow {
-  return {
-    id: String(r.id),
-    payload: String(r.payload),
-    expiresAt: r.expires_at == null ? null : String(r.expires_at),
-  };
-}
-
-function mapPolicy(r: Record<string, unknown>): PolicyRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: String(r.client_id),
-    itemId: r.item_id == null ? null : String(r.item_id),
-    folderId: r.folder_id == null ? null : String(r.folder_id),
-    environmentId: String(r.environment_id),
-    kind: r.kind as PolicyRecord["kind"],
-    createdAt: String(r.created_at),
-    methods: parseScopeList(r.methods),
-    pathPrefixes: parseScopeList(r.path_prefixes),
-    hosts: parseScopeList(r.hosts),
-    maxCalls: parseNullableInt(r.max_calls),
-    callsUsed: parseCallsUsed(r.calls_used),
-    expiresAt: r.expires_at == null ? null : String(r.expires_at),
-  };
-}
-
-const GRANT_INSERT_SQL = `INSERT INTO grants (
-  id, org_id, client_id, item_id, folder_id, environment_id, policy, status,
-  expires_at, created_at, approved_at, consumed_at, task_id, task_description,
-  methods, path_prefixes, hosts, max_calls, calls_used, requested_scope_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-function grantInsertValues(row: HostedGrantRecord): (string | number | null)[] {
-  return [
-    row.id,
-    row.orgId,
-    row.clientId,
-    row.itemId,
-    row.folderId,
-    row.environmentId,
-    row.policy,
-    row.status,
-    row.expiresAt,
-    row.createdAt,
-    row.approvedAt,
-    row.consumedAt,
-    row.taskId,
-    row.taskDescription,
-    scopeListJson(row.methods),
-    scopeListJson(row.pathPrefixes),
-    scopeListJson(row.hosts),
-    row.maxCalls,
-    row.callsUsed,
-    requestedScopeJson(row.requestedScope),
-  ];
-}
-
-function mapChallenge(r: Record<string, unknown>): ApprovalChallengeRecord {
-  return {
-    id: String(r.id),
-    grantId: String(r.grant_id),
-    codeHash: String(r.code_hash),
-    expiresAt: String(r.expires_at),
-    attempts: Number(r.attempts),
-    kind: r.kind as ApprovalChallengeRecord["kind"],
-  };
-}
-
-function mapUser(r: Record<string, unknown>): UserRow {
-  return {
-    id: String(r.id),
-    email: String(r.email),
-    emailVerifiedAt: r.email_verified_at == null ? null : String(r.email_verified_at),
-    totpWrappedIv: r.totp_wrapped_iv == null ? null : String(r.totp_wrapped_iv),
-    totpWrappedCiphertext: r.totp_wrapped_ciphertext == null ? null : String(r.totp_wrapped_ciphertext),
-    totpWrappedTag: r.totp_wrapped_tag == null ? null : String(r.totp_wrapped_tag),
-    totpLastStep: r.totp_last_step == null ? null : Number(r.totp_last_step),
-    createdAt: String(r.created_at),
-    totpFailures: r.totp_failures == null ? 0 : Number(r.totp_failures),
-    totpLockedUntil: r.totp_locked_until == null ? null : String(r.totp_locked_until),
-    totpPendingWrappedIv: r.totp_pending_wrapped_iv == null ? null : String(r.totp_pending_wrapped_iv),
-    totpPendingWrappedCiphertext:
-      r.totp_pending_wrapped_ciphertext == null ? null : String(r.totp_pending_wrapped_ciphertext),
-    totpPendingWrappedTag: r.totp_pending_wrapped_tag == null ? null : String(r.totp_pending_wrapped_tag),
-    totpPendingAt: r.totp_pending_at == null ? null : String(r.totp_pending_at),
-  };
-}
-
-function mapIdentityKey(r: Record<string, unknown>): IdentityKeyRecord {
-  return {
-    id: String(r.id),
-    wrappedIv: String(r.wrapped_iv),
-    wrappedCiphertext: String(r.wrapped_ciphertext),
-    wrappedTag: String(r.wrapped_tag),
-    createdAt: String(r.created_at),
-  };
-}
-
-function mapOtp(r: Record<string, unknown>): EmailOtpRecord {
-  return {
-    id: String(r.id),
-    email: String(r.email),
-    codeScrypt: String(r.code_scrypt),
-    expiresAt: String(r.expires_at),
-    attempts: Number(r.attempts),
-    sentAt: String(r.sent_at),
-  };
-}
-
-function mapSess(r: Record<string, unknown>): OperatorSessionRow {
-  return {
-    idHash: String(r.id_hash),
-    userId: String(r.user_id),
-    createdAt: String(r.created_at),
-    lastSeenAt: String(r.last_seen_at),
-    expiresAt: String(r.expires_at),
-    mfaAt: r.mfa_at == null ? null : String(r.mfa_at),
-    activeOrgId: r.active_org_id == null ? null : String(r.active_org_id),
-  };
-}
-
-function mapAccess(r: Record<string, unknown>): AccessEventRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: r.client_id == null ? null : String(r.client_id),
-    actorUserId: r.actor_user_id == null ? null : String(r.actor_user_id),
-    kind: r.kind as AccessEventRecord["kind"],
-    jtiHash: String(r.jti_hash),
-    issuedAt: String(r.issued_at),
-    expiresAt: r.expires_at == null ? null : String(r.expires_at),
-    revokedAt: r.revoked_at == null ? null : String(r.revoked_at),
-  };
-}
-
-function mapNeed(r: Record<string, unknown>): NeedItemRecord {
-  return {
-    id: String(r.id),
-    orgId: String(r.org_id),
-    clientId: String(r.client_id),
-    environmentId: String(r.environment_id),
-    suggestedName: String(r.suggested_name),
-    host: String(r.host),
-    taskDescription: r.task_description == null ? null : String(r.task_description),
-    status: r.status as NeedItemRecord["status"],
-    itemId: r.item_id == null ? null : String(r.item_id),
-    grantId: r.grant_id == null ? null : String(r.grant_id),
-    expiresAt: String(r.expires_at),
-    createdAt: String(r.created_at),
-    fulfilledAt: r.fulfilled_at == null ? null : String(r.fulfilled_at),
-  };
-}
