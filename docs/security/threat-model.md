@@ -63,7 +63,7 @@ The local plane splits its loopback bearers: `vault serve` prints an operator be
 
 ## Proxy trust
 
-Client addresses feed rate limits and audit rows. `Fly-Client-IP` and the last `X-Forwarded-For` hop are believed only behind Fly (`FLY_APP_NAME`) or with `VAULT_TRUST_PROXY=1`; otherwise the socket peer is the address. `CF-Connecting-IP` is believed only when the address Fly saw is inside `VAULT_TRUSTED_PROXY_CIDRS` (unset means Cloudflare's published ranges, empty means never). On HTTPS the session and CSRF cookies are read only under their `__Host-` names and only on a request the proxy marks `x-forwarded-proto: https`; there is no plain-name fallback.
+Client addresses feed rate limits and audit rows. The two proxy headers are trusted separately. `Fly-Client-IP` is believed only on Fly (`FLY_APP_NAME`), because only the Fly proxy sets it; behind a proxy the deployer runs (`VAULT_TRUST_PROXY=1`, nginx or Caddy) only the last `X-Forwarded-For` hop is believed, so a client cannot choose its own address by sending a Fly header, and cannot claim a Cloudflare address that way to unlock `CF-Connecting-IP`. With neither, the socket peer is the address. `CF-Connecting-IP` is believed only when the address the trusted proxy saw is inside `VAULT_TRUSTED_PROXY_CIDRS` (unset means Cloudflare's published ranges, empty means never). The request id follows the same rule: `Fly-Request-Id` is reused on Fly, a client-chosen `x-request-id` never is, and everywhere else one is minted. On HTTPS the session and CSRF cookies are read only under their `__Host-` names and only on a request the proxy marks `x-forwarded-proto: https`; there is no plain-name fallback.
 
 ## Single-use state
 

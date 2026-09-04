@@ -43,28 +43,48 @@ export class IpWindowLimiter {
 }
 
 /**
- * Resolve the caller's address. Proxy headers are read only when `trustProxy` is set (behind
- * Fly, or `VAULT_TRUST_PROXY=1`): `Fly-Client-IP` (set by the Fly proxy, never by the client),
- * then the LAST hop of `X-Forwarded-For` (appended by the proxy; clients can prepend but not
- * append). Without a trusted proxy every header is attacker-controlled, so the socket peer is
- * the only address that counts.
+ * Which address headers are believed. The two are split on purpose: `Fly-Client-IP` is set by
+ * the Fly proxy and by nothing else, so it counts only when the process runs on Fly
+ * (`FLY_APP_NAME`). Behind another proxy the deployer controls (`VAULT_TRUST_PROXY=1`, nginx or
+ * Caddy) only the last `X-Forwarded-For` hop counts; honouring `Fly-Client-IP` there would let a
+ * client pick its own address for every limiter, and pick a Cloudflare address to unlock
+ * `CF-Connecting-IP` as well.
+ */
+export type ProxyHeaderTrust = {
+  /** `Fly-Client-IP` is authoritative (the process runs on Fly). */
+  trustFlyHeader: boolean;
+  /** The last `X-Forwarded-For` hop is authoritative (Fly, or `VAULT_TRUST_PROXY=1`). */
+  trustForwarded: boolean;
+};
+
+/** No proxy is trusted: every header is attacker-controlled and the socket peer is the address. */
+export const NO_PROXY_TRUST: ProxyHeaderTrust = { trustFlyHeader: false, trustForwarded: false };
+
+/**
+ * Resolve the caller's address: `Fly-Client-IP` when `trust.trustFlyHeader`, then the LAST hop
+ * of `X-Forwarded-For` when `trust.trustForwarded` (appended by the proxy; clients can prepend
+ * but not append), then the socket peer. `trust` is required so no caller trusts a header by
+ * accident; use `clientIpTrust(env)` for the deployment's setting.
  */
 export function clientIpFrom(
   flyClientIp: string | undefined,
   forwarded: string | undefined,
   remote: string | undefined,
-  trustProxy = true,
+  trust: ProxyHeaderTrust,
 ): string {
   const peer = remote?.trim() || "0.0.0.0";
-  if (!trustProxy) return peer;
-  const fly = flyClientIp?.trim();
-  if (fly) return fly;
-  const hops = (forwarded ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const last = hops.at(-1);
-  if (last) return last;
+  if (trust.trustFlyHeader) {
+    const fly = flyClientIp?.trim();
+    if (fly) return fly;
+  }
+  if (trust.trustForwarded) {
+    const hops = (forwarded ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const last = hops.at(-1);
+    if (last) return last;
+  }
   return peer;
 }
 
@@ -187,18 +207,18 @@ export type ClientIpHeaders = {
   remote?: string;
 };
 
-export type ClientIpTrust = {
-  trustProxyHeaders: boolean;
+export type ClientIpTrust = ProxyHeaderTrust & {
   trustedProxyCidrs: readonly string[];
 };
 
 /**
- * Full resolution: the peer as Fly saw it (`clientIpFrom`), then one more hop through the CDN.
- * `CF-Connecting-IP` is only read when that peer is inside the trusted proxy ranges; a client
- * that reaches the plane directly can set the header but cannot make its own address Cloudflare's.
+ * Full resolution: the peer as the trusted proxy saw it (`clientIpFrom`), then one more hop
+ * through the CDN. `CF-Connecting-IP` is only read when that peer is inside the trusted proxy
+ * ranges; a client that reaches the plane directly can set the header but cannot make its own
+ * address Cloudflare's, and off Fly it cannot claim one through `Fly-Client-IP` either.
  */
 export function clientIpFromHeaders(headers: ClientIpHeaders, trust: ClientIpTrust): string {
-  const peer = clientIpFrom(headers.flyClientIp, headers.forwarded, headers.remote, trust.trustProxyHeaders);
+  const peer = clientIpFrom(headers.flyClientIp, headers.forwarded, headers.remote, trust);
   const cf = headers.cfConnectingIp?.trim() ?? "";
   if (cf && parseIp(cf) && ipInCidrs(peer, trust.trustedProxyCidrs)) return cf;
   return peer;
@@ -210,9 +230,23 @@ function headerValue(req: IncomingMessage, name: string): string | undefined {
   return raw;
 }
 
-/** Proxy headers are authoritative only behind Fly, or when the deployer opts in with VAULT_TRUST_PROXY=1. */
+/** The process runs on a Fly Machine, so `Fly-*` request headers were set by the Fly proxy. */
+export function runsOnFly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.FLY_APP_NAME?.trim());
+}
+
+/** Some proxy is trusted for client addresses: Fly, or the deployer's opt-in with VAULT_TRUST_PROXY=1. */
 export function trustsProxyHeaders(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.FLY_APP_NAME?.trim()) || env.VAULT_TRUST_PROXY === "1";
+  return runsOnFly(env) || env.VAULT_TRUST_PROXY === "1";
+}
+
+/** The deployment's header trust: `Fly-Client-IP` only on Fly, `X-Forwarded-For` on Fly or with the opt-in. */
+export function clientIpTrust(env: NodeJS.ProcessEnv = process.env): ClientIpTrust {
+  return {
+    trustFlyHeader: runsOnFly(env),
+    trustForwarded: trustsProxyHeaders(env),
+    trustedProxyCidrs: trustedProxyCidrs(env),
+  };
 }
 
 export function requestClientIp(req: IncomingMessage): string {
@@ -223,6 +257,6 @@ export function requestClientIp(req: IncomingMessage): string {
       forwarded: headerValue(req, "x-forwarded-for"),
       remote: req.socket?.remoteAddress,
     },
-    { trustProxyHeaders: trustsProxyHeaders(), trustedProxyCidrs: trustedProxyCidrs() },
+    clientIpTrust(),
   );
 }

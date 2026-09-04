@@ -129,7 +129,7 @@ npx vault serve --host 127.0.0.1 --port 8788
 - MCP JSON-RPC: `POST /mcp`
 - `GET /health` — `{ ok, product: "botpasses" }` with **no** key fingerprint
 
-`vault serve` prints two loopback bearers, both HMACs of the master key with different labels. The **operator** bearer is the `Authorization` for `/api/*` and the console (paste it there). The **model** bearer is the `Authorization` for `POST /mcp` and is what `vault mcp --remote` sends. Neither opens the other surface: an MCP client holding the model bearer cannot approve its own grants through `/api`. The server answers only to a loopback `Host`.
+`vault serve` prints two loopback bearers, both HMACs of the master key with different labels. The **operator** bearer is the `Authorization` for `/api/*` and the console (paste it there). The **model** bearer is the `Authorization` for `POST /mcp` and is what `vault mcp --remote` sends. Neither opens the other surface: an MCP client holding the model bearer cannot approve its own grants through `/api`. The server answers only to a loopback `Host`. Each MCP client's `initialize` opens its own session (`Mcp-Session-Id`, echoed on later frames), so several clients on one `vault serve` keep separate agent ids and approvals.
 
 ### MCP (stdio)
 
@@ -185,7 +185,7 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 
 **DNS:** orange-cloud `A`/`AAAA` for `botpasses.com` and `staging.botpasses.com`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.com` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK; `VAULT_OIDC_PREVIOUS_JWK` only while rotating it, see [docs/ops/oidc-key-rotation.md](docs/ops/oidc-key-rotation.md)), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass; a plane boots with it only while `VAULT_BOOTSTRAP_ALLOW_PLANE=1`, and every use is logged), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits: `credentials`, `agents`, `members`, `calls`, `orgs`), `VAULT_TRUST_PROXY` (optional; `1` trusts proxy headers for client addresses, implied on Fly). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
+**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK; `VAULT_OIDC_PREVIOUS_JWK` only while rotating it, see [docs/ops/oidc-key-rotation.md](docs/ops/oidc-key-rotation.md)), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass; a plane boots with it only while `VAULT_BOOTSTRAP_ALLOW_PLANE=1`, and every use is logged), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits: `credentials`, `agents`, `members`, `calls`, `orgs`), `VAULT_TRUST_PROXY` (optional; `1` trusts the last `X-Forwarded-For` hop for client addresses behind your own proxy; Fly implies it and is the only place `Fly-Client-IP` counts). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
 
 **Schema:** `migrations/NNN_*.sql` is applied by `scripts/migrate.ts` as the Fly `release_command` (advisory lock, one transaction per file, recorded in `schema_migrations`). Boot runs no DDL once that table exists. Runbook: [docs/ops/migrations.md](docs/ops/migrations.md).
 
@@ -230,7 +230,7 @@ npm run lint
 | `npm run site:build` | Astro build plus Pagefind into `site/dist` |
 | `npm run migrate` | Apply `migrations/` to `DATABASE_URL_DIRECT` or `DATABASE_URL` |
 | `npm run dev` | Local `vault serve` with `--watch` |
-| `npm run hosted` | Hosted process (`VAULT_MODE=hosted` env required) |
+| `npm run hosted` | Hosted process (`VAULT_MODE=hosted` env required; exits 78 without it) |
 
 ## Layout
 

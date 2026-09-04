@@ -71,11 +71,19 @@ export function logRequest(fields: RequestLogFields): void {
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
-/** Reuse a well-formed inbound `x-request-id` (Fly sets one), otherwise mint a UUID. */
-export function requestIdFrom(headers: Record<string, string | string[] | undefined>): string {
-  const raw = headers["x-request-id"];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (value && REQUEST_ID_RE.test(value)) return value;
+/**
+ * The request id every log line, the `x-request-id` response header, the 500 body, and the
+ * Sentry event share. On Fly (`trustFlyHeader`) it is the well-formed `Fly-Request-Id` the Fly
+ * proxy set, so a Fly log line and ours match; otherwise a UUID is minted. An inbound
+ * `x-request-id` is never reused: it is client-chosen, and a chosen id could be made to collide
+ * with, or be mistaken for, another request's in the logs.
+ */
+export function requestIdFrom(headers: Record<string, string | string[] | undefined>, trustFlyHeader: boolean): string {
+  if (trustFlyHeader) {
+    const raw = headers["fly-request-id"];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (value && REQUEST_ID_RE.test(value)) return value;
+  }
   return randomUUID();
 }
 

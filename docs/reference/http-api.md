@@ -38,7 +38,7 @@ JWT verify allows 30 s of clock skew, accepts any key in `/oauth/jwks` (current 
 | GET | `/verify-totp` | Sign-in authenticator step. One field (authenticator code or backup code). Anonymous → 302 `/sign-in`; not enrolled → 302 `/enroll-totp`; ready → 302 `/console` |
 | GET | `/consent` | Ready operator + oidc interaction. Else 302 `/sign-in` or `/enroll-totp`. Only mounted with the OAuth provider (404 otherwise) |
 | GET | `/device` | RFC 8628 user-code page, served by the OAuth provider. Only mounted with the provider (404 otherwise) |
-| POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true, message }` (identical for unknown emails). The code is emailed before the challenge is stored (503 and no challenge when delivery fails). A resend replaces a still-valid code: the old one stops working and the send counts against the budget. Per-IP limit reads `Fly-Client-IP`, then the last `X-Forwarded-For` hop, only behind Fly or with `VAULT_TRUST_PROXY=1`; otherwise the socket peer |
+| POST | `/api/auth/otp/send` | `{ email }` → `{ ok: true, message }` (identical for unknown emails). The code is emailed before the challenge is stored (503 and no challenge when delivery fails). A resend replaces a still-valid code: the old one stops working and the send counts against the budget. Per-IP limit reads `Fly-Client-IP` only on Fly, then the last `X-Forwarded-For` hop on Fly or with `VAULT_TRUST_PROXY=1`; otherwise the socket peer |
 | POST | `/api/auth/otp/verify` | `{ email, otp }` → Set-Cookie session with `mfa_at` null. `{ ok, enroll, verify }`. 401 carries `attempts_remaining`. Attempts are claimed atomically in the store; 25 verifies per email and 50 per address in 15 minutes (429) |
 | POST | `/api/auth/totp/start` | Session + CSRF. Returns `{ otpauth_url, qr_svg }`. QR is local SVG. Re-enroll (already enrolled) needs a ready session and `{ current_code }` (403 `current_code_required`). Pending secret is stored wrapped, so enrollment survives a restart |
 | GET | `/api/auth/totp/pending` | Session. The enrollment in flight, `{ otpauth_url, qr_svg }` exactly as `start` returned it, while it is live (10 minutes); 404 `no_pending_enrollment` otherwise. An enrolled account needs a session that passed the authenticator step (403 `mfa_required`). The enroll page reads this first and calls `start` only when nothing is pending, so a reload or the console's re-enroll shows the secret `confirm` will check |
@@ -129,12 +129,14 @@ Do not hook `access_token.saved` for JWT issuance. Ledger write is `extraTokenCl
 
 `GET /` is the local console. Auth: two HMAC loopback Bearers printed by `vault serve`. The operator bearer opens `/api/*` (and is what the console stores); the model bearer opens `POST /mcp` (and is what `vault mcp --remote` sends). Each is refused on the other surface (401). The server answers only to a loopback `Host` (403 otherwise), reads at most 128 KiB of JSON body (413), and answers malformed JSON with `400 Invalid JSON` without echoing the bytes. Unexpected failures are `500 { error: "Internal error" }`; only the vault's own validation messages reach the client.
 
+`POST /mcp` is one session per client. `initialize` answers with an `Mcp-Session-Id` header (random, 128 bits) bound to the agent id that `clientInfo.name` gave; every later frame must send that header back. Without it the answer is `400 { error }`; with one the server does not hold (never issued, or idle for 8 hours) it is `404 { error }` and the client initializes again. Two clients on one server therefore keep separate agent ids and separate grants. `vault mcp --remote` carries the header for the stdio client.
+
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/health` | `{ ok, product }` |
 | GET | `/api/secrets` | `{ secrets }`: name, last-4, hosts, inject, username. No values |
 | GET | `/api/items` | The same list as `{ items }` (hosted key) |
-| POST | `/api/secrets` | `{ name, value, allowed_hosts?, inject? }` store; answers `{ secret }` |
+| POST | `/api/secrets` | `{ name, value, allowed_hosts?, inject?, username? }` store; `username` is the HTTP Basic user, OAuth client id, or AWS access key id (omit to keep the stored one, `null` to clear it); answers `{ secret }` |
 | POST | `/api/items` | The same store; answers `{ item }` |
 | GET | `/api/grants` | Grant metadata |
 | POST | `/api/grants/request` | Request pending grant |
@@ -175,7 +177,7 @@ Plan limits: free tier is 25 credentials, 10 agents, 3 members, 5000 `http_reque
 
 Inbox grant cards (`GET /api/inbox`) carry `requested_scope`, `grant_scope`, `allowed_hosts`, `expires_at`; `GET /api/access` grants carry `policy`, `expires_at`, `grant_scope`. Audit actions: `scope_denied`, `grant_exhausted`, `client_environment`, `client_reactivated`, `inject_denied`, `inject_failed`, `refresh_rotated` (a provider rotated an `<ITEM>_REFRESH` value; actor `provider`), `dek_rewrapped` (actor `system`; an org DEK moved from the previous KEK to the current one during a rotation). `allowed_hosts` are stored trimmed, lowercase, and deduplicated on create and update.
 
-Unexpected failures are `500 { error: "Internal error", request_id }` with an `x-request-id` header; the detail is in the server log under `request_error`, never in the response. Malformed JSON bodies are `400 { error: "Invalid JSON" }`. Every response carries `x-request-id`.
+Unexpected failures are `500 { error: "Internal error", request_id }` with an `x-request-id` header; the detail is in the server log under `request_error`, never in the response. Malformed JSON bodies are `400 { error: "Invalid JSON" }`. Every response carries `x-request-id`: the `Fly-Request-Id` the Fly proxy set, or a minted UUID; an inbound `x-request-id` is never reused.
 
 | Status | When |
 | --- | --- |

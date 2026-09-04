@@ -123,13 +123,15 @@ PKCE S256 is required. Clients are public (`token_endpoint_auth_method` `none`; 
 
 `npx vault serve` listens on `127.0.0.1:8788` and prints two loopback bearers. Send the operator bearer as `Authorization` on `/api/*` (the console stores it) and the model bearer on `POST /mcp` (`vault mcp --remote` sends it). Each is refused on the other surface, so an MCP client cannot approve its own requests. The server answers only to a loopback `Host`.
 
+Each MCP client gets its own session: `initialize` answers with an `Mcp-Session-Id` header, and every later frame must send it back (400 without it, 404 once the server no longer holds it, after 8 idle hours, so the client initializes again). Two clients on one server keep separate agent ids and separate approvals. `vault mcp --remote` handles the header for stdio clients.
+
 | Path | Role |
 | --- | --- |
 | `GET /` | Local operator console |
 | `GET /health` | `{ ok, product }` |
 | `GET /api/secrets` | Names, last-4, hosts, inject mode, username as `{ secrets }` |
 | `GET /api/items` | The same list as `{ items }`, the hosted key |
-| `POST /api/secrets` | Store `{ name, value, allowed_hosts?, inject? }`, answered as `{ secret }` |
+| `POST /api/secrets` | Store `{ name, value, allowed_hosts?, inject?, username? }`, answered as `{ secret }`. `username` is the HTTP Basic user, OAuth client id, or AWS access key id |
 | `POST /api/items` | The same store, answered as `{ item }` |
 | `GET /api/grants` | Grant metadata |
 | `POST /api/grants/request` | Request a pending grant |

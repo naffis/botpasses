@@ -214,6 +214,23 @@ export function parseOidcPrivateJwk(raw: string | undefined): OidcPrivateJwk | u
   }
 }
 
+export const HOSTED_MODE_REQUIRED =
+  "The hosted process requires VAULT_MODE=hosted; without it no hosted boot guard runs. Set it, or run `vault serve` for the local plane.";
+
+/**
+ * The hosted entry point (`startHosted`, `npm run hosted`) must never run as a local process:
+ * every guard in `hostedBootError` is keyed on `VAULT_MODE=hosted`, so an unset mode would skip
+ * the plane check, accept an empty session secret, and honour a bootstrap token without its flag.
+ */
+export function hostedModeError(env: NodeJS.ProcessEnv): string | undefined {
+  return env.VAULT_MODE === "hosted" ? undefined : HOSTED_MODE_REQUIRED;
+}
+
+/**
+ * Config problems of a hosted boot, or undefined when the env boots. A process not in hosted
+ * mode has nothing to check here (`cmdServe` runs the local plane then); the hosted entry point
+ * refuses that case first through `assertHostedBoot`.
+ */
 export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.VAULT_MODE !== "hosted") return undefined;
   if (!env.DATABASE_URL) {
@@ -255,6 +272,11 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   }
   if (!parseOidcPrivateJwk(env.VAULT_OIDC_PRIVATE_JWK)) {
     return "VAULT_MODE=hosted requires VAULT_OIDC_PRIVATE_JWK as a private RS256 JWK.";
+  }
+  // Checked here, before the KEK is unwrapped and Postgres is opened, so a bad value is exit 78
+  // with nothing sensitive in memory rather than exit 1 from the middle of the boot.
+  if (env.VAULT_OIDC_PREVIOUS_JWK?.trim() && !parseOidcPrivateJwk(env.VAULT_OIDC_PREVIOUS_JWK)) {
+    return "VAULT_OIDC_PREVIOUS_JWK is set but is not a private RS256 JWK.";
   }
   const siteRoot = env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist");
   if (!existsSync(resolve(siteRoot, "index.html"))) {
@@ -327,8 +349,9 @@ export function hostedKekBootError(env: NodeJS.ProcessEnv): string | undefined {
   return undefined;
 }
 
+/** The hosted entry point's gate: refuses a missing `VAULT_MODE=hosted`, then every config problem. */
 export function assertHostedBoot(env: NodeJS.ProcessEnv = process.env): void {
-  const err = hostedBootError(env);
+  const err = hostedModeError(env) ?? hostedBootError(env);
   if (err) {
     const wrapped = new Error(err);
     (wrapped as Error & { exitCode: number }).exitCode = HOSTED_CONFIG_EXIT;

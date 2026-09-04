@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
 const ACTOR_ID = /^[a-z][a-z0-9_-]{0,127}$/;
 
-/** ISO-8601 timestamp for store rows and public records. */
-export function nowIso(d: Date): string {
+/** ISO-8601 timestamp for store rows and public records. The one `nowIso`; local and hosted share it. */
+export function nowIso(d: Date = new Date()): string {
   return d.toISOString();
 }
 

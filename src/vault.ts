@@ -17,14 +17,13 @@ import {
   listGrants,
   listSecretEnvelopes,
   listSecretMeta,
-  nowIso,
   openDb,
   setMeta,
   updateGrant,
   upsertSecret,
   type LocalItemMeta,
 } from "./db.ts";
-import { last4, normalizeActorId, normalizeSecretName, parseTtlSeconds } from "./ids.ts";
+import { last4, normalizeActorId, normalizeSecretName, nowIso, parseTtlSeconds } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
 import {
   HTTP_REQUEST_TOOL,

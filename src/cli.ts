@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { stdin as input } from "node:process";
 import {
   DEFAULT_HOME_DIRNAME,
+  deployPlaneRaw,
   PRODUCT_NAME,
   publicOriginError,
   resolvePublicOrigin,
@@ -526,9 +527,9 @@ function refuseMachineKekCli(io: Io): boolean {
 async function cmdKekWrap(io: Io): Promise<number> {
   if (refuseMachineKekCli(io)) return 1;
   const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
-  const plane = process.env.VAULT_DEPLOY_PLANE;
+  const plane = deployPlaneRaw(process.env);
   const app = process.env.FLY_APP_NAME?.trim() ?? "";
-  if (!keyId || (plane !== "staging" && plane !== "production") || !app) {
+  if (!keyId || !plane || !app) {
     io.error(
       "vault kek-wrap requires VAULT_KMS_KEY_ID, VAULT_DEPLOY_PLANE=staging|production, FLY_APP_NAME, and laptop AWS credentials (SSO or console Encrypt). Fly OIDC is Machine-only.",
     );
@@ -576,9 +577,9 @@ async function cmdKekRotate(io: Io): Promise<number> {
     const result = await kernel.rotateKek(oldKek, newKek);
     io.error(`rewrapped=${result.rewrapped} skipped=${result.skipped} identity=${JSON.stringify(result.identity)}`);
     const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
-    const plane = process.env.VAULT_DEPLOY_PLANE;
+    const plane = deployPlaneRaw(process.env);
     const app = process.env.FLY_APP_NAME?.trim() ?? "";
-    if (keyId && (plane === "staging" || plane === "production") && app) {
+    if (keyId && plane && app) {
       const cipher = await awsKmsEncrypt(keyId)(newKek, kekEncryptionContext({ plane, app }));
       io.log(cipher.toString("base64"));
     } else {

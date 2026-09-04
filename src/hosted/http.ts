@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { logRequest, logVaultEvent, redactMessage, requestIdFrom } from "./observe.ts";
+import { runsOnFly } from "./identity-limiter.ts";
 import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT } from "../brand.ts";
 import {
@@ -119,7 +120,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
 
   const server = createServer((req, res) => {
     const startedAt = process.hrtime.bigint();
-    const requestId = requestIdFrom(req.headers);
+    const requestId = requestIdFrom(req.headers, runsOnFly());
     const path = (req.url ?? "/").split("?")[0] ?? "/";
     bindRequestId(res, requestId);
     res.setHeader("x-request-id", requestId);

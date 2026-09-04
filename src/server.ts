@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { HEALTH_PRODUCT, WWW_AUTHENTICATE_REALM } from "./brand.ts";
 import { tokensEqual } from "./crypto.ts";
-import { handleMcpRpc, newMcpSession, type JsonRpcRequest, type McpSession } from "./mcp.ts";
+import { handleMcpRpc, McpSessionRegistry, type JsonRpcRequest, type McpSession, type McpSessionRegistryOptions } from "./mcp.ts";
 import { operatorHtml } from "./operator-page.ts";
 import type { LoopbackRole, Vault } from "./vault.ts";
 import type { LocalGrantScope } from "./types.ts";
@@ -11,10 +11,17 @@ export type ServerOptions = {
   vault: Vault;
   host?: string;
   port?: number;
+  /** Idle expiry and cap of the per-client MCP sessions; tests shorten them. */
+  mcpSessions?: McpSessionRegistryOptions;
 };
 
 /** Largest JSON body the loopback API reads; the rest is a 413. */
 export const LOCAL_BODY_CAP = 128 * 1024;
+
+/** Streamable HTTP session header: minted on `initialize`, required on every later `POST /mcp`. */
+export const MCP_SESSION_HEADER = "mcp-session-id";
+export const MCP_SESSION_REQUIRED = "Mcp-Session-Id required: send initialize first and echo the header it returned";
+export const MCP_SESSION_UNKNOWN = "Unknown or expired Mcp-Session-Id: send initialize again";
 
 /** Expected failures carry a status and a message that is safe to show to the operator. */
 class LocalHttpError extends Error {
@@ -29,12 +36,13 @@ class LocalHttpError extends Error {
 export function createVaultServer(opts: ServerOptions) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8788;
-  // The loopback server serves one operator's agents; the last `initialize` names the agent for
-  // stateless POSTs that carry no agent_id of their own.
-  const session = newMcpSession();
+  // The loopback server serves one operator's agents, several at once. Each client's
+  // `initialize` gets its own session (and agent id) under an `Mcp-Session-Id`, so one client's
+  // initialize can never rebind the agent another client's grants are keyed on.
+  const sessions = new McpSessionRegistry(opts.mcpSessions);
 
   const server = createServer((req, res) => {
-    void route(opts.vault, host, req, res, session).catch((err: unknown) => {
+    void route(opts.vault, host, req, res, sessions).catch((err: unknown) => {
       if (res.headersSent) {
         res.destroy();
         return;
@@ -134,7 +142,7 @@ async function route(
   bindHost: string,
   req: IncomingMessage,
   res: ServerResponse,
-  session: McpSession,
+  sessions: McpSessionRegistry,
 ): Promise<void> {
   if (!localHostAllowed(req.headers.host, bindHost)) {
     json(res, 403, { error: "Host not allowed" });
@@ -190,6 +198,8 @@ async function route(
     const secret = vault.setSecret(name, value, {
       allowedHosts: hostsFrom(body.allowed_hosts ?? body.allowedHosts),
       inject: optional(body.inject),
+      // HTTP Basic user, OAuth client id, or AWS access key id; null clears a stored one.
+      username: body.username === null ? null : optional(body.username),
     });
     json(res, 200, path === "/api/items" ? { item: secret } : { secret });
     return;
@@ -234,24 +244,52 @@ async function route(
   }
   if (method === "POST" && path === "/mcp") {
     const body = (await readJson(req)) as JsonRpcRequest;
-    const rpc = await handleMcpRpc(vault, body, session);
+    const bound = bindMcpSession(req, body, sessions);
+    if ("error" in bound) {
+      json(res, bound.status, { error: bound.error });
+      return;
+    }
+    const rpc = await handleMcpRpc(vault, body, bound.session);
+    const extra: Record<string, string> = bound.issued ? { [MCP_SESSION_HEADER]: bound.issued } : {};
     if (!rpc) {
-      res.writeHead(202, jsonHeaders());
+      res.writeHead(202, { ...jsonHeaders(), ...extra });
       res.end();
       return;
     }
-    json(res, 200, rpc);
+    json(res, 200, rpc, extra);
     return;
   }
   json(res, 404, { error: "not found" });
+}
+
+type BoundMcpSession =
+  | { session: McpSession; issued?: string }
+  | { status: 400 | 404; error: string };
+
+/**
+ * `initialize` opens a new session and the response carries its id; every other frame must
+ * present that id (400 without one, 404 for one this server does not hold, which also covers a
+ * session it forgot after `MCP_SESSION_IDLE_MS`). The shapes mirror the hosted `{ error }` bodies.
+ */
+function bindMcpSession(req: IncomingMessage, body: JsonRpcRequest, sessions: McpSessionRegistry): BoundMcpSession {
+  if (body.method === "initialize") {
+    const { id, session } = sessions.create();
+    return { session, issued: id };
+  }
+  const raw = req.headers[MCP_SESSION_HEADER];
+  const presented = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
+  if (!presented) return { status: 400, error: MCP_SESSION_REQUIRED };
+  const session = sessions.get(presented);
+  if (!session) return { status: 404, error: MCP_SESSION_UNKNOWN };
+  return { session };
 }
 
 function jsonHeaders(): Record<string, string> {
   return { "x-content-type-options": "nosniff", "cache-control": "no-store" };
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...jsonHeaders() });
+function json(res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...jsonHeaders(), ...extra });
   res.end(JSON.stringify(body));
 }
 

@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { deployPlaneRaw } from "../brand.ts";
 import { tokensEqual } from "../crypto.ts";
 import type { ClientKind, MemberRole, VaultEnvName } from "../hosted-types.ts";
 import { sha256Hex } from "../ids.ts";
@@ -89,7 +90,7 @@ export async function resolveMachineToken(
 export function bootstrapTokenEnabled(env: NodeJS.ProcessEnv): boolean {
   const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
   if (bootstrap.length < 32) return false;
-  const plane = env.VAULT_DEPLOY_PLANE === "staging" || env.VAULT_DEPLOY_PLANE === "production";
+  const plane = deployPlaneRaw(env) !== undefined;
   return !plane || env.VAULT_BOOTSTRAP_ALLOW_PLANE === "1";
 }
 
