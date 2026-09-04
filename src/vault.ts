@@ -500,11 +500,6 @@ function migrateNameAad(db: DatabaseSync, key: Buffer): void {
   setMeta(db, "aad_version", "1");
 }
 
-export function openVaultFromEnv(home = defaultHome()): Vault {
-  const { key } = loadMasterKey(home);
-  return new Vault({ home, masterKey: key });
-}
-
 function expiryIso(ttl: string | undefined): string {
   const seconds = parseTtlSeconds(ttl, DEFAULT_SESSION_TTL);
   return new Date(Date.now() + seconds * 1000).toISOString();

@@ -170,12 +170,4 @@ export function requireTrusted(p: Principal | undefined): TrustedPrincipal {
   return p;
 }
 
-export function isModelChannel(p: Principal): p is ModelPrincipal {
-  return p.channel === "model";
-}
-
-export function hashBearer(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
 export type { ClientKind };

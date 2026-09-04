@@ -28,10 +28,37 @@ export class NeedItemError extends HttpError {
   }
 }
 
+/** 403 `inject_denied`: no active grant admits this client and item. The connector asks for one. */
+export class InjectDeniedError extends HttpError {
+  constructor(extra: Record<string, unknown> = {}) {
+    super(403, "inject_denied", extra);
+    this.name = "InjectDeniedError";
+  }
+}
+
+/**
+ * 403 `scope_denied`: an active grant exists but its scope does not admit this call. `extra`
+ * carries `status`, `reason`, `grant_id`, and the public `grant_scope`, never the secret.
+ */
+export class ScopeDeniedError extends HttpError {
+  constructor(extra: Record<string, unknown>) {
+    super(403, "scope_denied", { status: "scope_denied", ...extra });
+    this.name = "ScopeDeniedError";
+  }
+}
+
 export function isHttpError(err: unknown): err is HttpError {
   return err instanceof HttpError;
 }
 
 export function isNeedItemError(err: unknown): err is NeedItemError {
   return err instanceof NeedItemError;
+}
+
+export function isInjectDenied(err: unknown): err is InjectDeniedError {
+  return err instanceof InjectDeniedError;
+}
+
+export function isScopeDenied(err: unknown): err is ScopeDeniedError {
+  return err instanceof ScopeDeniedError;
 }

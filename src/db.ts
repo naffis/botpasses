@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AuditAction, AuditRecord, GrantRecord, GrantScope, GrantStatus, SecretMeta } from "./types.ts";
 
@@ -374,8 +374,4 @@ export function listAudit(db: DatabaseSync, limit = 200): AuditRecord[] {
     toolId: r.tool_id,
     createdAt: r.created_at,
   }));
-}
-
-export function dirnameOf(path: string): string {
-  return dirname(path);
 }

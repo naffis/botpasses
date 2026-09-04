@@ -490,14 +490,6 @@ export class PostgresStore implements VaultStore {
     return mapClient(r.rows[0]);
   }
 
-  async getClientByHashedSecret(orgId: string, hashedSecret: string): Promise<ClientRecord | undefined> {
-    const r = await this.#pool.query(
-      "SELECT * FROM clients WHERE org_id = $1 AND hashed_secret = $2",
-      [orgId, hashedSecret],
-    );
-    return mapClient(r.rows[0]);
-  }
-
   async findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined> {
     const r = await this.#pool.query("SELECT * FROM clients WHERE hashed_secret = $1", [hashedSecret]);
     return mapClient(r.rows[0]);

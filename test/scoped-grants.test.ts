@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { describeScope, grantCard, limitsBody } from "../src/hosted/client/inbox.ts";
-import { isHttpError } from "../src/hosted/errors.ts";
+import { isHttpError, isInjectDenied, isScopeDenied } from "../src/hosted/errors.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { resolveApprovalScope, scopeDenialReason } from "../src/hosted/kernel-grants.ts";
@@ -83,7 +83,7 @@ async function approveHttp(ctx: Ctx, grantId: string, body: Record<string, unkno
 }
 
 function scopeDenied(err: unknown, reason: string): boolean {
-  if (!isHttpError(err) || err.status !== 403 || err.message !== "scope_denied") return false;
+  if (!isScopeDenied(err) || err.status !== 403 || err.message !== "scope_denied") return false;
   assert.equal(err.extra.status, "scope_denied");
   assert.equal(err.extra.reason, reason);
   assert.ok(err.extra.grant_scope, "payload carries the scope");
@@ -168,7 +168,7 @@ test("max_calls spends the grant on the last call and takes the standing policy 
     assert.equal(spent?.callsUsed, 2);
     assert.ok(spent?.consumedAt);
     assert.equal(await ctx.store.findItemPolicy(ctx.orgId, ctx.model.id, ctx.item.id), undefined, "a spent quota does not renew itself");
-    await assert.rejects(() => ctx.prepare(call), (e: unknown) => isHttpError(e) && e.status === 403 && e.message === "inject_denied");
+    await assert.rejects(() => ctx.prepare(call), (e: unknown) => isInjectDenied(e) && e.status === 403 && e.message === "inject_denied");
     const again = await ctx.ask();
     assert.equal(again.grant.status, "pending", "the agent must ask again");
     assert.notEqual(again.grant.id, grant.id);

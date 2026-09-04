@@ -9,7 +9,7 @@ import {
   type ConnectorOpts,
   type ConnectorResult,
 } from "./connector.ts";
-import { HttpError, isHttpError, isNeedItemError, type NeedItemPayload } from "./errors.ts";
+import { HttpError, isHttpError, isInjectDenied, isNeedItemError, isScopeDenied, type NeedItemPayload } from "./errors.ts";
 import type { HostedKernel, InjectOutcome } from "./kernel.ts";
 import type { ModelPrincipal } from "./auth.ts";
 import {
@@ -429,7 +429,7 @@ async function tryUserToken(
     }
     return originPayload(origin, { user_token: true, token_last4: cached.last4 });
   } catch (err) {
-    if (isNeedItemError(err) || (isHttpError(err) && err.message === "inject_denied")) {
+    if (isNeedItemError(err) || isInjectDenied(err)) {
       return undefined;
     }
     throw err;
@@ -459,7 +459,7 @@ async function prepareOrGrant(
     return await prepare();
   } catch (err) {
     if (isNeedItemError(err)) return err.payload;
-    if (isHttpError(err) && err.status === 403 && err.message === "scope_denied") {
+    if (isScopeDenied(err)) {
       // The approval stays active for the calls it covers; do not request a new grant here.
       return {
         ...err.extra,
@@ -467,7 +467,7 @@ async function prepareOrGrant(
         hint: "This approval does not cover that method, host, or path. Ask for a new approval for this call.",
       } as ScopeDeniedPayload;
     }
-    if (isHttpError(err) && err.status === 403 && err.message === "inject_denied") {
+    if (isInjectDenied(err)) {
       const result = await kernel.requestGrant({
         orgId: principal.orgId,
         clientId: principal.clientId,

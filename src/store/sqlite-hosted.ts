@@ -535,17 +535,6 @@ export class SqliteHostedStore implements VaultStore {
     return mapClientRow(r);
   }
 
-  async getClientByHashedSecret(
-    orgId: string,
-    hashedSecret: string,
-  ): Promise<ClientRecord | undefined> {
-    const r = this.#db
-      .prepare("SELECT * FROM clients WHERE org_id = ? AND hashed_secret = ?")
-      .get(orgId, hashedSecret) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return this.getClient(String(r.id));
-  }
-
   async findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined> {
     const r = this.#db
       .prepare("SELECT * FROM clients WHERE hashed_secret = ?")

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { isHttpError } from "../src/hosted/errors.ts";
+import { isHttpError, isInjectDenied } from "../src/hosted/errors.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
@@ -198,7 +198,7 @@ test("revoke revokes every open grant for the pair and later http_request is den
     assert.equal(await ctx.store.findItemPolicy(ctx.orgId, ctx.model.id, ctx.item.id), undefined);
     await assert.rejects(
       () => ctx.kernel.consumeActiveGrant(ctx.orgId, ctx.model.id, ctx.item.id),
-      (err: unknown) => isHttpError(err) && err.status === 403 && err.message === "inject_denied",
+      (err: unknown) => isInjectDenied(err) && err.status === 403 && err.message === "inject_denied",
     );
     const { rpc } = await mcp(ctx, "http_request", { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" });
     const body = toolText(rpc);

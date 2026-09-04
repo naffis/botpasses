@@ -149,7 +149,6 @@ export type VaultStore = {
 
   insertClient(row: ClientRecord): Promise<void>;
   getClient(id: string): Promise<ClientRecord | undefined>;
-  getClientByHashedSecret(orgId: string, hashedSecret: string): Promise<ClientRecord | undefined>;
   findClientByHashedSecret(hashedSecret: string): Promise<ClientRecord | undefined>;
   listClients(orgId: string): Promise<ClientRecord[]>;
   findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined>;

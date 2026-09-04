@@ -745,10 +745,6 @@ export class HostedKernel {
     return { ...client, environment };
   }
 
-  async lookupTrusted(orgId: string, token: string): Promise<ClientRecord | undefined> {
-    return this.store.getClientByHashedSecret(orgId, hashSecret(token));
-  }
-
   async lookupTrustedToken(token: string): Promise<ClientRecord | undefined> {
     return this.store.findClientByHashedSecret(hashSecret(token));
   }
@@ -903,17 +899,6 @@ export class HostedKernel {
   async findStoredItem(orgId: string, environment: VaultEnvName, itemName: string) {
     const env = await this.envFor(orgId, environment);
     return this.store.getItemByName(env.id, normalizeItemName(itemName));
-  }
-
-  async updateItemMeta(input: {
-    orgId: string;
-    actor: string;
-    itemId: string;
-    username?: string;
-    inject?: string;
-    allowedHosts?: string[];
-  }): Promise<ItemPublic> {
-    return this.updateItem(input);
   }
 
   async updateItem(input: {

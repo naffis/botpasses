@@ -31,7 +31,7 @@ import {
 } from "../hosted-types.ts";
 import type { VaultStore } from "../store/types.ts";
 import { escapeHtml } from "./auth-shell.ts";
-import { HttpError, type NeedItemError } from "./errors.ts";
+import { HttpError, InjectDeniedError, ScopeDeniedError, type NeedItemError } from "./errors.ts";
 import type { OrgRateLimiter } from "./rate-limit.ts";
 import { ALLOWED_METHODS, assertAllowedHostname } from "./ssrf.ts";
 
@@ -747,14 +747,13 @@ export async function consumeActiveGrant(
   const grants = await settleExpired(host, await host.store.listGrants(orgId));
   const at = host.now();
   const match = grants.find((g) => g.clientId === clientId && g.itemId === itemId && g.status === "active");
-  if (!match) throw new HttpError(403, "inject_denied");
+  if (!match) throw new InjectDeniedError();
   if (call) {
     const reason = scopeDenialReason(match, call);
     if (reason) {
       const item = await host.store.getItem(itemId);
       await host.audit(orgId, "scope_denied", clientId, item?.name ?? null, clientId);
-      throw new HttpError(403, "scope_denied", {
-        status: "scope_denied",
+      throw new ScopeDeniedError({
         reason,
         grant_id: match.id,
         grant_scope: publicGrantScope(match),
@@ -763,12 +762,12 @@ export async function consumeActiveGrant(
   }
   if (match.policy === "prompt") {
     const ok = await host.store.consumeGrant(match.id, nowIso(at));
-    if (!ok) throw new HttpError(403, "inject_denied");
+    if (!ok) throw new InjectDeniedError();
     return { ...match, status: "consumed", consumedAt: nowIso(at) };
   }
   if (match.maxCalls === null) return match;
   const ok = await host.store.recordGrantCall(match.id, nowIso(at));
-  if (!ok) throw new HttpError(403, "inject_denied");
+  if (!ok) throw new InjectDeniedError();
   const used = match.callsUsed + 1;
   const standing = await standingFor(host, orgId, clientId, {
     id: itemId,

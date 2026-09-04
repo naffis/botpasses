@@ -178,7 +178,3 @@ export function tryServeSite(
   sendSiteFile(res, file, extra);
   return true;
 }
-
-export function siteIndexExists(siteRoot: string): boolean {
-  return existsSync(join(siteRoot, "index.html"));
-}
