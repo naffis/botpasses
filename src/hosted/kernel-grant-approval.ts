@@ -31,7 +31,11 @@ export function hashCode(code: string, salt: string): string {
   return createHash("sha256").update(`${salt}:${code}`).digest("hex");
 }
 
-/** Replaces the grant's code challenge with a fresh 8-digit code and returns the plaintext. */
+/**
+ * Replaces the grant's code challenge with a fresh 8-digit code and returns the plaintext. The
+ * wrong-code count carries over from the challenge it replaces, so re-requesting the grant
+ * does not hand a guesser five fresh attempts per rotation.
+ */
 export async function rotateCodeChallenge(host: GrantHost, grantId: string, now: Date): Promise<string> {
   const prior = await host.store.getChallengeByGrantKind(grantId, "code");
   if (prior) await host.store.deleteChallenge(prior.id);
@@ -42,7 +46,7 @@ export async function rotateCodeChallenge(host: GrantHost, grantId: string, now:
     grantId,
     codeHash: `${salt}:${hashCode(code, salt)}`,
     expiresAt: new Date(now.getTime() + CODE_TTL_MS).toISOString(),
-    attempts: 0,
+    attempts: prior?.attempts ?? 0,
     kind: "code",
   });
   return code;
