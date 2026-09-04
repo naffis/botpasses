@@ -11,6 +11,18 @@ import { securityHeaders } from "./security-headers.ts";
 
 export const BODY_CAP = 128 * 1024;
 
+export function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+}
+
+export function originIsLoopback(origin: string): boolean {
+  try {
+    return isLoopbackHost(new URL(origin).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function json(res: ServerResponse, status: number, body: unknown, skipSecurity = false): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",

@@ -1,26 +1,19 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { HEALTH_PRODUCT } from "../brand.ts";
-import { defaultEnvironmentForDeployPlane } from "./deploy-plane.ts";
 import {
   requireModelOrOperator,
   requireOperator,
   requireTrusted,
   testAuthResolver,
   type AuthResolver,
-  type ModelPrincipal,
   type Principal,
 } from "./auth.ts";
 import { AgentPassAuthority, agentPassEnabled } from "./agentpass.ts";
 import { type ConnectorFetch } from "./connector.ts";
 import { HttpError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
-import {
-  handleHostedMcpRpc,
-  isMcpHandshakeMethod,
-  listHostedMcpTools,
-  type JsonRpcRequest,
-} from "./mcp.ts";
+import { listHostedMcpTools } from "./mcp.ts";
 import { hostedCollectHtml, hostedCollectMissingHtml } from "./collect-page.ts";
 import { hostedOperatorHtml } from "./operator-page.ts";
 import { hostedPageHeaders, MARKETING_CSP_EXTRAS, newCspNonce, securityHeaders } from "./security-headers.ts";
@@ -32,15 +25,14 @@ import { handleAccessApi } from "./http-access-routes.ts";
 import { handleClientRoutes } from "./http-client-routes.ts";
 import { handleGrantRoutes } from "./http-grant-routes.ts";
 import { handleItemRoutes } from "./http-item-routes.ts";
-import { asEnv, json, optional, readJson, sendError } from "./http-util.ts";
+import { handleMcpPost, KEEPALIVE_MS, sseKeepalive } from "./http-mcp-routes.ts";
+import { asEnv, isLoopbackHost, json, optional, originIsLoopback, readJson, sendError } from "./http-util.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { assertDcrIp, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
 import { isMcpClientSurface, isOauthDiscoveryPath, oauthDiscoveryDocument } from "./oauth-metadata.ts";
 import { bindCors, corsHeaders, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
 import type Provider from "oidc-provider";
-
-const KEEPALIVE_MS = 25_000;
 
 /**
  * Host header check. Loopback hosts are only trusted when `allowLoopback` is set (tests and
@@ -51,18 +43,6 @@ export function hostAllowed(hostHeader: string, allowed: string[], allowLoopback
   if (!host) return false;
   if (isLoopbackHost(host)) return allowLoopback;
   return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
-}
-
-function isLoopbackHost(host: string): boolean {
-  return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
-}
-
-function originIsLoopback(origin: string): boolean {
-  try {
-    return isLoopbackHost(new URL(origin).hostname.toLowerCase());
-  } catch {
-    return false;
-  }
 }
 
 export type HostedHttpOpts = {
@@ -351,53 +331,16 @@ export function createHostedServer(opts: HostedHttpOpts) {
     }
 
     if (method === "POST" && path === "/mcp") {
-      const body = (await readJson(req)) as JsonRpcRequest;
-      if (!principal && isMcpHandshakeMethod(body.method)) {
-        const rpc = await handleHostedMcpRpc(
-          {
-            kernel: opts.kernel,
-            principal: { channel: "model", orgId: "anon", clientId: "anon", environment: "staging" },
-            fetchImpl: opts.fetchImpl,
-            resolveAddresses: opts.resolveAddresses,
-          },
-          body,
-        );
-        if (!rpc) {
-          res.writeHead(202, securityHeaders({ html: false }));
-          res.end();
-          return;
-        }
-        json(res, 200, rpc);
-        return;
-      }
-      let model: ModelPrincipal;
-      try {
-        assertCookieMcpRequest(req, principal, {
-          identity,
-          secureCookies,
-          publicOrigin: new URL(publicUrl).origin,
-          allowLoopback,
-        });
-        model = await mcpModelPrincipal(opts.kernel, principal, deployPlane);
-      } catch (err) {
-        sendError(res, err, path);
-        return;
-      }
-      const rpc = await handleHostedMcpRpc(
-        {
-          kernel: opts.kernel,
-          principal: model,
-          fetchImpl: opts.fetchImpl,
-          resolveAddresses: opts.resolveAddresses,
-        },
-        body,
-      );
-      if (!rpc) {
-        res.writeHead(202, securityHeaders({ html: false }));
-        res.end();
-        return;
-      }
-      json(res, 200, rpc);
+      await handleMcpPost(req, res, path, principal, {
+        kernel: opts.kernel,
+        identity,
+        secureCookies,
+        publicUrl,
+        allowLoopback,
+        deployPlane,
+        fetchImpl: opts.fetchImpl,
+        resolveAddresses: opts.resolveAddresses,
+      });
       return;
     }
 
@@ -589,61 +532,6 @@ export function createHostedServer(opts: HostedHttpOpts) {
 }
 
 /**
- * Cookie sessions may drive MCP as a model (the stdio shim), but only from our own pages: the
- * request must carry the CSRF header and an Origin on this deployment (S4). Bearer principals
- * and header-authenticated test principals have no cookie to ride.
- */
-function assertCookieMcpRequest(
-  req: IncomingMessage,
-  principal: Principal | undefined,
-  ctx: {
-    identity: OperatorIdentity | undefined;
-    secureCookies: boolean;
-    publicOrigin: string;
-    allowLoopback: boolean;
-  },
-): void {
-  if (principal?.channel !== "operator" || !principal.sessionHash) return;
-  if (!ctx.identity) throw new HttpError(403, "CSRF required");
-  ctx.identity.assertCsrf(
-    req.headers.cookie,
-    typeof req.headers["x-csrf-token"] === "string" ? req.headers["x-csrf-token"] : undefined,
-    ctx.secureCookies,
-  );
-  const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
-  const sameOrigin = origin === ctx.publicOrigin || (ctx.allowLoopback && originIsLoopback(origin));
-  if (!sameOrigin) throw new HttpError(403, "Origin not allowed for cookie MCP");
-}
-
-/**
- * The stdio shim runs as a synthetic model client for the operator. Its environment is the
- * plane default, never something the request body chose (S4).
- */
-async function mcpModelPrincipal(
-  kernel: HostedKernel,
-  principal: Principal | undefined,
-  deployPlane: "staging" | "production",
-): Promise<ModelPrincipal> {
-  if (principal?.channel === "model") return principal;
-  if (principal?.channel === "operator") {
-    const environment = defaultEnvironmentForDeployPlane(deployPlane);
-    const client = await kernel.ensureModelClient({
-      orgId: principal.orgId,
-      name: `stdio:${principal.userId}`,
-      environment,
-      clerkOauthUserId: `stdio:${principal.userId}:${environment}`,
-    });
-    return {
-      channel: "model",
-      orgId: principal.orgId,
-      clientId: client.id,
-      environment: client.environment,
-    };
-  }
-  throw new HttpError(401, "Model OAuth required");
-}
-
-/**
  * Cookie sessions need the double-submit header on every mutation. Only the email-OTP steps
  * (no session yet) and POST /approve (protected by its HMAC token; an HTML form from an email
  * link cannot set headers) are exempt. TOTP and logout are no longer exempt here; their handlers
@@ -654,19 +542,6 @@ function cookieCsrfApplies(path: string, principal: Principal | undefined): bool
   if (path.startsWith("/api/auth/otp/")) return false;
   if (path === "/approve") return false;
   return true;
-}
-
-function sseKeepalive(res: ServerResponse): void {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-  });
-  res.write(": connected\n\n");
-  const timer = setInterval(() => {
-    res.write(": keepalive\n\n");
-  }, KEEPALIVE_MS);
-  res.on("close", () => clearInterval(timer));
 }
 
 export { KEEPALIVE_MS };
