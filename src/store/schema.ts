@@ -341,3 +341,39 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_wrapped_ciphertext TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_wrapped_tag TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_at TEXT;
 `;
+
+/**
+ * Scoped approvals (3.1). Optional limits on grants and standing policies: JSON arrays of
+ * methods, path prefixes, and hosts; a call quota with its counter; the requested call on a
+ * grant; an expiry on policies (grants already had one). Expand-only, all nullable or defaulted.
+ * Mirrored by migrations/008_scoped_grants.sql.
+ */
+export const HOSTED_SCHEMA_SCOPE_ALTER_SQLITE = `
+ALTER TABLE grants ADD COLUMN methods TEXT;
+ALTER TABLE grants ADD COLUMN path_prefixes TEXT;
+ALTER TABLE grants ADD COLUMN hosts TEXT;
+ALTER TABLE grants ADD COLUMN max_calls INTEGER;
+ALTER TABLE grants ADD COLUMN calls_used INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE grants ADD COLUMN requested_scope_json TEXT;
+ALTER TABLE policies ADD COLUMN methods TEXT;
+ALTER TABLE policies ADD COLUMN path_prefixes TEXT;
+ALTER TABLE policies ADD COLUMN hosts TEXT;
+ALTER TABLE policies ADD COLUMN max_calls INTEGER;
+ALTER TABLE policies ADD COLUMN calls_used INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE policies ADD COLUMN expires_at TEXT;
+`;
+
+export const HOSTED_SCHEMA_SCOPE_ALTER_PG = `
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS methods TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS path_prefixes TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS hosts TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS max_calls INTEGER;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS calls_used INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS requested_scope_json TEXT;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS methods TEXT;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS path_prefixes TEXT;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS hosts TEXT;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS max_calls INTEGER;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS calls_used INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS expires_at TEXT;
+`;

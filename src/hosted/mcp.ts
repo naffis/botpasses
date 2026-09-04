@@ -10,7 +10,12 @@ import {
   MCP_INSTRUCTIONS_HOSTED,
 } from "../prompts/mcp-hosted.ts";
 import { assertSafePublicObject } from "../redact.ts";
-import type { HostedGrantRecord, ItemPublic, VaultEnvName } from "../hosted-types.ts";
+import {
+  publicGrantScope,
+  type HostedGrantRecord,
+  type ItemPublic,
+  type VaultEnvName,
+} from "../hosted-types.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
@@ -75,8 +80,10 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
   },
   {
     name: "find_items",
-    description: HOSTED_TOOL_DESCRIPTIONS.find_items,
-    annotations: { title: "Find a credential by API host" },
+    // Optional: http_request finds the item itself. Kept for hosts that want to look before calling.
+    // Not readOnlyHint: a miss records a need row the operator sees in the inbox.
+    description: `Optional. ${HOSTED_TOOL_DESCRIPTIONS.find_items}`,
+    annotations: { title: "Find a credential by API host (optional)" },
     inputSchema: {
       type: "object",
       properties: {
@@ -102,6 +109,21 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
         task_description: {
           type: "string",
           description: HOSTED_TOOL_PARAM_DESCRIPTIONS.grant_task_description,
+        },
+        host: {
+          type: "string",
+          description:
+            "API hostname the call will go to (api.stripe.com). Must be one of the item's allowed hosts. Shown to the operator; a one-click approval is limited to it.",
+        },
+        method: {
+          type: "string",
+          enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          description: "HTTPS method the call will use. Shown to the operator; a one-click approval is limited to it.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Path the call will use (/v1/balance). Shown to the operator; a one-click approval is limited to paths under it.",
         },
       },
       required: ["item_name"],
@@ -167,7 +189,8 @@ export type HostedMcpDeps = {
   resolveAddresses?: (hostname: string) => Promise<string[]>;
 };
 
-function publicGrant(g: HostedGrantRecord) {
+/** Public grant fields on MCP results. `grant_scope` is null when the grant is unrestricted. */
+export function publicGrant(g: HostedGrantRecord) {
   return {
     grant_id: g.id,
     policy: g.policy,
@@ -179,6 +202,8 @@ function publicGrant(g: HostedGrantRecord) {
     consumed_at: g.consumedAt,
     task_id: g.taskId,
     task_description: g.taskDescription,
+    requested_scope: g.requestedScope,
+    grant_scope: publicGrantScope(g),
   };
 }
 
@@ -236,6 +261,7 @@ async function dispatch(
           username: i.username,
           environment: i.environment,
           inject: i.inject,
+          allowed_hosts: i.allowedHosts,
         })),
       };
     }
@@ -253,6 +279,9 @@ async function dispatch(
     }
     case "request_grant": {
       const itemName = str(args, "item_name");
+      const host = optional(args.host);
+      const method = optional(args.method);
+      const path = optional(args.path);
       const result = await kernel.requestGrant({
         orgId: principal.orgId,
         clientId: principal.clientId,
@@ -260,6 +289,7 @@ async function dispatch(
         environment,
         taskId: optional(args.task_id),
         taskDescription: optional(args.task_description),
+        request: host || method || path ? { host, method, path } : undefined,
       });
       return {
         ...publicGrant(result.grant),

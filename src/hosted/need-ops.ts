@@ -2,16 +2,17 @@ import { randomUUID } from "node:crypto";
 import { encrypt } from "../crypto.ts";
 import { last4, normalizeSecretName, suggestedNameFromHost } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
-import type {
-  ClientRecord,
-  FindItemsResult,
-  HostedGrantRecord,
-  ItemKind,
-  ItemPublic,
-  ItemRecord,
-  NeedPublic,
-  PolicyRecord,
-  VaultEnvName,
+import {
+  scopeFromPolicy,
+  type ClientRecord,
+  type FindItemsResult,
+  type HostedGrantRecord,
+  type ItemKind,
+  type ItemPublic,
+  type ItemRecord,
+  type NeedPublic,
+  type PolicyRecord,
+  type VaultEnvName,
 } from "../hosted-types.ts";
 import type { VaultStore } from "../store/types.ts";
 import { StoreConflictError } from "../store/conflict.ts";
@@ -351,12 +352,13 @@ export async function fulfillNeed(
     environmentId: env.id,
     policy: standing ? standing.kind : "prompt",
     status: "active",
-    expiresAt: null,
     createdAt: at,
     approvedAt: at,
     consumedAt: null,
     taskId: null,
     taskDescription: need.taskDescription,
+    requestedScope: null,
+    ...scopeFromPolicy(standing),
   };
   try {
     await host.store.persistFulfill({

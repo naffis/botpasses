@@ -1,30 +1,49 @@
 /**
  * Grant and policy operations for the hosted kernel: request, approve (inbox, code, magic link),
- * revoke, consume, settle expiry, and the inbox and per-client views. Functions take a
- * `GrantHost` with the kernel's store, clock, notifier, and helpers, like `need-ops.ts`.
- * `HostedKernel` keeps its public method names and delegates here.
+ * revoke, consume, settle expiry, scope enforcement, and the inbox and per-client views.
+ * Functions take a `GrantHost` with the kernel's store, clock, notifier, and helpers, like
+ * `need-ops.ts`. `HostedKernel` keeps its public method names and delegates here.
+ *
+ * Scoped approvals (plan 3.1): a grant or standing policy may limit `methods`, `path_prefixes`,
+ * `hosts` (subset of the item's allowed hosts), `max_calls`, and `expires_at`. `request_grant`
+ * records what the agent said it would call; approving without an explicit scope narrows to
+ * that request. `consumeActiveGrant` enforces the scope when the caller passes the request.
  */
 import { createHmac, createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { normalizeSecretName } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
-import type {
-  ApprovalChallengeRecord,
-  ClientRecord,
-  EnvironmentRecord,
-  GrantPolicy,
-  HostedGrantRecord,
-  MemberRole,
-  PolicyRecord,
-  VaultEnvName,
+import {
+  publicGrantScope,
+  scopeFromPolicy,
+  unscopedFields,
+  type ApprovalChallengeRecord,
+  type ClientRecord,
+  type EnvironmentRecord,
+  type GrantPolicy,
+  type GrantScope,
+  type GrantScopePublic,
+  type HostedGrantRecord,
+  type ItemRecord,
+  type MemberRole,
+  type PolicyRecord,
+  type RequestedScope,
+  type VaultEnvName,
 } from "../hosted-types.ts";
 import type { VaultStore } from "../store/types.ts";
 import { escapeHtml } from "./auth-shell.ts";
 import { HttpError, type NeedItemError } from "./errors.ts";
 import type { OrgRateLimiter } from "./rate-limit.ts";
+import { ALLOWED_METHODS, assertAllowedHostname } from "./ssrf.ts";
 
 export const SESSION_TTL_MS = 8 * 3600 * 1000;
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const MAGIC_TTL_MS = 15 * 60 * 1000;
+/** `ttl_seconds` bounds: one minute up to a day for `session`, up to a year for standing policies. */
+export const TTL_MIN_SECONDS = 60;
+export const SESSION_TTL_MAX_SECONDS = 86_400;
+export const STANDING_TTL_MAX_SECONDS = 365 * 86_400;
+export const MAX_CALLS_CAP = 1_000_000;
+const PATH_MAX_CHARS = 2048;
 
 export type GrantHost = {
   store: VaultStore;
@@ -53,6 +72,24 @@ export type GrantHost = {
   ) => Promise<void>;
 };
 
+/** The call an agent says it will make. Any field may be omitted. */
+export type GrantRequest = { host?: string; method?: string; path?: string };
+
+/** The call a connector is about to make; every field known. */
+export type ConnectorCall = { host: string; method: string; path: string };
+
+/**
+ * Operator-supplied limits on approve. Present dimensions are used as given; absent dimensions
+ * are unrestricted. Omit the whole object to inherit the requested scope.
+ */
+export type ScopeInput = {
+  methods?: string[];
+  pathPrefixes?: string[];
+  hosts?: string[];
+  maxCalls?: number;
+  ttlSeconds?: number;
+};
+
 export type InboxGrantCard = {
   id: string;
   status: string;
@@ -63,6 +100,10 @@ export type InboxGrantCard = {
   task_description: string | null;
   created_at: string;
   approved_at: string | null;
+  expires_at: string | null;
+  requested_scope: RequestedScope | null;
+  grant_scope: GrantScopePublic | null;
+  allowed_hosts: string[];
 };
 
 function nowIso(d: Date): string {
@@ -86,6 +127,153 @@ function isPast(iso: string | null, now: Date): boolean {
   return iso !== null && new Date(iso).getTime() < now.getTime();
 }
 
+function itemHosts(item: Pick<ItemRecord, "allowedHostsJson">): string[] {
+  const v: unknown = JSON.parse(item.allowedHostsJson);
+  if (!Array.isArray(v) || v.some((h) => typeof h !== "string")) {
+    throw new HttpError(500, "Corrupt allowed_hosts");
+  }
+  return v as string[];
+}
+
+function normalizeMethod(raw: string, field: string): string {
+  const method = raw.trim().toUpperCase();
+  if (!ALLOWED_METHODS.has(method)) {
+    throw new HttpError(400, `${field} must be one of ${[...ALLOWED_METHODS].join(", ")}`);
+  }
+  return method;
+}
+
+function normalizePath(raw: string, field: string): string {
+  const path = raw.trim();
+  if (!path.startsWith("/") || path.startsWith("//") || /\s/.test(path) || path.length > PATH_MAX_CHARS) {
+    throw new HttpError(400, `${field} must be a path starting with /`);
+  }
+  return path;
+}
+
+function normalizeHost(raw: string, allowed: string[], field: string): string {
+  const host = raw.trim().toLowerCase();
+  assertAllowedHostname(host, [host]);
+  if (!allowed.includes(host)) {
+    throw new HttpError(400, `host_mismatch: ${host} is not in allowed_hosts`, {
+      status: "host_mismatch",
+      host,
+      allowed_hosts: allowed,
+      field,
+    });
+  }
+  return host;
+}
+
+/** Validates the agent's stated call against the item. Empty request reads as no scope. */
+function requestedScopeFor(request: GrantRequest | undefined, item: ItemRecord): RequestedScope | null {
+  if (!request) return null;
+  const host = request.host?.trim() ? normalizeHost(request.host, itemHosts(item), "host") : null;
+  const method = request.method?.trim() ? normalizeMethod(request.method, "method") : null;
+  const path = request.path?.trim() ? normalizePath(request.path, "path") : null;
+  if (host === null && method === null && path === null) return null;
+  return { host, method, path };
+}
+
+/** Prefix form of a requested path: no query string. */
+function pathPrefixOf(path: string): string {
+  const q = path.indexOf("?");
+  return q === -1 ? path : path.slice(0, q) || "/";
+}
+
+function uniq(list: string[]): string[] {
+  return [...new Set(list)];
+}
+
+/**
+ * Resolves the scope an approval writes. An explicit `scope` is validated as given; without one
+ * the grant narrows to what the agent asked for (host, method, path prefix), else it is
+ * unrestricted, which is what every approval was before 3.1. Hosts never widen past the item.
+ */
+export function resolveApprovalScope(input: {
+  scope: ScopeInput | undefined;
+  requested: RequestedScope | null;
+  item: Pick<ItemRecord, "allowedHostsJson">;
+  policy: GrantPolicy;
+  now: Date;
+}): GrantScope & { expiresAt: string | null } {
+  const allowed = itemHosts(input.item);
+  const scope = input.scope;
+  const base = unscopedFields();
+  let methods: string[] | null = null;
+  let pathPrefixes: string[] | null = null;
+  let hosts: string[] | null = null;
+  let maxCalls: number | null = null;
+  if (scope) {
+    if (scope.methods !== undefined) {
+      if (scope.methods.length === 0) throw new HttpError(400, "scope.methods must not be empty");
+      methods = uniq(scope.methods.map((m) => normalizeMethod(m, "scope.methods")));
+    }
+    if (scope.pathPrefixes !== undefined) {
+      if (scope.pathPrefixes.length === 0) throw new HttpError(400, "scope.path_prefixes must not be empty");
+      pathPrefixes = uniq(scope.pathPrefixes.map((p) => pathPrefixOf(normalizePath(p, "scope.path_prefixes"))));
+    }
+    if (scope.hosts !== undefined) {
+      if (scope.hosts.length === 0) throw new HttpError(400, "scope.hosts must not be empty");
+      hosts = uniq(scope.hosts.map((h) => h.trim().toLowerCase()));
+      const outside = hosts.filter((h) => !allowed.includes(h));
+      if (outside.length > 0) {
+        throw new HttpError(400, "scope.hosts must be a subset of the item's allowed hosts", {
+          hosts: outside,
+          allowed_hosts: allowed,
+        });
+      }
+    }
+    if (scope.maxCalls !== undefined) {
+      if (!Number.isInteger(scope.maxCalls) || scope.maxCalls < 1 || scope.maxCalls > MAX_CALLS_CAP) {
+        throw new HttpError(400, `scope.max_calls must be an integer from 1 to ${MAX_CALLS_CAP}`);
+      }
+      maxCalls = scope.maxCalls;
+    }
+  } else if (input.requested) {
+    methods = input.requested.method ? [input.requested.method] : null;
+    pathPrefixes = input.requested.path ? [pathPrefixOf(input.requested.path)] : null;
+    if (input.requested.host) {
+      if (!allowed.includes(input.requested.host)) {
+        throw new HttpError(400, "The requested host is no longer in the item's allowed hosts; deny and ask again", {
+          hosts: [input.requested.host],
+          allowed_hosts: allowed,
+        });
+      }
+      hosts = [input.requested.host];
+    }
+  }
+  const ttlMax = input.policy === "session" ? SESSION_TTL_MAX_SECONDS : STANDING_TTL_MAX_SECONDS;
+  let ttlMs: number | null = input.policy === "session" ? SESSION_TTL_MS : null;
+  if (scope?.ttlSeconds !== undefined) {
+    if (!Number.isInteger(scope.ttlSeconds) || scope.ttlSeconds < TTL_MIN_SECONDS || scope.ttlSeconds > ttlMax) {
+      throw new HttpError(400, `scope.ttl_seconds must be an integer from ${TTL_MIN_SECONDS} to ${ttlMax}`);
+    }
+    ttlMs = scope.ttlSeconds * 1000;
+  }
+  return {
+    ...base,
+    methods,
+    pathPrefixes,
+    hosts,
+    maxCalls,
+    expiresAt: ttlMs === null ? null : new Date(input.now.getTime() + ttlMs).toISOString(),
+  };
+}
+
+export type ScopeDenial = "method" | "path" | "host";
+
+/** Why a scoped grant refuses this call, or `undefined` when the call fits. */
+export function scopeDenialReason(scope: GrantScope, call: ConnectorCall): ScopeDenial | undefined {
+  if (scope.methods && !scope.methods.includes(call.method.toUpperCase())) return "method";
+  if (scope.hosts && !scope.hosts.includes(call.host.toLowerCase())) return "host";
+  if (scope.pathPrefixes) {
+    const path = pathPrefixOf(call.path);
+    if (!scope.pathPrefixes.some((prefix) => path.startsWith(prefix))) return "path";
+  }
+  return undefined;
+}
+
 export type RequestGrantInput = {
   orgId: string;
   clientId: string;
@@ -94,16 +282,19 @@ export type RequestGrantInput = {
   taskId?: string;
   taskDescription?: string;
   operatorEmail?: string;
+  /** What the agent will call. Shown on the inbox card and used as the default approval scope. */
+  request?: GrantRequest;
 };
 
 export type RequestGrantResult = { grant: HostedGrantRecord; code?: string; notifyFailed?: boolean };
 
 /**
- * One open grant per (client, item). A standing policy activates immediately; otherwise the
- * existing pending grant is reused with a fresh approval code. The org limiter is counted here
- * exactly once per call, whichever surface (REST, request_grant, http_request) asked.
- * Notification goes to `operatorEmail` (must be a member) or to every member; it is sent for a
- * new grant or when the previous magic link expired, never on every retry.
+ * One open grant per (client, item). A standing policy activates immediately (the grant inherits
+ * the policy's scope and expiry); otherwise the existing pending grant is reused with a fresh
+ * approval code and the newest requested scope. The org limiter is counted here exactly once per
+ * call, whichever surface (REST, request_grant, http_request) asked. Notification goes to
+ * `operatorEmail` (must be a member) or to every member; it is sent for a new grant or when the
+ * previous magic link expired, never on every retry.
  */
 export async function requestGrant(host: GrantHost, input: RequestGrantInput): Promise<RequestGrantResult> {
   if (!(await host.limiter.allow(input.orgId, host.now().getTime(), "grant"))) {
@@ -121,11 +312,12 @@ export async function requestGrant(host: GrantHost, input: RequestGrantInput): P
       clientId: input.clientId,
       environment: input.environment,
       itemName: input.itemName,
-      host: "",
+      host: input.request?.host?.trim().toLowerCase() ?? "",
       taskDescription: input.taskDescription,
       alreadyLimited: true,
     });
   }
+  const requested = requestedScopeFor(input.request, item);
   const recipients = await notifyRecipients(host, input.orgId, input.operatorEmail);
   const standing = await standingFor(host, input.orgId, client.id, item);
   const now = host.now();
@@ -136,14 +328,15 @@ export async function requestGrant(host: GrantHost, input: RequestGrantInput): P
     grant = open;
   } else if (standing) {
     grant = open
-      ? { ...open, policy: standing.kind, status: "active", approvedAt: at, expiresAt: null }
-      : newGrant(input, client.id, item, env.id, at, standing.kind, "active");
+      ? { ...open, ...scopeFromPolicy(standing), policy: standing.kind, status: "active", approvedAt: at }
+      : newGrant(input, client.id, item, env.id, at, standing.kind, "active", requested, standing);
     if (open) await host.store.updateGrant(grant);
     else await host.store.insertGrant(grant);
   } else if (open) {
-    grant = open;
+    grant = requested ? { ...open, requestedScope: requested } : open;
+    if (requested) await host.store.updateGrant(grant);
   } else {
-    grant = newGrant(input, client.id, item, env.id, at, "prompt", "pending");
+    grant = newGrant(input, client.id, item, env.id, at, "prompt", "pending", requested, undefined);
     await host.store.insertGrant(grant);
   }
   await host.audit(input.orgId, "request_grant", client.id, item.name, client.id);
@@ -169,6 +362,8 @@ function newGrant(
   at: string,
   policy: GrantPolicy,
   status: "active" | "pending",
+  requested: RequestedScope | null,
+  standing: PolicyRecord | undefined,
 ): HostedGrantRecord {
   return {
     id: `grt_${randomUUID()}`,
@@ -179,12 +374,13 @@ function newGrant(
     environmentId,
     policy,
     status,
-    expiresAt: null,
     createdAt: at,
     approvedAt: status === "active" ? at : null,
     consumedAt: null,
     taskId: input.taskId ?? null,
     taskDescription: input.taskDescription ?? null,
+    requestedScope: requested,
+    ...scopeFromPolicy(standing),
   };
 }
 
@@ -200,7 +396,7 @@ async function openGrantFor(
   return pair.find((g) => g.status === "active") ?? pair.find((g) => g.status === "pending");
 }
 
-/** D15: an active `session` grant past `expires_at` reads as `expired`. */
+/** D15: an active grant past `expires_at` reads as `expired`. */
 export async function settleExpired(host: GrantHost, grants: HostedGrantRecord[]): Promise<HostedGrantRecord[]> {
   const now = host.now();
   const out: HostedGrantRecord[] = [];
@@ -312,6 +508,8 @@ export type ApproveGrantInput = {
   confirmName?: string;
   role: MemberRole;
   actor: string;
+  /** Operator limits. Omitted: the requested scope when the agent stated one, else unrestricted. */
+  scope?: ScopeInput;
 };
 
 export async function approveGrant(host: GrantHost, input: ApproveGrantInput): Promise<HostedGrantRecord> {
@@ -330,43 +528,39 @@ export async function approveGrant(host: GrantHost, input: ApproveGrantInput): P
       throw new HttpError(400, "confirm_name does not match folder or environment");
     }
   }
-  const at = nowIso(host.now());
-  const expiresAt =
-    input.policy === "session" ? new Date(host.now().getTime() + SESSION_TTL_MS).toISOString() : null;
+  const item = grant.itemId ? await host.store.getItem(grant.itemId) : undefined;
+  if (!item) throw new HttpError(404, "Unknown item");
+  const now = host.now();
+  const at = nowIso(now);
+  const scope = resolveApprovalScope({
+    scope: input.scope,
+    requested: grant.requestedScope,
+    item,
+    policy: input.policy,
+    now,
+  });
   const next: HostedGrantRecord = {
     ...grant,
+    ...scope,
     policy: input.policy,
     status: "active",
     approvedAt: at,
-    expiresAt,
   };
   await host.store.updateGrant(next);
-  if (input.policy === "item_standing" && grant.itemId) {
+  if (input.policy === "item_standing" || input.policy === "folder_standing") {
     await host.store.insertPolicy({
       id: `pol_${randomUUID()}`,
       orgId: input.orgId,
       clientId: grant.clientId,
-      itemId: grant.itemId,
-      folderId: null,
+      itemId: input.policy === "item_standing" ? grant.itemId : null,
+      folderId: input.policy === "folder_standing" ? grant.folderId : null,
       environmentId: grant.environmentId,
-      kind: "item_standing",
+      kind: input.policy,
       createdAt: at,
+      ...scope,
     });
   }
-  if (input.policy === "folder_standing") {
-    await host.store.insertPolicy({
-      id: `pol_${randomUUID()}`,
-      orgId: input.orgId,
-      clientId: grant.clientId,
-      itemId: null,
-      folderId: grant.folderId,
-      environmentId: grant.environmentId,
-      kind: "folder_standing",
-      createdAt: at,
-    });
-  }
-  const item = grant.itemId ? await host.store.getItem(grant.itemId) : undefined;
-  await host.audit(input.orgId, "grant", input.actor, item?.name ?? null, grant.clientId);
+  await host.audit(input.orgId, "grant", input.actor, item.name, grant.clientId);
   assertSafePublicObject("approveGrant", next);
   return next;
 }
@@ -412,6 +606,17 @@ export async function approveByCode(
   throw new HttpError(409, "Invalid or reused code");
 }
 
+/** Drops every policy that would re-grant this grant's (client, item) or (client, folder) pair. */
+async function dropPoliciesFor(host: GrantHost, grant: HostedGrantRecord): Promise<void> {
+  const policies = await host.store.listPoliciesForClient(grant.orgId, grant.clientId);
+  for (const p of policies) {
+    if (grant.itemId && p.itemId === grant.itemId) await host.store.deletePolicy(p.id);
+    if (p.kind === "folder_standing" && p.environmentId === grant.environmentId) {
+      if (p.folderId === grant.folderId) await host.store.deletePolicy(p.id);
+    }
+  }
+}
+
 /** Revokes every open grant for the (client, item) pair and drops the policies that would re-grant it. */
 export async function revokeGrant(
   host: GrantHost,
@@ -433,13 +638,7 @@ export async function revokeGrant(
   for (const g of siblings) {
     await host.store.updateGrant({ ...g, status: "revoked" });
   }
-  const policies = await host.store.listPoliciesForClient(orgId, grant.clientId);
-  for (const p of policies) {
-    if (grant.itemId && p.itemId === grant.itemId) await host.store.deletePolicy(p.id);
-    if (p.kind === "folder_standing" && p.environmentId === grant.environmentId) {
-      if (p.folderId === grant.folderId) await host.store.deletePolicy(p.id);
-    }
-  }
+  await dropPoliciesFor(host, grant);
   const item = grant.itemId ? await host.store.getItem(grant.itemId) : undefined;
   await host.audit(orgId, "revoke", actor, item?.name ?? null, grant.clientId);
   return next;
@@ -462,8 +661,13 @@ export async function inboxGrantCards(host: GrantHost, orgId: string): Promise<I
       task_description: g.taskDescription,
       created_at: g.createdAt,
       approved_at: g.approvedAt,
+      expires_at: g.expiresAt,
+      requested_scope: g.requestedScope,
+      grant_scope: publicGrantScope(g),
+      allowed_hosts: item ? itemHosts(item) : [],
     });
   }
+  assertSafePublicObject("inboxGrantCards", cards);
   return cards;
 }
 
@@ -479,6 +683,7 @@ export type MagicPreview = {
   item_last4: string;
   policy: string;
   task_description: string | null;
+  requested_scope: RequestedScope | null;
 };
 
 /** Validates a magic link and returns what approving it would do. No state change. */
@@ -493,6 +698,7 @@ export async function previewMagic(host: GrantHost, orgId: string, token: string
     item_last4: item?.last4 ?? "",
     policy: "prompt",
     task_description: grant.taskDescription,
+    requested_scope: grant.requestedScope,
   };
   assertSafePublicObject("previewMagic", preview);
   return preview;
@@ -523,33 +729,81 @@ async function magicGrant(host: GrantHost, orgId: string, token: string): Promis
   return grant;
 }
 
+/**
+ * Finds the active grant for the pair and spends it. With `call`, the grant's scope must admit
+ * the call or this is 403 `scope_denied` (payload: `grant_scope`, `reason`; never the secret).
+ * Prompt grants are consumed. Grants with `max_calls` count one call atomically and become
+ * `consumed` on the last one, taking the standing policy that made them with them so the
+ * approval does not renew itself. Without `call` (trusted `/runtime/resolve`), scope is not
+ * checked because there is no call to check it against.
+ */
 export async function consumeActiveGrant(
   host: GrantHost,
   orgId: string,
   clientId: string,
   itemId: string,
+  call?: ConnectorCall,
 ): Promise<HostedGrantRecord> {
   const grants = await settleExpired(host, await host.store.listGrants(orgId));
   const at = host.now();
   const match = grants.find((g) => g.clientId === clientId && g.itemId === itemId && g.status === "active");
   if (!match) throw new HttpError(403, "inject_denied");
+  if (call) {
+    const reason = scopeDenialReason(match, call);
+    if (reason) {
+      const item = await host.store.getItem(itemId);
+      await host.audit(orgId, "scope_denied", clientId, item?.name ?? null, clientId);
+      throw new HttpError(403, "scope_denied", {
+        status: "scope_denied",
+        reason,
+        grant_id: match.id,
+        grant_scope: publicGrantScope(match),
+      });
+    }
+  }
   if (match.policy === "prompt") {
     const ok = await host.store.consumeGrant(match.id, nowIso(at));
     if (!ok) throw new HttpError(403, "inject_denied");
     return { ...match, status: "consumed", consumedAt: nowIso(at) };
   }
-  return match;
+  if (match.maxCalls === null) return match;
+  const ok = await host.store.recordGrantCall(match.id, nowIso(at));
+  if (!ok) throw new HttpError(403, "inject_denied");
+  const used = match.callsUsed + 1;
+  const standing = await standingFor(host, orgId, clientId, {
+    id: itemId,
+    folderId: match.folderId,
+    environmentId: match.environmentId,
+  });
+  if (standing) await host.store.recordPolicyCall(standing.id);
+  if (used < match.maxCalls) return { ...match, callsUsed: used };
+  await dropPoliciesFor(host, match);
+  const item = await host.store.getItem(itemId);
+  await host.audit(orgId, "grant_exhausted", clientId, item?.name ?? null, clientId);
+  return { ...match, callsUsed: used, status: "consumed", consumedAt: nowIso(at) };
 }
 
+/**
+ * The standing policy that would activate a grant for this item, if one is still live. Expired
+ * or spent policies are deleted on read so they never re-grant.
+ */
 export async function standingFor(
   host: GrantHost,
   orgId: string,
   clientId: string,
   item: { id: string; folderId: string | null; environmentId: string },
 ): Promise<PolicyRecord | undefined> {
-  const itemPol = await host.store.findItemPolicy(orgId, clientId, item.id);
+  const now = host.now();
+  const live = async (p: PolicyRecord | undefined): Promise<PolicyRecord | undefined> => {
+    if (!p) return undefined;
+    const spent = p.maxCalls !== null && p.callsUsed >= p.maxCalls;
+    if (!isPast(p.expiresAt, now) && !spent) return p;
+    await host.store.deletePolicy(p.id);
+    return undefined;
+  };
+  const itemPol = await live(await host.store.findItemPolicy(orgId, clientId, item.id));
   if (itemPol) return itemPol;
-  return host.store.findFolderPolicy(orgId, clientId, item.folderId, item.environmentId);
+  return live(await host.store.findFolderPolicy(orgId, clientId, item.folderId, item.environmentId));
 }
 
 export function mintApprovalToken(hmac: Buffer, grantId: string, expMs: number): string {

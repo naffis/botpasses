@@ -139,7 +139,37 @@ export type AccessEventRecord = {
   revokedAt: string | null;
 };
 
-export type PolicyRecord = {
+/**
+ * Optional limits on a grant or standing policy (3.1 scoped approvals). `null` in a dimension
+ * means unrestricted in that dimension. `hosts` is always a subset of the item's allowed hosts.
+ * `callsUsed` counts consumes against `maxCalls`; the row is spent when they meet.
+ */
+export type GrantScope = {
+  methods: string[] | null;
+  pathPrefixes: string[] | null;
+  hosts: string[] | null;
+  maxCalls: number | null;
+  callsUsed: number;
+};
+
+/** What the agent said it would call when it asked (`request_grant` host, method, path). */
+export type RequestedScope = {
+  host: string | null;
+  method: string | null;
+  path: string | null;
+};
+
+/** Wire shape of a scope on MCP results, inbox cards, and the access snapshot. */
+export type GrantScopePublic = {
+  methods: string[] | null;
+  path_prefixes: string[] | null;
+  hosts: string[] | null;
+  max_calls: number | null;
+  calls_used: number;
+  expires_at: string | null;
+};
+
+export type PolicyRecord = GrantScope & {
   id: string;
   orgId: string;
   clientId: string;
@@ -148,9 +178,11 @@ export type PolicyRecord = {
   environmentId: string;
   kind: PolicyKind;
   createdAt: string;
+  /** Standing policies may expire; `null` means until revoked (the pre-3.1 behaviour). */
+  expiresAt: string | null;
 };
 
-export type HostedGrantRecord = {
+export type HostedGrantRecord = GrantScope & {
   id: string;
   orgId: string;
   clientId: string;
@@ -165,7 +197,44 @@ export type HostedGrantRecord = {
   consumedAt: string | null;
   taskId: string | null;
   taskDescription: string | null;
+  requestedScope: RequestedScope | null;
 };
+
+/** No limits in any dimension: the shape every grant and policy had before scoped approvals. */
+export function unscopedFields(): GrantScope {
+  return { methods: null, pathPrefixes: null, hosts: null, maxCalls: null, callsUsed: 0 };
+}
+
+/**
+ * The scope a grant inherits when a standing policy activates it: the policy's limits with a
+ * fresh call counter, and the policy's expiry. Unrestricted when there is no policy.
+ */
+export function scopeFromPolicy(policy: PolicyRecord | undefined): GrantScope & { expiresAt: string | null } {
+  if (!policy) return { ...unscopedFields(), expiresAt: null };
+  return {
+    methods: policy.methods,
+    pathPrefixes: policy.pathPrefixes,
+    hosts: policy.hosts,
+    maxCalls: policy.maxCalls,
+    callsUsed: 0,
+    expiresAt: policy.expiresAt,
+  };
+}
+
+/** Public scope, or `null` when the row is unrestricted in every dimension. */
+export function publicGrantScope(row: GrantScope & { expiresAt: string | null }): GrantScopePublic | null {
+  if (row.methods === null && row.pathPrefixes === null && row.hosts === null && row.maxCalls === null) {
+    return null;
+  }
+  return {
+    methods: row.methods,
+    path_prefixes: row.pathPrefixes,
+    hosts: row.hosts,
+    max_calls: row.maxCalls,
+    calls_used: row.callsUsed,
+    expires_at: row.expiresAt,
+  };
+}
 
 export type ApprovalChallengeRecord = {
   id: string;

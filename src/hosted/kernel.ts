@@ -5,6 +5,8 @@ import { last4, normalizeSecretName } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   emptyClientFields,
+  publicGrantScope,
+  unscopedFields,
   type AccessEventRecord,
   type ClientRecord,
   type FindItemsResult,
@@ -38,6 +40,7 @@ import {
   standingFor,
   verifyApprovalToken,
   type ApproveGrantInput,
+  type ConnectorCall,
   type GrantHost,
   type InboxGrantCard,
   type MagicPreview,
@@ -697,7 +700,8 @@ export class HostedKernel {
   /**
    * Hands the decrypted item to a connector. Handing out the plaintext is audited as `inject`
    * unless the caller sets `auditAfterSend` and calls `auditInject` with the real outcome once the
-   * request has (or has not) left the process.
+   * request has (or has not) left the process. With `request`, a scoped grant must admit the
+   * call (method, host, path prefix) or this is 403 `scope_denied` before anything is decrypted.
    */
   async prepareConnector(input: {
     orgId: string;
@@ -705,6 +709,7 @@ export class HostedKernel {
     itemName: string;
     environment: VaultEnvName;
     auditAfterSend?: boolean;
+    request?: ConnectorCall;
   }): Promise<{
     secret: string;
     username: string | null;
@@ -733,7 +738,7 @@ export class HostedKernel {
         alreadyLimited: false,
       });
     }
-    const grant = await this.consumeActiveGrant(input.orgId, client.id, item.id);
+    const grant = await this.consumeActiveGrant(input.orgId, client.id, item.id, input.request);
     const decrypted = await this.decryptItem(input.orgId, item.id);
     if (!input.auditAfterSend) {
       await this.#audit(input.orgId, "inject", client.id, decrypted.name, client.id);
@@ -984,6 +989,8 @@ export class HostedKernel {
         environmentId: env.id,
         kind: "item_standing",
         createdAt: at,
+        ...unscopedFields(),
+        expiresAt: null,
       });
     }
     return { item_name: name, last4: last };
@@ -998,8 +1005,14 @@ export class HostedKernel {
     return approveMagic(this.#grantHost(), orgId, actor, role, token);
   }
 
-  async consumeActiveGrant(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord> {
-    return consumeActiveGrant(this.#grantHost(), orgId, clientId, itemId);
+  /** See `kernel-grants.ts` `consumeActiveGrant`: with `call`, the grant's scope must admit it. */
+  async consumeActiveGrant(
+    orgId: string,
+    clientId: string,
+    itemId: string,
+    call?: ConnectorCall,
+  ): Promise<HostedGrantRecord> {
+    return consumeActiveGrant(this.#grantHost(), orgId, clientId, itemId, call);
   }
 
 
@@ -1225,10 +1238,13 @@ export class HostedKernel {
         client_id: g.clientId,
         client_name: clientNames.get(g.clientId) ?? g.clientId,
         status: g.status,
+        policy: g.policy,
         created_at: usage.created_at,
         first_access_at: usage.first_access_at,
         last_access_at: usage.last_access_at,
         approved_at: g.approvedAt,
+        expires_at: g.expiresAt,
+        grant_scope: publicGrantScope(g),
         fetched: usage.fetched,
       });
     }
