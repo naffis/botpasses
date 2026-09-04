@@ -193,9 +193,12 @@ function requestedScopeFor(request: GrantRequest | undefined, item: ItemRecord):
 }
 
 /** Prefix form of a requested path: no query string. */
+/** Path without its query, and without a trailing slash so `/v1/` and `/v1` are one prefix. */
 function pathPrefixOf(path: string): string {
   const q = path.indexOf("?");
-  return q === -1 ? path : path.slice(0, q) || "/";
+  const bare = q === -1 ? path : path.slice(0, q);
+  const trimmed = bare.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed;
 }
 
 function uniq(list: string[]): string[] {
