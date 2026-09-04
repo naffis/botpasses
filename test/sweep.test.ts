@@ -18,8 +18,8 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
     await store.insertEmailOtp({ id: "otp_old", email: "a@x.io", codeScrypt: "h", expiresAt: iso(-HOUR), attempts: 0, sentAt: iso(-2 * HOUR) });
     await store.insertEmailOtp({ id: "otp_live", email: "a@x.io", codeScrypt: "h", expiresAt: iso(HOUR), attempts: 0, sentAt: iso(-1000) });
     // sessions
-    await store.insertSession({ idHash: "s_old", userId: "u1", createdAt: iso(-48 * HOUR), lastSeenAt: iso(-30 * HOUR), expiresAt: iso(-HOUR) });
-    await store.insertSession({ idHash: "s_live", userId: "u1", createdAt: iso(-HOUR), lastSeenAt: iso(-1000), expiresAt: iso(8 * HOUR) });
+    await store.insertSession({ idHash: "s_old", userId: "u1", createdAt: iso(-48 * HOUR), lastSeenAt: iso(-30 * HOUR), expiresAt: iso(-HOUR), mfaAt: null });
+    await store.insertSession({ idHash: "s_live", userId: "u1", createdAt: iso(-HOUR), lastSeenAt: iso(-1000), expiresAt: iso(8 * HOUR), mfaAt: null });
     // approval challenges
     await store.insertChallenge({ id: "c_old", grantId: "g1", codeHash: "h", expiresAt: iso(-HOUR), attempts: 0, kind: "code" });
     await store.insertChallenge({ id: "c_live", grantId: "g2", codeHash: "h", expiresAt: iso(HOUR), attempts: 0, kind: "code" });

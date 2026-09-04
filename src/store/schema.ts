@@ -208,6 +208,14 @@ CREATE TABLE IF NOT EXISTS oidc_payloads (
   PRIMARY KEY (id, kind)
 );
 
+CREATE TABLE IF NOT EXISTS identity_keys (
+  id TEXT PRIMARY KEY,
+  wrapped_iv TEXT NOT NULL,
+  wrapped_ciphertext TEXT NOT NULL,
+  wrapped_tag TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS access_events (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
@@ -248,4 +256,28 @@ ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_token_at TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_seen_at TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS consented_by_user_id TEXT;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last4 TEXT;
+`;
+
+/**
+ * Second identity expansion: MFA-at-sign-in (`mfa_at`), the TOTP failure counter and lockout,
+ * and the in-flight enrollment secret. Expand-only; run after `HOSTED_SCHEMA_IDENTITY_ALTER_*`.
+ */
+export const HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE = `
+ALTER TABLE operator_sessions ADD COLUMN mfa_at TEXT;
+ALTER TABLE users ADD COLUMN totp_failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN totp_locked_until TEXT;
+ALTER TABLE users ADD COLUMN totp_pending_wrapped_iv TEXT;
+ALTER TABLE users ADD COLUMN totp_pending_wrapped_ciphertext TEXT;
+ALTER TABLE users ADD COLUMN totp_pending_wrapped_tag TEXT;
+ALTER TABLE users ADD COLUMN totp_pending_at TEXT;
+`;
+
+export const HOSTED_SCHEMA_IDENTITY_ALTER2_PG = `
+ALTER TABLE operator_sessions ADD COLUMN IF NOT EXISTS mfa_at TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_locked_until TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_wrapped_iv TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_wrapped_ciphertext TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_wrapped_tag TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_at TEXT;
 `;

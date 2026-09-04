@@ -1,9 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { consentHtml, deviceHtml, enrollTotpHtml, signInHtml, signUpHtml } from "./auth-pages.ts";
+import {
+  authEntryHtml,
+  consentHtml,
+  deviceHtml,
+  enrollTotpHtml,
+  verifyTotpHtml,
+} from "./auth-pages.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { totpEnabled } from "./operator-identity.ts";
+import { requestClientIp } from "./identity-limiter.ts";
+import { needsTotpVerify } from "./identity.ts";
 import { HttpError } from "./errors.ts";
-import type { Principal } from "./auth.ts";
+import { requireOperator, type OperatorPrincipal, type Principal } from "./auth.ts";
 
 export type AuthRouteOpts = {
   identity: OperatorIdentity;
@@ -12,7 +20,11 @@ export type AuthRouteOpts = {
   readJson: (req: IncomingMessage) => Promise<Record<string, unknown>>;
   json: (res: ServerResponse, status: number, body: unknown) => void;
   setCookies: (res: ServerResponse, cookies: string[], status: number, body: unknown) => void;
-  clientIp: (req: IncomingMessage) => string;
+  /**
+   * Superseded by `requestClientIp(req)`, which also reads `Fly-Client-IP`. Still accepted so
+   * `http.ts` keeps compiling; drop it there and here together.
+   */
+  clientIp?: (req: IncomingMessage) => string;
 };
 
 export function sendHtml(res: ServerResponse, html: string, extra: Record<string, string>, noStore = true): void {
@@ -22,6 +34,17 @@ export function sendHtml(res: ServerResponse, html: string, extra: Record<string
     ...extra,
   });
   res.end(html);
+}
+
+function redirect(res: ServerResponse, location: string): true {
+  res.writeHead(302, { location });
+  res.end();
+  return true;
+}
+
+/** Where a signed-in-but-not-ready operator has to go next. */
+function pendingStep(op: OperatorPrincipal): "/verify-totp" | "/enroll-totp" {
+  return needsTotpVerify(op) ? "/verify-totp" : "/enroll-totp";
 }
 
 export function tryAuthPage(
@@ -34,31 +57,23 @@ export function tryAuthPage(
   if (method !== "GET" && method !== "HEAD") return false;
   const op = principal?.channel === "operator" ? principal : undefined;
   if (path === "/sign-in" || path === "/sign-up") {
-    if (op?.ready) {
-      res.writeHead(302, { location: "/console" });
-      res.end();
-      return true;
-    }
-    if (op && op.ready === false) {
-      res.writeHead(302, { location: "/enroll-totp" });
-      res.end();
-      return true;
-    }
-    sendHtml(res, path === "/sign-up" ? signUpHtml() : signInHtml(), extra);
+    if (op?.ready) return redirect(res, "/console");
+    if (op && op.ready === false) return redirect(res, pendingStep(op));
+    sendHtml(res, authEntryHtml(path === "/sign-up" ? "sign-up" : "sign-in"), extra);
     return true;
   }
   if (path === "/enroll-totp") {
-    if (op?.ready) {
-      res.writeHead(302, { location: "/console" });
-      res.end();
-      return true;
-    }
-    if (!op) {
-      res.writeHead(302, { location: "/sign-in" });
-      res.end();
-      return true;
-    }
+    if (op?.ready) return redirect(res, "/console");
+    if (!op) return redirect(res, "/sign-in");
+    if (needsTotpVerify(op)) return redirect(res, "/verify-totp");
     sendHtml(res, enrollTotpHtml(), extra);
+    return true;
+  }
+  if (path === "/verify-totp") {
+    if (op?.ready) return redirect(res, "/console");
+    if (!op) return redirect(res, "/sign-in");
+    if (!needsTotpVerify(op)) return redirect(res, "/enroll-totp");
+    sendHtml(res, verifyTotpHtml(), extra);
     return true;
   }
   if (path === "/consent") {
@@ -72,6 +87,19 @@ export function tryAuthPage(
   return false;
 }
 
+function headerString(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name];
+  return typeof raw === "string" ? raw : undefined;
+}
+
+/** A cookie-backed operator session (bootstrap-token operators have no session hash). */
+function requireSession(principal: Principal | undefined): OperatorPrincipal & { sessionHash: string } {
+  if (!principal || principal.channel !== "operator") throw new HttpError(401, "Authentication required");
+  const hash = principal.sessionHash;
+  if (!hash) throw new HttpError(401, "Session required");
+  return { ...principal, sessionHash: hash };
+}
+
 export async function handleAuthApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -81,40 +109,67 @@ export async function handleAuthApi(
   opts: AuthRouteOpts,
 ): Promise<boolean> {
   const cookies = { secure: opts.secure };
+  // `/api/auth/*` is exempt from the global CSRF check in http.ts, so the routes that act on a
+  // session verify the double-submit token here.
+  const assertCsrf = (): void =>
+    opts.identity.assertCsrf(req.headers.cookie, headerString(req, "x-csrf-token"), opts.secure);
   if (method === "POST" && path === "/api/auth/otp/send") {
     const body = await opts.readJson(req);
-    const result = await opts.identity.sendOtp(String(body.email ?? ""), opts.clientIp(req));
+    const result = await opts.identity.sendOtp(String(body.email ?? ""), requestClientIp(req));
     opts.json(res, 200, result);
     return true;
   }
   if (method === "POST" && path === "/api/auth/otp/verify") {
     const body = await opts.readJson(req);
     const result = await opts.identity.verifyOtp(String(body.email ?? ""), String(body.otp ?? ""), cookies);
-    opts.setCookies(res, result.cookies, 200, {
-      ok: true,
-      enroll: !totpEnabled(result.user),
-    });
+    const enrolled = totpEnabled(result.user);
+    opts.setCookies(res, result.cookies, 200, { ok: true, enroll: !enrolled, verify: enrolled });
     return true;
   }
   if (method === "POST" && path === "/api/auth/totp/start") {
-    if (!principal || principal.channel !== "operator") throw new HttpError(401, "Authentication required");
-    const result = await opts.identity.startTotp(principal.userId);
+    const op = requireSession(principal);
+    assertCsrf();
+    const body = await opts.readJson(req);
+    const currentCode = typeof body.current_code === "string" ? body.current_code : undefined;
+    const result = await opts.identity.startTotp(op.userId, { currentCode, sessionReady: op.ready !== false });
     opts.json(res, 200, result);
     return true;
   }
   if (method === "POST" && path === "/api/auth/totp/confirm") {
-    if (!principal || principal.channel !== "operator") throw new HttpError(401, "Authentication required");
+    const op = requireSession(principal);
+    assertCsrf();
     const body = await opts.readJson(req);
-    const result = await opts.identity.confirmTotp(principal.userId, String(body.code ?? ""), cookies);
-    opts.setCookies(res, result.cookies, 200, {
-      ok: true,
-      backup_codes: result.backup_codes,
-    });
+    const result = await opts.identity.confirmTotp(op.userId, op.sessionHash, String(body.code ?? ""), cookies);
+    opts.setCookies(res, result.cookies, 200, { ok: true, backup_codes: result.backup_codes });
+    return true;
+  }
+  if (method === "POST" && path === "/api/auth/totp/verify") {
+    const op = requireSession(principal);
+    assertCsrf();
+    const body = await opts.readJson(req);
+    const result = await opts.identity.verifyTotp(op.userId, op.sessionHash, String(body.code ?? ""), cookies);
+    opts.setCookies(res, result.cookies, 200, { ok: true });
+    return true;
+  }
+  if (method === "GET" && path === "/api/auth/me") {
+    const op = requireOperator(principal);
+    opts.json(res, 200, await opts.identity.accountSummary(op.userId));
+    return true;
+  }
+  if (method === "POST" && path === "/api/auth/backup-codes/regenerate") {
+    const op = requireOperator(principal);
+    if (op.sessionHash) assertCsrf();
+    const body = await opts.readJson(req);
+    const result = await opts.identity.regenerateBackupCodes(op.userId, String(body.code ?? ""));
+    opts.json(res, 200, result);
     return true;
   }
   if (method === "POST" && path === "/api/auth/logout") {
     const hash = principal?.channel === "operator" ? principal.sessionHash : undefined;
-    if (hash) await opts.identity.store.deleteSession(hash);
+    if (hash) {
+      assertCsrf();
+      await opts.identity.store.deleteSession(hash);
+    }
     opts.setCookies(res, opts.identity.logoutCookies(opts.secure), 200, { ok: true });
     return true;
   }

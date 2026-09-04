@@ -111,8 +111,8 @@ test("sweepExpired on Postgres deletes expired OTP, sessions, challenges, needs,
   try {
     await store.insertEmailOtp({ id: `otp_old_${tag}`, email: `${tag}@x.io`, codeScrypt: "h", expiresAt: iso(-HOUR), attempts: 0, sentAt: iso(-2 * HOUR) });
     await store.insertEmailOtp({ id: `otp_live_${tag}`, email: `${tag}@x.io`, codeScrypt: "h", expiresAt: iso(HOUR), attempts: 0, sentAt: iso(-1000) });
-    await store.insertSession({ idHash: `s_old_${tag}`, userId: `u_${tag}`, createdAt: iso(-48 * HOUR), lastSeenAt: iso(-30 * HOUR), expiresAt: iso(-HOUR) });
-    await store.insertSession({ idHash: `s_live_${tag}`, userId: `u_${tag}`, createdAt: iso(-HOUR), lastSeenAt: iso(-1000), expiresAt: iso(8 * HOUR) });
+    await store.insertSession({ idHash: `s_old_${tag}`, userId: `u_${tag}`, createdAt: iso(-48 * HOUR), lastSeenAt: iso(-30 * HOUR), expiresAt: iso(-HOUR), mfaAt: null });
+    await store.insertSession({ idHash: `s_live_${tag}`, userId: `u_${tag}`, createdAt: iso(-HOUR), lastSeenAt: iso(-1000), expiresAt: iso(8 * HOUR), mfaAt: null });
     await store.insertChallenge({ id: `c_old_${tag}`, grantId: `g_${tag}`, codeHash: "h", expiresAt: iso(-HOUR), attempts: 0, kind: "code" });
     await store.insertChallenge({ id: `c_live_${tag}`, grantId: `g2_${tag}`, codeHash: "h", expiresAt: iso(HOUR), attempts: 0, kind: "code" });
     await store.incrementRateHit(`org_${tag}`, "grant", iso(-3 * HOUR));

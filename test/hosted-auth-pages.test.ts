@@ -6,7 +6,14 @@ import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
-import { signInHtml, signUpHtml, enrollTotpHtml, consentHtml, deviceHtml } from "../src/hosted/auth-pages.ts";
+import {
+  signInHtml,
+  signUpHtml,
+  enrollTotpHtml,
+  verifyTotpHtml,
+  consentHtml,
+  deviceHtml,
+} from "../src/hosted/auth-pages.ts";
 import { AUTH_JS } from "../src/hosted/hosted-assets.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { TEST_SESSION_SECRET, cleanup, tempHome } from "./helpers.ts";
@@ -24,14 +31,21 @@ function filesUnder(dir: string): string[] {
 }
 
 test("AC-14 auth HTML has one h1 and no secrets", () => {
-  for (const html of [signInHtml(), signUpHtml(), enrollTotpHtml(), consentHtml("Demo", "uid"), deviceHtml()]) {
+  const pages = [signInHtml(), signUpHtml(), enrollTotpHtml(), verifyTotpHtml(), consentHtml("Demo", "uid"), deviceHtml()];
+  for (const html of pages) {
     assert.equal((html.match(/<h1>/g) ?? []).length, 1);
     assert.doesNotMatch(html, /sk_/);
     assert.doesNotMatch(html, /VAULT_SESSION_SECRET/);
     assert.doesNotMatch(html, /VAULT_OIDC/);
     assert.doesNotMatch(html, /CLERK_/);
     assert.doesNotMatch(html, /12345678/);
+    // Operator-facing copy says "authenticator app"; the acronym and em-dashes are banned (2.1, 2.2).
+    assert.doesNotMatch(html, /TOTP/);
+    assert.doesNotMatch(html, /—/);
+    // The brand link sits inside a landmark (axe `region`).
+    assert.match(html, /<header class="auth-header">\s*<a class="brand auth-brand"/);
   }
+  assert.doesNotMatch(AUTH_JS, /—/);
   assert.match(signInHtml(), /data-testid="sign-in"/);
   assert.match(signInHtml(), /\/assets\/console\.css/);
   assert.match(signInHtml(), /id="otp-verify" hidden/);
@@ -52,6 +66,60 @@ test("AC-14 auth HTML has one h1 and no secrets", () => {
   assert.match(consentHtml("Widgets", "u1"), /btn-primary/);
   assert.doesNotMatch(consentHtml("Widgets", "u1"), /<img/);
   assert.match(deviceHtml(), /data-testid="device-code"/);
+});
+
+test("2.2 sign-in and sign-up are one page with the heading chosen by route", () => {
+  const signIn = signInHtml();
+  const signUp = signUpHtml();
+  assert.match(signIn, /<h1>Sign in<\/h1>/);
+  assert.match(signUp, /<h1>Create account<\/h1>/);
+  assert.match(signUp, /data-testid="sign-up"/);
+  const strip = (html: string): string =>
+    html
+      .replace(/<title>.*?<\/title>/, "")
+      .replace(/<h1>.*?<\/h1>/, "")
+      .replace(/data-testid="sign-(in|up)"/, "")
+      .replace(/<p><a href="\/sign-(in|up)">.*?<\/a><\/p>/, "");
+  assert.equal(strip(signIn), strip(signUp), "only title, heading, testid and the footer link differ");
+  // After "Send code" the script hides the send form and shows the sent line, Resend and the code form.
+  assert.match(signIn, /id="otp-sent"[^>]*hidden/);
+  assert.match(signIn, /id="sent-email"/);
+  assert.match(signIn, /id="otp-change"/);
+  assert.match(signIn, /id="otp-resend"/);
+  assert.match(signIn, /<input type="hidden" name="email" \/>/, "email carried as a real hidden field");
+  assert.match(AUTH_JS, /sendForm\.hidden = true/);
+  assert.match(AUTH_JS, /Resend in " \+ left \+ " s"/);
+  assert.match(AUTH_JS, /r\.body\.message/);
+  assert.match(AUTH_JS, /attempts_remaining/);
+  assert.match(AUTH_JS, /retry_after/);
+});
+
+test("D3 / 2.2 enrollment renders backup codes in a dedicated step and never auto-redirects", () => {
+  const enroll = enrollTotpHtml();
+  assert.match(enroll, /<details>\s*<summary>Show URL<\/summary>\s*<pre id="otpauth"/);
+  assert.match(enroll, /<section id="backup-step" data-testid="backup-codes" hidden>/);
+  assert.match(enroll, /<ol id="backups"/);
+  assert.match(enroll, /id="backups-copy"/);
+  assert.match(enroll, /id="backups-download"[^>]*download="botpasses-backup-codes\.txt"/);
+  assert.match(enroll, /id="backups-continue"[^>]*href="\/console">Continue to console<\/a>/);
+  assert.match(AUTH_JS, /showBackupCodes\(/);
+  assert.match(AUTH_JS, /navigator\.clipboard\.writeText/);
+  assert.match(AUTH_JS, /data:text\/plain;charset=utf-8,/);
+  // The confirm handler ends in the backup step, not in a redirect.
+  const confirmHandler = /totp\/confirm[\s\S]*?\}\);\n/.exec(AUTH_JS)?.[0] ?? "";
+  assert.ok(confirmHandler.length > 0);
+  assert.doesNotMatch(confirmHandler, /location\.href/);
+});
+
+test("0.1 the sign-in authenticator step has its own page and the script routes to it", () => {
+  const verify = verifyTotpHtml();
+  assert.match(verify, /data-testid="verify-totp"/);
+  assert.match(verify, /<form id="totp-verify">/);
+  assert.equal((verify.match(/<input /g) ?? []).length, 1, "one code input");
+  assert.match(verify, /maxlength="10"/, "accepts a 6-digit code or a 10-character backup code");
+  assert.match(AUTH_JS, /if \(r\.body\.enroll\) \{ location\.href = "\/enroll-totp"; return; \}/);
+  assert.match(AUTH_JS, /if \(r\.body\.verify\) \{ location\.href = "\/verify-totp"; return; \}/);
+  assert.match(AUTH_JS, /\/api\/auth\/totp\/verify/);
 });
 
 test("AC-14 GET /sign-in is HTML with CSP self only", async () => {
