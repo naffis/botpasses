@@ -91,6 +91,8 @@ export type ItemPublic = {
   inject: string;
   allowedHosts: string[];
   folderId: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type ClientRecord = {

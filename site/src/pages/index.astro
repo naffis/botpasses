@@ -4,8 +4,6 @@ import Base from "../layouts/Base.astro";
 const GITHUB = "https://github.com/naffis/botpasses";
 
 const request = `{
-  "jsonrpc": "2.0",
-  "id": 1,
   "method": "tools/call",
   "params": {
     "name": "http_request",
@@ -18,15 +16,10 @@ const request = `{
 }`;
 
 const pending = `{
-  "grant_id": "gr_7f3a...",
   "status": "pending",
   "approval_code": "48213907",
   "item_name": "STRIPE_SECRET_KEY",
-  "next": {
-    "for_model": "Ask the user to approve in the Botpasses inbox or with approval_code, then retry.",
-    "tool": "http_request",
-    "arguments": { "host": "api.stripe.com", "method": "GET", "path": "/v1/balance" }
-  }
+  "next": { "for_model": "Ask the user to approve, then retry." }
 }`;
 
 const result = `{
@@ -167,8 +160,8 @@ Stored         ••••4k2p</code></pre>
       {works.map((w) => <li>{w}</li>)}
     </ul>
     <p class="section-intro" style="margin-top:1rem">
-      Setup pages: <a href="/docs/connect/claude">Claude</a>, <a href="/docs/connect/claude-code">Claude Code</a>,
-      <a href="/docs/connect/cursor">Cursor</a>, <a href="/docs/connect/chatgpt">ChatGPT</a>,
+      Setup pages: <a href="/docs/connect/claude">Claude</a>, <a href="/docs/connect/claude-code">Claude Code</a>,{" "}
+      <a href="/docs/connect/cursor">Cursor</a>, <a href="/docs/connect/chatgpt">ChatGPT</a>,{" "}
       <a href="/docs/connect/grok">Grok</a>.
     </p>
   </section>
@@ -212,7 +205,7 @@ Stored         ••••4k2p</code></pre>
       <div class="card">
         <h3>The code is public</h3>
         <p>
-          The CLI, the hosted server, the connector, and the tests are at
+          The CLI, the hosted server, the connector, and the tests are at{" "}
           <a href={GITHUB} rel="noopener">github.com/naffis/botpasses</a>. Design decisions are written down as
           ADRs, including the one that rejects a zero-knowledge claim.
         </p>
@@ -237,7 +230,7 @@ Stored         ••••4k2p</code></pre>
     ))}
     <p class="section-intro" style="margin-top:1rem">
       More in the <a href="/docs/faq">docs FAQ</a> and <a href="/docs/troubleshooting">Troubleshooting</a>.
-      Questions: <a href="mailto:support@botpasses.com">support@botpasses.com</a>. Security reports:
+      Questions: <a href="mailto:support@botpasses.com">support@botpasses.com</a>. Security reports:{" "}
       <a href="mailto:security@botpasses.com">security@botpasses.com</a>.
     </p>
   </section>

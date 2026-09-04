@@ -20,7 +20,9 @@ const { prev, next } = neighbours(items, href);
 const isIndex = href === "/docs";
 
 const crumbs = [{ href: "/docs", label: "Docs" }];
-if (!isIndex && current) crumbs.push({ href: `#section-${current.section}`, label: SECTION_LABELS[current.section] });
+if (!isIndex && current && SECTION_LABELS[current.section] !== label) {
+  crumbs.push({ href: `#section-${current.section}`, label: SECTION_LABELS[current.section] });
+}
 if (!isIndex) crumbs.push({ href, label });
 
 const site = Astro.site?.toString().replace(/\/$/, "") ?? "https://botpasses.com";

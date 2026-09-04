@@ -240,7 +240,7 @@ async function postApprove(id: string, body: LimitsBody, control: HTMLButtonElem
       flash(loadErrorText(err, "Approve failed"), false);
     }
   });
-  await loadInbox();
+  await loadInbox({ force: true });
   listeners.onChanged();
 }
 
@@ -267,11 +267,12 @@ async function deny(id: string, button: HTMLButtonElement): Promise<void> {
       flash(loadErrorText(err, "Deny failed"), false);
     }
   });
-  await loadInbox();
+  await loadInbox({ force: true });
   listeners.onChanged();
 }
 
-export async function loadInbox(): Promise<void> {
+/** `force` re-renders even while a limits form is open (after an approve or deny). */
+export async function loadInbox(opts: { force?: boolean } = {}): Promise<void> {
   const el = byId("inbox");
   if (!el) return;
   setHidden("inbox-error", true);
@@ -288,7 +289,7 @@ export async function loadInbox(): Promise<void> {
     listeners.onCount(count);
     setHidden("inbox-empty", needs.length + grants.length > 0);
     // A poll must not wipe a limits form the operator is filling in.
-    if (el.querySelector("details[data-limits][open]")) return;
+    if (!opts.force && el.querySelector("details[data-limits][open]")) return;
     const now = Date.now();
     render(el, html`${needs.map(needCard)}${grants.map((g) => grantCard(g, now))}`);
   } catch (err) {
@@ -346,7 +347,7 @@ export function bindInbox(on: InboxListeners): void {
       } catch (err) {
         flash(loadErrorText(err, "Code rejected"), false);
       }
-      await loadInbox();
+      await loadInbox({ force: true });
       listeners.onChanged();
     });
   });

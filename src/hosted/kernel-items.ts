@@ -99,7 +99,10 @@ export type DecryptedItem = {
   kind: ItemKind;
 };
 
-type PublicItemSource = Pick<ItemRecord, "id" | "name" | "kind" | "last4" | "username" | "inject" | "allowedHostsJson" | "folderId">;
+type PublicItemSource = Pick<
+  ItemRecord,
+  "id" | "name" | "kind" | "last4" | "username" | "inject" | "allowedHostsJson" | "folderId" | "createdAt" | "updatedAt"
+>;
 
 function nowIso(d: Date): string {
   return d.toISOString();
@@ -140,6 +143,8 @@ export function publicItem(environment: VaultEnvName, item: PublicItemSource): I
     inject: item.inject,
     allowedHosts: parseHosts(item.allowedHostsJson),
     folderId: item.folderId,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
   };
   assertSafePublicObject("item", pub);
   return pub;
@@ -226,6 +231,8 @@ export async function createItem(host: ItemHost, input: CreateItemInput): Promis
     inject: input.inject,
     allowedHostsJson: JSON.stringify(input.allowedHosts),
     folderId,
+    createdAt: at,
+    updatedAt: at,
   });
 }
 

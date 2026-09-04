@@ -72,7 +72,7 @@ export function hostedOperatorHtml(
   const defaultEnv = defaultEnvironmentForPlane(plane);
   const envAttr = environmentsForDeployPlane(plane).join(",");
   const signin = hosted
-    ? `<p id="console-signin" class="signin" data-testid="console-signin"><a href="/sign-in">Sign in</a> or <a href="/sign-up">Create account</a></p>`
+    ? `<p id="console-signin" class="signin" data-testid="console-signin" hidden><a href="/sign-in">Sign in</a> or <a href="/sign-up">Create account</a></p>`
     : `<p id="console-signin" class="signin" data-testid="console-signin">Local operator console. Sign in is not required on loopback.</p>`;
   const planeLabel = plane === "staging" ? `<p class="plane-label" data-testid="plane-label">Staging</p>` : "";
   return `<!doctype html>

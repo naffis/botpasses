@@ -31,7 +31,7 @@ An app token can call endpoints that are not about a person, for example `GET /v
 
 When an agent hits one of those with an app token, the tool result says so instead of failing silently. To fix it:
 
-1. Open the credential in **Vault** and choose **Connect Spotify user**.
+1. Open the credential in **Credentials** and choose **Connect Spotify account**.
 2. Add the redirect URI to your Spotify app: `https://botpasses.com/integrations/spotify/callback` (or `http://127.0.0.1:8888/callback` for a local setup).
 3. Approve in the Spotify consent screen. Botpasses stores the refresh token in the vault and uses it on later calls. The refresh token and the access tokens stay out of the model.
 

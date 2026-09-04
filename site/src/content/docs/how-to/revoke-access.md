@@ -29,7 +29,7 @@ Every revoke asks you to confirm in a dialog before the request is sent.
 
 ## Deleting a credential
 
-Deleting a credential in **Vault** also ends every approval for it. Rotating a credential keeps approvals and replaces the value.
+Deleting a credential in **Credentials** also ends every approval for it. Rotating a credential keeps approvals and replaces the value.
 
 ## By API
 

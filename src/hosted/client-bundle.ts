@@ -1152,7 +1152,7 @@ async function postApprove(id        , body            , control                
       flash(loadErrorText(err, "Approve failed"), false);
     }
   });
-  await loadInbox();
+  await loadInbox({ force: true });
   listeners.onChanged();
 }
 
@@ -1179,11 +1179,12 @@ async function deny(id        , button                   )                {
       flash(loadErrorText(err, "Deny failed"), false);
     }
   });
-  await loadInbox();
+  await loadInbox({ force: true });
   listeners.onChanged();
 }
 
-async function loadInbox()                {
+/** \`force\` re-renders even while a limits form is open (after an approve or deny). */
+async function loadInbox(opts                      = {})                {
   const el = byId("inbox");
   if (!el) return;
   setHidden("inbox-error", true);
@@ -1200,7 +1201,7 @@ async function loadInbox()                {
     listeners.onCount(count);
     setHidden("inbox-empty", needs.length + grants.length > 0);
     // A poll must not wipe a limits form the operator is filling in.
-    if (el.querySelector("details[data-limits][open]")) return;
+    if (!opts.force && el.querySelector("details[data-limits][open]")) return;
     const now = Date.now();
     render(el, html\`\${needs.map(needCard)}\${grants.map((g) => grantCard(g, now))}\`);
   } catch (err) {
@@ -1258,7 +1259,7 @@ function bindInbox(on                )       {
       } catch (err) {
         flash(loadErrorText(err, "Code rejected"), false);
       }
-      await loadInbox();
+      await loadInbox({ force: true });
       listeners.onChanged();
     });
   });
@@ -1300,7 +1301,8 @@ function itemHosts(i         )           {
  * not its input, so \`refresh\` items offer no connect.
  */
 function connectProviderFor(i         )                       {
-  if (i.inject === "refresh") return undefined;
+  // The connect flow exchanges a code with the app's client secret; an API token has none.
+  if (i.kind !== "client_secret" || i.inject === "refresh") return undefined;
   for (const host of itemHosts(i)) {
     const provider = providerForHost(host);
     if (provider?.authorizeUrl) return provider;
@@ -1593,7 +1595,7 @@ function grantRow(g                   )           {
       ])}</p>
     </div>
     <div class="access-row-actions">
-      \${live ? html\`<button type="button" class="btn-danger btn-small" data-grant-revoke="\${g.id}" data-testid="grant-revoke">Revoke</button>\` : ""}
+      \${live ? html\`<button type="button" class="btn-danger btn-small" data-grant-revoke="\${g.id}" data-testid="grant-revoke">\${g.status === "pending" ? "Deny" : "Revoke"}</button>\` : ""}
       <a class="access-log-link" href="\${agentsHash("activity", { agent: g.client_id, credential: g.item_name })}">Activity</a>
     </div>
   </div>\`;

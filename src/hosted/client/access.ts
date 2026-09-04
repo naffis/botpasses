@@ -126,7 +126,7 @@ function grantRow(g: ScopedAccessGrant): SafeHtml {
       ])}</p>
     </div>
     <div class="access-row-actions">
-      ${live ? html`<button type="button" class="btn-danger btn-small" data-grant-revoke="${g.id}" data-testid="grant-revoke">Revoke</button>` : ""}
+      ${live ? html`<button type="button" class="btn-danger btn-small" data-grant-revoke="${g.id}" data-testid="grant-revoke">${g.status === "pending" ? "Deny" : "Revoke"}</button>` : ""}
       <a class="access-log-link" href="${agentsHash("activity", { agent: g.client_id, credential: g.item_name })}">Activity</a>
     </div>
   </div>`;

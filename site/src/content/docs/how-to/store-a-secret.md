@@ -11,7 +11,7 @@ A **credential** is the stored thing: an API key, a token, or an OAuth client se
 ## In the console
 
 1. [Sign in](/sign-in) and open the [console](/console).
-2. In **Vault**, choose **Store credential**.
+2. In **Credentials**, choose **Store credential**.
 3. **Name.** Env-var style: `STRIPE_SECRET_KEY`. Uppercase letters, digits, and underscores, starting with a letter (`[A-Z][A-Z0-9_]{0,127}`). Names are unique per environment.
 4. **Kind.** *API token* sends the value as `Authorization: Bearer`. *Client ID and secret* is an OAuth app secret; enter the public Client ID as well. It is stored as `client_secret` and Botpasses mints app tokens with it instead of sending it as a Bearer. See [Use an OAuth client secret](/docs/how-to/use-an-oauth-client-secret).
 5. **Allowed hosts.** The HTTPS hostnames the agent may call with this credential, such as `api.stripe.com`. Hostnames only, not URLs. Only these hosts will ever receive the value.

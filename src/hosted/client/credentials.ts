@@ -51,7 +51,8 @@ export function itemHosts(i: ItemRow): string[] {
  * not its input, so `refresh` items offer no connect.
  */
 export function connectProviderFor(i: ItemRow): Provider | undefined {
-  if (i.inject === "refresh") return undefined;
+  // The connect flow exchanges a code with the app's client secret; an API token has none.
+  if (i.kind !== "client_secret" || i.inject === "refresh") return undefined;
   for (const host of itemHosts(i)) {
     const provider = providerForHost(host);
     if (provider?.authorizeUrl) return provider;

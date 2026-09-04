@@ -17,7 +17,7 @@ There is no password. Every sign-in is an email code plus your authenticator.
 
 ## 2. Store a credential
 
-Open the [console](/console). In **Vault**, choose **Store credential**. Give it an env-var style name such as `STRIPE_SECRET_KEY`, paste the value, and list the API hostnames it may be sent to (for example `api.stripe.com`). Only those hosts will ever receive it.
+Open the [console](/console). In **Credentials**, choose **Store credential**. Give it an env-var style name such as `STRIPE_SECRET_KEY`, paste the value, and list the API hostnames it may be sent to (for example `api.stripe.com`). Only those hosts will ever receive it.
 
 Full steps and the options: [Store a credential](/docs/how-to/store-a-secret).
 
