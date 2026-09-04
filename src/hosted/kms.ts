@@ -105,6 +105,28 @@ export function selectKekProvider(
   return new LocalKekProvider(env.VAULT_KEK ?? "");
 }
 
+/**
+ * The KEK a rotation is moving away from, accepted at boot so envelopes still wrapped under it
+ * open (and are re-wrapped under the current KEK in place). `VAULT_KEK_PREVIOUS_WRAPPED` with
+ * `VAULT_KMS_KEY_ID` on a plane, else raw `VAULT_KEK_PREVIOUS`; undefined when neither is set.
+ */
+export function selectPreviousKekProvider(
+  env: NodeJS.ProcessEnv,
+  decryptFn?: KekDecryptFn,
+): KekProvider | undefined {
+  const plane = env.VAULT_DEPLOY_PLANE;
+  const onPlane = plane === "staging" || plane === "production";
+  const wrapped = env.VAULT_KEK_PREVIOUS_WRAPPED?.trim() ?? "";
+  const keyId = env.VAULT_KMS_KEY_ID?.trim() ?? "";
+  if (onPlane && wrapped && keyId) {
+    const app = env.FLY_APP_NAME?.trim() ?? "";
+    if (!app) throw new Error("KMS unwrap requires FLY_APP_NAME");
+    return new KmsKekProvider(wrapped, kekEncryptionContext({ plane, app }), decryptFn ?? awsKmsDecrypt(keyId));
+  }
+  const raw = env.VAULT_KEK_PREVIOUS?.trim() ?? "";
+  return raw ? new LocalKekProvider(raw) : undefined;
+}
+
 export function isTransientKmsError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const rec = err as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };

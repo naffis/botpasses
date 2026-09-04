@@ -6,6 +6,7 @@ import { requireModelOrOperator, requireOperator, type Principal } from "./auth.
 import { approveConfirmHtml, approveDoneHtml, approveErrorHtml } from "./approve-page.ts";
 import { HttpError, isHttpError } from "./errors.ts";
 import { asEnv, asPolicy, json, optional, readJson, readJsonOrForm, sendHtml } from "./http-util.ts";
+import { needsTotpVerify } from "./identity.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { GrantRequest, ScopeInput } from "./kernel-grants.ts";
 
@@ -115,6 +116,13 @@ export async function handleGrantRoutes(
   if (method === "GET" && path === "/approve") {
     if (!principal) {
       res.writeHead(302, { location: "/sign-in" });
+      res.end();
+      return true;
+    }
+    // A session that has not passed the authenticator step goes to that step, like a signed-out
+    // visitor goes to sign-in; the confirm page only renders for a ready operator.
+    if (principal.channel === "operator" && principal.ready === false) {
+      res.writeHead(302, { location: needsTotpVerify(principal) ? "/verify-totp" : "/enroll-totp" });
       res.end();
       return true;
     }

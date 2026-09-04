@@ -16,7 +16,7 @@ node --experimental-strip-types --disable-warning=ExperimentalWarning \
   scripts/hosted-backup.ts decrypt botpasses-<stamp>.dump.enc vault.dump
 ```
 
-Wrong key fails closed (GCM auth).
+Wrong key fails closed (GCM auth). The envelope is `BPBK`, one version byte (currently 1), then the AES-256-GCM nonce, tag, and ciphertext; the header is authenticated with the body. `decrypt` refuses a file without the magic (`bad magic`), a version it does not know (`unsupported backup envelope version`), or any edited byte, so a truncated download or an object from another tool never yields a partial dump.
 
 ## Restore into a scratch database
 

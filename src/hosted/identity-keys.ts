@@ -43,16 +43,21 @@ export type IdentityRotateResult = {
  * Identity DEK: one random 32-byte key wrapped under the KEK (AAD = row id) and created on
  * first use. Authenticator secrets are wrapped under it with AAD = user id, so KEK rotation
  * re-wraps a single row instead of every user.
+ *
+ * With `previousKek` (a rotation in progress, `VAULT_KEK_PREVIOUS`), a row still wrapped under
+ * the previous KEK opens and is re-wrapped under the current one in place.
  */
 export class IdentityKeyring {
   readonly #store: VaultStore;
   readonly #kek: Buffer;
+  readonly #previousKek: Buffer | undefined;
   readonly #now: () => Date;
   #dek: Buffer | undefined;
 
-  constructor(store: VaultStore, kek: Buffer, now: () => Date) {
+  constructor(store: VaultStore, kek: Buffer, now: () => Date, previousKek?: Buffer) {
     this.#store = store;
     this.#kek = kek;
+    this.#previousKek = previousKek;
     this.#now = now;
   }
 
@@ -64,15 +69,33 @@ export class IdentityKeyring {
       row = await this.#store.getIdentityKey(IDENTITY_KEY_ID);
       if (!row) throw new Error("identity key missing after insert");
     }
-    this.#dek = unwrapDek(envelopeOf(row), this.#kek, IDENTITY_KEY_ID);
+    this.#dek = await this.#openRow(row);
     return this.#dek;
+  }
+
+  /** Current KEK first; a row still under the previous KEK is re-wrapped under the current one. */
+  async #openRow(row: IdentityKeyRecord): Promise<Buffer> {
+    const envelope = envelopeOf(row);
+    try {
+      return unwrapDek(envelope, this.#kek, IDENTITY_KEY_ID);
+    } catch (err) {
+      if (!this.#previousKek) throw err;
+    }
+    const dek = unwrapDek(envelope, this.#previousKek, IDENTITY_KEY_ID);
+    const next = wrapDek(dek, this.#kek, IDENTITY_KEY_ID);
+    await this.#store.updateIdentityKey(IDENTITY_KEY_ID, {
+      wrappedIv: next.iv,
+      wrappedCiphertext: next.ciphertext,
+      wrappedTag: next.tag,
+    });
+    return dek;
   }
 
   async wrap(userId: string, kind: WrappedSecretKind, secret: string): Promise<Envelope> {
     return encrypt(secret, await this.dek(), secretAad(userId, kind));
   }
 
-  /** Migrate-on-read: tries the identity DEK, then the raw KEK (legacy rows, AAD = user id). */
+  /** Migrate-on-read: tries the identity DEK, then the raw KEK (legacy rows, AAD = user id), then the previous raw KEK. */
   async unwrap(userId: string, kind: WrappedSecretKind, envelope: Envelope): Promise<UnwrapResult> {
     const dek = await this.dek();
     try {
@@ -80,7 +103,13 @@ export class IdentityKeyring {
     } catch {
       // Not under the identity DEK; fall through to the legacy raw-KEK envelope.
     }
-    const secret = decrypt(envelope, this.#kek, userId);
+    let secret: string;
+    try {
+      secret = decrypt(envelope, this.#kek, userId);
+    } catch (err) {
+      if (!this.#previousKek) throw err;
+      secret = decrypt(envelope, this.#previousKek, userId);
+    }
     return { secret, rewrapped: encrypt(secret, dek, secretAad(userId, kind)) };
   }
 

@@ -31,11 +31,14 @@ import {
   HOSTED_SCHEMA_SQLITE,
   HOSTED_SCHEMA_TEAM,
   HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+  HOSTED_SCHEMA_V10_ALTER_SQLITE,
+  HOSTED_SCHEMA_V10_INDEXES,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
   GRANT_INSERT_COLUMNS,
   grantValues,
+  ITEM_AAD_VERSION,
   ITEM_INSERT_COLUMNS,
   itemValues,
   mapAccess,
@@ -67,9 +70,11 @@ import {
   type AuditListFilter,
   type IdentityKeyRecord,
   type InviteRecord,
+  type LegacyAadItem,
   type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
+  type RateHitKind,
   type SweepCounts,
   type UserRow,
   type UserSecurityState,
@@ -77,6 +82,7 @@ import {
 } from "./types.ts";
 
 const GRANT_INSERT_SQL = `INSERT INTO grants (${GRANT_INSERT_COLUMNS}) VALUES (${placeholders(20, "sqlite")})`;
+const TERMINAL_GRANT_STATUSES = "('revoked', 'consumed', 'expired')";
 
 /** Column additions shipped after the base schema; "duplicate column" means the database has them. */
 const SQLITE_ALTERS = [
@@ -85,6 +91,7 @@ const SQLITE_ALTERS = [
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+  HOSTED_SCHEMA_V10_ALTER_SQLITE,
 ];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
@@ -115,6 +122,7 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   }
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
   db.exec(HOSTED_SCHEMA_TEAM);
+  db.exec(HOSTED_SCHEMA_V10_INDEXES);
   return new SqliteHostedStore(db);
 }
 
@@ -135,8 +143,8 @@ export class SqliteHostedStore implements VaultStore {
   async insertOrg(row: OrgRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -145,11 +153,19 @@ export class SqliteHostedStore implements VaultStore {
         row.wrappedDekCiphertext,
         row.wrappedDekTag,
         row.createdAt,
+        row.createdBy,
       );
   }
 
   async listOrgs(): Promise<OrgRecord[]> {
     const rows = this.#db.prepare("SELECT * FROM orgs").all() as Record<string, unknown>[];
+    return rows.map(mapOrg);
+  }
+
+  async listOrgsCreatedBy(userId: string): Promise<OrgRecord[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM orgs WHERE created_by = ? ORDER BY created_at, id")
+      .all(userId) as Record<string, unknown>[];
     return rows.map(mapOrg);
   }
 
@@ -306,7 +322,7 @@ export class SqliteHostedStore implements VaultStore {
 
   async insertItem(row: ItemRecord): Promise<void> {
     this.#db
-      .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+      .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "sqlite")})`)
       .run(...itemValues(row));
   }
 
@@ -316,9 +332,64 @@ export class SqliteHostedStore implements VaultStore {
   ): Promise<void> {
     this.#db
       .prepare(
-        "UPDATE items SET iv = ?, ciphertext = ?, tag = ?, last4 = ?, updated_at = ? WHERE id = ?",
+        "UPDATE items SET iv = ?, ciphertext = ?, tag = ?, last4 = ?, updated_at = ?, aad_version = ? WHERE id = ?",
       )
-      .run(patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, id);
+      .run(patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, ITEM_AAD_VERSION, id);
+  }
+
+  async updateItemEnvelopeAndMeta(
+    id: string,
+    patch: Pick<
+      ItemRecord,
+      | "iv"
+      | "ciphertext"
+      | "tag"
+      | "last4"
+      | "name"
+      | "kind"
+      | "environmentId"
+      | "username"
+      | "inject"
+      | "allowedHostsJson"
+      | "updatedAt"
+    >,
+  ): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE items SET iv = ?, ciphertext = ?, tag = ?, last4 = ?, name = ?, kind = ?, environment_id = ?,
+         username = ?, inject = ?, allowed_hosts_json = ?, updated_at = ?, aad_version = ? WHERE id = ?`,
+      )
+      .run(
+        patch.iv,
+        patch.ciphertext,
+        patch.tag,
+        patch.last4,
+        patch.name,
+        patch.kind,
+        patch.environmentId,
+        patch.username,
+        patch.inject,
+        patch.allowedHostsJson,
+        patch.updatedAt,
+        ITEM_AAD_VERSION,
+        id,
+      );
+  }
+
+  async listItemsWithLegacyAad(): Promise<LegacyAadItem[]> {
+    const rows = this.#db
+      .prepare(
+        `SELECT i.*, v.org_id AS org_id FROM items i
+         JOIN environments e ON e.id = i.environment_id
+         JOIN vaults v ON v.id = e.vault_id
+         WHERE i.aad_version < ? ORDER BY v.org_id, i.id`,
+      )
+      .all(ITEM_AAD_VERSION) as Record<string, unknown>[];
+    return rows.map((r) => ({ item: mapItem(r), orgId: String(r.org_id) }));
+  }
+
+  async setItemAadVersion(id: string, version: number): Promise<void> {
+    this.#db.prepare("UPDATE items SET aad_version = ? WHERE id = ?").run(version, id);
   }
 
   async updateItemMeta(
@@ -415,7 +486,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("UPDATE clients SET environment = ? WHERE id = ?").run(environment, id);
   }
 
-  async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+  async incrementRateHit(orgId: string, kind: RateHitKind, windowStart: string): Promise<number> {
     this.#db
       .prepare(
         `INSERT INTO rate_hits (org_id, kind, window_start, count) VALUES (?, ?, ?, 1)
@@ -428,7 +499,7 @@ export class SqliteHostedStore implements VaultStore {
     return Number(r.count);
   }
 
-  async countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+  async countRateHits(orgId: string, kind: RateHitKind, windowStart: string): Promise<number> {
     const r = this.#db
       .prepare("SELECT count FROM rate_hits WHERE org_id = ? AND kind = ? AND window_start = ?")
       .get(orgId, kind, windowStart) as { count: number } | undefined;
@@ -568,6 +639,15 @@ export class SqliteHostedStore implements VaultStore {
     const rows = this.#db
       .prepare("SELECT * FROM grants WHERE org_id = ? AND status = 'pending' ORDER BY created_at DESC")
       .all(orgId) as Record<string, unknown>[];
+    return rows.map(mapGrant);
+  }
+
+  async listGrantsForPair(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord[]> {
+    const rows = this.#db
+      .prepare(
+        "SELECT * FROM grants WHERE client_id = ? AND item_id = ? AND org_id = ? ORDER BY created_at DESC",
+      )
+      .all(clientId, itemId, orgId) as Record<string, unknown>[];
     return rows.map(mapGrant);
   }
 
@@ -852,7 +932,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.exec("BEGIN");
     try {
       this.#db
-        .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+        .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "sqlite")})`)
         .run(...itemValues(input.item));
       this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(input.grant));
       const claimed = this.#db
@@ -1210,6 +1290,7 @@ export class SqliteHostedStore implements VaultStore {
     const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
     const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
     const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const thirtyDaysAgo = new Date(Date.parse(nowIso) - 30 * 24 * 60 * 60 * 1000).toISOString();
     const run = (sql: string, ...params: string[]): number =>
       Number(this.#db.prepare(sql).run(...params).changes);
     return {
@@ -1226,6 +1307,11 @@ export class SqliteHostedStore implements VaultStore {
       rateHits: run("DELETE FROM rate_hits WHERE window_start < ?", twoHoursAgo),
       oidcPayloads: run("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < ?", nowIso),
       orgInvites: run("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < ?", weekAgo),
+      grants: run(
+        `DELETE FROM grants WHERE status IN ${TERMINAL_GRANT_STATUSES}
+         AND COALESCE(consumed_at, expires_at, approved_at, created_at) < ?`,
+        thirtyDaysAgo,
+      ),
     };
   }
 

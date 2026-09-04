@@ -425,6 +425,69 @@ for (const backend of backends) {
     }
   });
 
+  test(`[${backend.name}] orgs: created_by, pair grants, envelope+meta, legacy AAD listing, approve_code hits, grant sweep`, async () => {
+    const { store, done } = await backend.open();
+    try {
+      const id = ids("w5");
+      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const owner = id("owner");
+      const { orgId } = await kernel.createOrg(id("org"), owner);
+      assert.equal((await store.getOrg(orgId))?.createdBy, owner);
+      assert.deepEqual((await store.listOrgsCreatedBy(owner)).map((o) => o.id), [orgId]);
+      assert.deepEqual(await store.listOrgsCreatedBy(id("nobody")), []);
+
+      const item = await kernel.createItem({
+        orgId,
+        actor: owner,
+        environment: "staging",
+        kind: "secret",
+        name: "PAIR",
+        value: CANARY,
+        allowedHosts: ["api.example.com"],
+        inject: "bearer",
+      });
+      const { client } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
+      const { client: other } = await kernel.createModelClient({ orgId, name: "n", environment: "staging" });
+      const asked = await kernel.requestGrant({ orgId, clientId: client.id, itemName: "PAIR", environment: "staging" });
+      await kernel.requestGrant({ orgId, clientId: other.id, itemName: "PAIR", environment: "staging" });
+      assert.deepEqual((await store.listGrantsForPair(orgId, client.id, item.id)).map((g) => g.id), [asked.grant.id]);
+      assert.deepEqual(await store.listGrantsForPair(id("other-org"), client.id, item.id), []);
+
+      const before = await store.getItem(item.id);
+      assert.ok(before);
+      await store.updateItemEnvelopeAndMeta(item.id, {
+        ...before,
+        name: "PAIR_2",
+        allowedHostsJson: JSON.stringify(["api.two.example"]),
+        inject: "header:X-Key",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+      });
+      const after = await store.getItem(item.id);
+      assert.deepEqual([after?.name, after?.inject, after?.allowedHostsJson, after?.updatedAt], ["PAIR_2", "header:X-Key", '["api.two.example"]', "2026-02-01T00:00:00.000Z"]);
+
+      assert.deepEqual((await store.listItemsWithLegacyAad()).filter((x) => x.orgId === orgId), [], "fresh rows carry the current AAD version");
+      await store.setItemAadVersion(item.id, 0);
+      const legacy = (await store.listItemsWithLegacyAad()).filter((x) => x.orgId === orgId);
+      assert.deepEqual(legacy.map((x) => x.item.id), [item.id]);
+      const legacyRow = legacy[0]?.item;
+      assert.ok(legacyRow);
+      await store.updateItemEnvelope(item.id, { ...legacyRow, updatedAt: legacyRow.updatedAt });
+      assert.deepEqual((await store.listItemsWithLegacyAad()).filter((x) => x.orgId === orgId), [], "an envelope write records the binding");
+
+      const window = "2026-01-01T00:00:00.000Z";
+      assert.equal(await store.incrementRateHit(orgId, "approve_code", window), 1);
+      assert.equal(await store.countRateHits(orgId, "approve_code", window), 1);
+      assert.equal(await store.countRateHits(orgId, "grant", window), 0, "approve_code has its own bucket");
+
+      await store.updateGrant({ ...asked.grant, status: "revoked", approvedAt: "2020-01-01T00:00:00.000Z" });
+      const swept = await store.sweepExpired("2026-01-01T00:00:00.000Z");
+      assert.ok(swept.grants >= 1);
+      assert.equal(await store.getGrant(asked.grant.id), undefined);
+    } finally {
+      await done();
+    }
+  });
+
   test(`[${backend.name}] deleteOrg removes items, clients, grants, audit, and members`, async () => {
     const { store, done } = await backend.open();
     try {

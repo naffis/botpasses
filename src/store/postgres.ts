@@ -29,11 +29,14 @@ import {
   HOSTED_SCHEMA_SQLITE,
   HOSTED_SCHEMA_TEAM,
   HOSTED_SCHEMA_TEAM_ALTER_PG,
+  HOSTED_SCHEMA_V10_ALTER_PG,
+  HOSTED_SCHEMA_V10_INDEXES,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
   GRANT_INSERT_COLUMNS,
   grantValues,
+  ITEM_AAD_VERSION,
   ITEM_INSERT_COLUMNS,
   itemValues,
   mapAccess,
@@ -65,14 +68,18 @@ import {
   type AuditListFilter,
   type IdentityKeyRecord,
   type InviteRecord,
+  type LegacyAadItem,
   type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
+  type RateHitKind,
   type SweepCounts,
   type UserRow,
   type UserSecurityState,
   type VaultStore,
 } from "./types.ts";
+
+const TERMINAL_GRANT_STATUSES = "('revoked', 'consumed', 'expired')";
 
 function asRecord(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
@@ -153,6 +160,8 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_IDENTITY_INDEXES);
     await this.#pool.query(HOSTED_SCHEMA_TEAM);
     await this.#pool.query(HOSTED_SCHEMA_TEAM_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_V10_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_V10_INDEXES);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
@@ -164,6 +173,7 @@ export class PostgresStore implements VaultStore {
     const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
     const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
     const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const thirtyDaysAgo = new Date(Date.parse(nowIso) - 30 * 24 * 60 * 60 * 1000).toISOString();
     const count = async (sql: string, params: string[]): Promise<number> => {
       const res = await this.#pool.query(sql, params);
       return res.rowCount ?? 0;
@@ -183,6 +193,11 @@ export class PostgresStore implements VaultStore {
         nowIso,
       ]),
       orgInvites: await count("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < $1", [weekAgo]),
+      grants: await count(
+        `DELETE FROM grants WHERE status IN ${TERMINAL_GRANT_STATUSES}
+         AND COALESCE(consumed_at, expires_at, approved_at, created_at) < $1`,
+        [thirtyDaysAgo],
+      ),
     };
   }
 
@@ -192,14 +207,19 @@ export class PostgresStore implements VaultStore {
 
   async insertOrg(row: OrgRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [row.id, row.name, row.wrappedDekIv, row.wrappedDekCiphertext, row.wrappedDekTag, row.createdAt],
+      `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [row.id, row.name, row.wrappedDekIv, row.wrappedDekCiphertext, row.wrappedDekTag, row.createdAt, row.createdBy],
     );
   }
 
   async listOrgs(): Promise<OrgRecord[]> {
     const r = await this.#pool.query("SELECT * FROM orgs");
+    return r.rows.map((row) => mapOrg(asRecord(row)));
+  }
+
+  async listOrgsCreatedBy(userId: string): Promise<OrgRecord[]> {
+    const r = await this.#pool.query("SELECT * FROM orgs WHERE created_by = $1 ORDER BY created_at, id", [userId]);
     return r.rows.map((row) => mapOrg(asRecord(row)));
   }
 
@@ -353,7 +373,7 @@ export class PostgresStore implements VaultStore {
 
   async insertItem(row: ItemRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "pg")})`,
+      `INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "pg")})`,
       itemValues(row),
     );
   }
@@ -363,9 +383,65 @@ export class PostgresStore implements VaultStore {
     patch: Pick<ItemRecord, "iv" | "ciphertext" | "tag" | "last4" | "updatedAt">,
   ): Promise<void> {
     await this.#pool.query(
-      "UPDATE items SET iv=$1, ciphertext=$2, tag=$3, last4=$4, updated_at=$5 WHERE id=$6",
-      [patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, id],
+      "UPDATE items SET iv=$1, ciphertext=$2, tag=$3, last4=$4, updated_at=$5, aad_version=$6 WHERE id=$7",
+      [patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, ITEM_AAD_VERSION, id],
     );
+  }
+
+  async updateItemEnvelopeAndMeta(
+    id: string,
+    patch: Pick<
+      ItemRecord,
+      | "iv"
+      | "ciphertext"
+      | "tag"
+      | "last4"
+      | "name"
+      | "kind"
+      | "environmentId"
+      | "username"
+      | "inject"
+      | "allowedHostsJson"
+      | "updatedAt"
+    >,
+  ): Promise<void> {
+    await this.#pool.query(
+      `UPDATE items SET iv=$1, ciphertext=$2, tag=$3, last4=$4, name=$5, kind=$6, environment_id=$7,
+       username=$8, inject=$9, allowed_hosts_json=$10, updated_at=$11, aad_version=$12 WHERE id=$13`,
+      [
+        patch.iv,
+        patch.ciphertext,
+        patch.tag,
+        patch.last4,
+        patch.name,
+        patch.kind,
+        patch.environmentId,
+        patch.username,
+        patch.inject,
+        patch.allowedHostsJson,
+        patch.updatedAt,
+        ITEM_AAD_VERSION,
+        id,
+      ],
+    );
+  }
+
+  async listItemsWithLegacyAad(): Promise<LegacyAadItem[]> {
+    const r = await this.#pool.query(
+      `SELECT i.*, v.org_id AS org_id FROM items i
+       JOIN environments e ON e.id = i.environment_id
+       JOIN vaults v ON v.id = e.vault_id
+       WHERE i.aad_version < $1 ORDER BY v.org_id, i.id`,
+      [ITEM_AAD_VERSION],
+    );
+    return r.rows.map((row) => {
+      const rec = asRecord(row);
+      return { item: mapItem(rec), orgId: String(rec.org_id) };
+    });
+  }
+
+  async setItemAadVersion(id: string, version: number): Promise<void> {
+    await this.#pool.query("UPDATE items SET aad_version=$1 WHERE id=$2", [version, id]);
   }
 
   async updateItemMeta(
@@ -460,7 +536,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query("UPDATE clients SET environment = $1 WHERE id = $2", [environment, id]);
   }
 
-  async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+  async incrementRateHit(orgId: string, kind: RateHitKind, windowStart: string): Promise<number> {
     const r = await this.#pool.query(
       `INSERT INTO rate_hits (org_id, kind, window_start, count) VALUES ($1,$2,$3,1)
        ON CONFLICT (org_id, kind, window_start) DO UPDATE SET count = rate_hits.count + 1
@@ -470,7 +546,7 @@ export class PostgresStore implements VaultStore {
     return Number(asRecord(r.rows[0] ?? { count: 0 }).count);
   }
 
-  async countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+  async countRateHits(orgId: string, kind: RateHitKind, windowStart: string): Promise<number> {
     const r = await this.#pool.query(
       "SELECT count FROM rate_hits WHERE org_id = $1 AND kind = $2 AND window_start = $3",
       [orgId, kind, windowStart],
@@ -589,6 +665,14 @@ export class PostgresStore implements VaultStore {
     const r = await this.#pool.query(
       "SELECT * FROM grants WHERE org_id=$1 AND status='pending' ORDER BY created_at DESC",
       [orgId],
+    );
+    return r.rows.map((row) => mapGrant(asRecord(row)));
+  }
+
+  async listGrantsForPair(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord[]> {
+    const r = await this.#pool.query(
+      "SELECT * FROM grants WHERE client_id=$1 AND item_id=$2 AND org_id=$3 ORDER BY created_at DESC",
+      [clientId, itemId, orgId],
     );
     return r.rows.map((row) => mapGrant(asRecord(row)));
   }
@@ -798,7 +882,7 @@ export class PostgresStore implements VaultStore {
     try {
       await client.query("BEGIN");
       await client.query(
-        `INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "pg")})`,
+        `INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "pg")})`,
         itemValues(input.item),
       );
       await client.query(GRANT_INSERT_SQL, grantValues(input.grant));

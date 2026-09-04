@@ -106,6 +106,9 @@ test("migrator applies once, is idempotent, and matches the schema.ts bootstrap"
       assert.deepEqual(missingTables, [], "tables in schema.ts but not in migrations/");
       assert.deepEqual(missingIndexes, [], "indexes in schema.ts but not in migrations/");
       assert.deepEqual(missingColumns, [], "columns in schema.ts but not in migrations/");
+      // The other direction for indexes: a migration must not create an index the bootstrap lacks.
+      const extraIndexes = fromFiles.indexes.filter((x) => !fromSchemaTs.indexes.includes(x) && !x.startsWith("schema_migrations"));
+      assert.deepEqual(extraIndexes, [], "indexes in migrations/ but not in schema.ts");
       assert.ok(fromFiles.tables.includes("schema_migrations"));
     });
   });

@@ -40,15 +40,29 @@ Prod is the same with `botpasses-prod` after staging is green.
 
 ## Rotate the platform KEK
 
-Do this only after both planes run an image that has `rotateKek`.
+The process accepts two KEKs at once: the current one (`VAULT_KEK_WRAPPED` or raw `VAULT_KEK`) and the one being retired (`VAULT_KEK_PREVIOUS_WRAPPED`, or raw `VAULT_KEK_PREVIOUS` where raw is still allowed). Every org DEK and the identity DEK is opened with the current KEK first; a row still under the previous KEK opens with it and is re-wrapped under the current KEK in place (audit `dek_rewrapped`, log `dek_rewrapped`). Traffic therefore finishes the rotation on its own, without a maintenance window, and a process that restarts mid-way carries on. Boot refuses a previous key that equals the current one, a raw previous key under `VAULT_KEK_REQUIRE_KMS=1`, a bad key length, and both forms set at once (exit 78).
+
+Order matters: the new KEK goes in as current with the old one as previous. Never run a process that has only the new KEK against a database that still has rows under the old one.
+
+1. Generate the new KEK and wrap it: `openssl rand -hex 32`, then `printf '%s' "$NEW" | npx vault kek-wrap` with the plane's `VAULT_KMS_KEY_ID`, `VAULT_DEPLOY_PLANE`, and `FLY_APP_NAME`. Wrap the old KEK the same way if you only have it raw.
+2. Set previous, then current, in one deploy so no process boots with the new KEK alone:
+
+```bash
+fly secrets set VAULT_KEK_PREVIOUS_WRAPPED=<old blob> VAULT_KEK_WRAPPED=<new blob> -a botpasses-prod
+```
+
+3. Confirm `/health` is 200 and `kek_previous_loaded` appears in the boot log.
+4. Re-wrap the rest offline so no org stays on the old KEK waiting for its next request:
 
 ```bash
 export DATABASE_URL=...   # Neon direct
-export VAULT_KEK=<current raw, or unwrap via KMS first>
-export VAULT_KMS_KEY_ID=...
-export VAULT_DEPLOY_PLANE=production
-export FLY_APP_NAME=botpasses-prod
+export VAULT_KEK=<old raw, or unwrap via KMS first>
+export VAULT_KEK_NEW=<new raw>
 npx vault kek-rotate
 ```
 
-The command tries unwrap-with-new then unwrap-with-old per org. Re-run the same old+new pair after a crash. Then `fly secrets set VAULT_KEK_WRAPPED=<new blob>` and restart. Keep the old CMK version until every org unwraps with the new KEK.
+   `kek-rotate` tries unwrap-with-new then unwrap-with-old per org and skips rows the running process already moved. Re-run the same old+new pair after a crash. Without `VAULT_KEK_NEW` it generates a fresh key, which is only right when step 2 has not happened yet.
+5. Check the database: every `orgs` row and the `identity_keys` row unwrap with the new KEK (`kek-rotate` reports `rewrapped=0 skipped=<orgs>`).
+6. `fly secrets unset VAULT_KEK_PREVIOUS_WRAPPED -a botpasses-prod` and retire the old CMK key version.
+
+Raw-KEK planes (before the KMS cutover) use `VAULT_KEK_PREVIOUS` and `VAULT_KEK` in place of the wrapped pair.

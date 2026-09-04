@@ -3,12 +3,41 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { scheduleSweeps } from "../src/hosted/boot.ts";
+import { unscopedFields, type HostedGrantRecord, type HostedGrantStatus } from "../src/hosted-types.ts";
 import type { SweepCounts } from "../src/store/types.ts";
 import { cleanup, tempHome } from "./helpers.ts";
 
 const NOW = "2026-09-04T12:00:00.000Z";
 const iso = (offsetMs: number): string => new Date(Date.parse(NOW) + offsetMs).toISOString();
 const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+function grantRow(
+  id: string,
+  status: HostedGrantStatus,
+  createdAt: string,
+  extra: Partial<Pick<HostedGrantRecord, "consumedAt" | "expiresAt" | "approvedAt">> = {},
+): HostedGrantRecord {
+  return {
+    id,
+    orgId: "org1",
+    clientId: "cl1",
+    itemId: "itm1",
+    folderId: null,
+    environmentId: "env1",
+    policy: "prompt",
+    status,
+    expiresAt: null,
+    createdAt,
+    approvedAt: null,
+    consumedAt: null,
+    taskId: null,
+    taskDescription: null,
+    requestedScope: null,
+    ...unscopedFields(),
+    ...extra,
+  };
+}
 
 test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", async () => {
   const home = tempHome();
@@ -52,9 +81,15 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
     await store.upsertOidcPayload({ id: "p_old", kind: "AccessToken", payload: "{}", expiresAt: iso(-HOUR) });
     await store.upsertOidcPayload({ id: "p_live", kind: "AccessToken", payload: "{}", expiresAt: iso(HOUR) });
     await store.upsertOidcPayload({ id: "p_forever", kind: "Client", payload: "{}", expiresAt: null });
+    // grants: terminal and settled over 30 days ago (revoked long ago, consumed 31 days ago),
+    // terminal but recent (expired two days ago), and open rows however old
+    await store.insertGrant(grantRow("g_revoked_old", "revoked", iso(-40 * DAY), { approvedAt: iso(-40 * DAY) }));
+    await store.insertGrant(grantRow("g_consumed_old", "consumed", iso(-45 * DAY), { consumedAt: iso(-31 * DAY) }));
+    await store.insertGrant(grantRow("g_expired_recent", "expired", iso(-40 * DAY), { expiresAt: iso(-2 * DAY) }));
+    await store.insertGrant(grantRow("g_active_old", "active", iso(-60 * DAY), { approvedAt: iso(-60 * DAY) }));
+    await store.insertGrant(grantRow("g_pending_old", "pending", iso(-60 * DAY)));
     // org invites: expired more than a week ago, expired this week, live, and accepted long ago
-    const DAY = 24 * HOUR;
-    const invite = (id: string, expiresAt: string, acceptedAt: string | null = null) => ({
+    const invite =(id: string, expiresAt: string, acceptedAt: string | null = null) => ({
       id,
       orgId: "org1",
       email: `${id}@example.com`,
@@ -79,7 +114,14 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
       rateHits: 1,
       oidcPayloads: 1,
       orgInvites: 1,
+      grants: 2,
     } satisfies SweepCounts);
+
+    assert.equal(await store.getGrant("g_revoked_old"), undefined, "a revoked grant settled 40 days ago is gone");
+    assert.equal(await store.getGrant("g_consumed_old"), undefined, "a grant consumed 31 days ago is gone");
+    assert.ok(await store.getGrant("g_expired_recent"), "a grant that expired two days ago stays listed");
+    assert.ok(await store.getGrant("g_active_old"), "an active grant is never swept");
+    assert.ok(await store.getGrant("g_pending_old"), "a pending grant is never swept");
 
     assert.equal((await store.latestEmailOtp("a@x.io"))?.id, "otp_live");
     assert.equal(await store.getSession("s_old"), undefined);
@@ -102,7 +144,7 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
 
     // second pass is a no-op
     const again = await store.sweepExpired(NOW);
-    assert.deepEqual(Object.values(again), [0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(Object.values(again), [0, 0, 0, 0, 0, 0, 0, 0]);
   } finally {
     await store.close();
     cleanup(home);
@@ -123,6 +165,7 @@ test("scheduleSweeps runs at start, logs counts, swallows errors, and its timer 
     rateHits: 0,
     oidcPayloads: 0,
     orgInvites: 0,
+    grants: 0,
   };
   const store = {
     sweepExpired: async (nowIso: string): Promise<SweepCounts> => {

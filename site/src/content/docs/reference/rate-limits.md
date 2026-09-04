@@ -15,6 +15,7 @@ Limits are fixed per organisation or per IP address. Hitting one returns HTTP 42
 | New approval requests (`request_grant`, `http_request` needing an approval, `POST /api/grants/request`) plus new collect requests (`need_item`) | 30 per hour, combined | Organisation |
 | Email code sends (`POST /api/auth/otp/send`) | 5 per email per 15 minutes | Email address |
 | Wrong email codes | 5, then the code is void and a new one must be sent | Challenge |
+| Wrong approval codes (`POST /api/grants/approve-by-code`) | 5 per approval request, kept when the agent asks again and the code changes; approve from the Inbox instead. 20 attempts per 15 minutes across the organisation | Approval, then organisation |
 | OAuth dynamic client registration (`POST /oauth/register`) | 20 per hour | IP address |
 | Approval code reuse | A code works once. Reuse is 409, expired is 410 | Code |
 
