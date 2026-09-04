@@ -1,7 +1,7 @@
 ---
 import "../styles/global.css";
 import fraunces700 from "@fontsource/fraunces/files/fraunces-latin-700-normal.woff2?url";
-import { BRAND_HEX, cssVariables } from "../../../src/brand-visual.ts";
+import { BRAND_HEX, BRAND_HEX_LIGHT, cssVariables } from "../../../src/brand-visual.ts";
 
 interface Props {
   /** Bare page title. Base appends " · Botpasses". */
@@ -21,7 +21,7 @@ const canonical = new URL(path, Astro.site).toString();
 const ogImage = new URL("/og.png", Astro.site).toString();
 const GITHUB = "https://github.com/naffis/botpasses";
 // One token source for site and console: src/brand-visual.ts.
-const tokens = `:root{color-scheme:dark;${cssVariables().replace(/\s+/g, " ")}}`;
+const tokens = cssVariables().replace(/\s+/g, " ");
 ---
 <!doctype html>
 <html lang="en">
@@ -30,7 +30,8 @@ const tokens = `:root{color-scheme:dark;${cssVariables().replace(/\s+/g, " ")}}`
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content={BRAND_HEX.bg} />
+    <meta name="theme-color" content={BRAND_HEX.bg} media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content={BRAND_HEX_LIGHT.bg} media="(prefers-color-scheme: light)" />
     {noindex && <meta name="robots" content="noindex, nofollow" />}
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />

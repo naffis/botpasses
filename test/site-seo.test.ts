@@ -136,7 +136,8 @@ test("social and theme meta tags are complete on every page", () => {
     assert.equal(attr(p.html, /<meta name="twitter:image" content="([^"]+)"/), `${SITE}/og.png`, p.url);
     assert.equal(attr(p.html, /<meta name="theme-color" content="([^"]+)"/), "#0B0F0C", p.url);
     assert.match(p.html, /<link rel="preload" href="\/_astro\/fraunces-latin-700-normal\.[^"]+\.woff2" as="font"/, `${p.url} preload`);
-    assert.match(p.html, /:root\{color-scheme:dark;--bg: #0B0F0C;/, `${p.url} inline tokens`);
+    assert.match(p.html, /:root \{ color-scheme: light dark; --bg: #F4F7F4;/, `${p.url} inline tokens`);
+    assert.match(p.html, /prefers-color-scheme: dark\) \{ :root:not\(\[data-theme="light"\]\) \{ --bg: #0B0F0C;/, `${p.url} dark tokens`);
     assert.doesNotMatch(p.html, /<link rel="stylesheet" href="\/_astro\//, `${p.url} stylesheet should be inlined`);
   }
 });
