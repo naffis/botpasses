@@ -476,7 +476,7 @@ export class OperatorIdentity {
     if (looksLikeTotpCode(code)) {
       const { secret, user: current } = await this.#totpSecret(user);
       const step = matchTotpStep(secret, code, nowMs);
-      if (step !== null && step !== current.totpLastStep) {
+      if (step !== null && step > (current.totpLastStep ?? -1)) {
         const next: UserRow = { ...current, totpLastStep: step, ...afterTotpSuccess(securityOf(current)) };
         await this.store.updateUser(next);
         await this.store.updateUserSecurity(next.id, securityOf(next));

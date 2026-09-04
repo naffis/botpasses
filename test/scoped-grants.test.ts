@@ -124,7 +124,8 @@ test("scope denies per dimension (method, host, path prefix) and admits a matchi
 test("scopeDenialReason and resolveApprovalScope are pure and exact", () => {
   const scope = { ...unscopedFields(), methods: ["GET"], pathPrefixes: ["/v1"], hosts: ["a.example"] };
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "get", path: "/v1" }), undefined);
-  assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v10/x" }), undefined, "prefix is a string prefix");
+  assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v1/x" }), undefined, "prefix covers deeper segments");
+  assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v10/x" }), "path", "prefix matches on segment boundaries");
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "GET", path: "/v2" }), "path");
   assert.equal(scopeDenialReason(scope, { host: "b.example", method: "GET", path: "/v1" }), "host");
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "DELETE", path: "/v1" }), "method");
@@ -140,6 +141,26 @@ test("scopeDenialReason and resolveApprovalScope are pure and exact", () => {
   assert.throws(() => resolveApprovalScope({ scope: { hosts: ["evil.example"] }, requested: null, item, policy: "prompt", now }), (e: unknown) => isHttpError(e) && e.status === 400);
   assert.throws(() => resolveApprovalScope({ scope: { methods: [] }, requested: null, item, policy: "prompt", now }), (e: unknown) => isHttpError(e) && e.status === 400);
   assert.throws(() => resolveApprovalScope({ scope: { pathPrefixes: ["v1"] }, requested: null, item, policy: "prompt", now }), (e: unknown) => isHttpError(e) && e.status === 400);
+  // An explicit scope replaces the request entirely: dimensions it leaves out are unrestricted,
+  // not inherited from what the agent asked for. Operators see this as "Approve with limits".
+  const explicit = resolveApprovalScope({
+    scope: { maxCalls: 3, ttlSeconds: 120 },
+    requested: { host: "api.stripe.com", method: "GET", path: "/v1/balance" },
+    item,
+    policy: "session",
+    now,
+  });
+  assert.deepEqual([explicit.methods, explicit.pathPrefixes, explicit.hosts, explicit.maxCalls, explicit.expiresAt], [null, null, null, 3, "2026-03-01T10:02:00.000Z"]);
+  const normalised = resolveApprovalScope({ scope: { methods: ["get", "Post", "GET"], pathPrefixes: ["/v1/", "/v1/items?x=1"], hosts: [" API.STRIPE.COM "] }, requested: null, item, policy: "prompt", now });
+  assert.deepEqual([normalised.methods, normalised.pathPrefixes, normalised.hosts], [["GET", "POST"], ["/v1", "/v1/items"], ["api.stripe.com"]]);
+  assert.throws(() => resolveApprovalScope({ scope: { ttlSeconds: 30 }, requested: null, item, policy: "session", now }), (e: unknown) => isHttpError(e) && e.status === 400, "ttl below the floor");
+  assert.throws(() => resolveApprovalScope({ scope: { ttlSeconds: 86_401 }, requested: null, item, policy: "session", now }), (e: unknown) => isHttpError(e) && e.status === 400, "session ttl above one day");
+  assert.throws(() => resolveApprovalScope({ scope: { maxCalls: 0 }, requested: null, item, policy: "prompt", now }), (e: unknown) => isHttpError(e) && e.status === 400);
+  assert.throws(
+    () => resolveApprovalScope({ scope: undefined, requested: { host: "gone.example", method: null, path: null }, item, policy: "prompt", now }),
+    (e: unknown) => isHttpError(e) && e.status === 400,
+    "a requested host no longer on the item is refused rather than widened",
+  );
 });
 
 test("max_calls spends the grant on the last call and takes the standing policy with it", async () => {

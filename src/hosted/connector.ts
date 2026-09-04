@@ -155,6 +155,24 @@ export function pickOriginHeaders(headers: Headers): Record<string, string> {
   return out;
 }
 
+/**
+ * Header values can echo the request (a `Link: <…?api_key=…>` after a `query:` inject, a
+ * request id derived from the token). Redact every encoding of the secret, like the body.
+ */
+export function redactOriginHeaders(
+  headers: Record<string, string>,
+  item: Pick<ConnectorItem, "secret" | "username">,
+  extraSecrets: string[] = [],
+): Record<string, string> {
+  const forms = [
+    ...secretEncodings(item.secret, item.username),
+    ...extraSecrets.flatMap((s) => secretEncodings(s, null)),
+  ];
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) out[name] = redactSecrets(value, forms);
+  return out;
+}
+
 /** Human-readable transport failure without the request (which carries the credential). */
 export function describeOriginFailure(err: unknown, host: string, aborted: boolean, timeoutMs = ORIGIN_TIMEOUT_MS): string {
   if (aborted) return `Origin request failed: ${host} did not respond within ${Math.round(timeoutMs / 1000)}s`;
@@ -250,7 +268,12 @@ export async function executeConnector(
     const full = Buffer.from(await res.arrayBuffer()).toString("utf8");
     const redacted = opts.redact === false ? full : redactConnectorBody(full, item, [], host);
     const body = redacted.length > RESPONSE_CAP ? redacted.slice(0, RESPONSE_CAP) : redacted;
-    return { status: res.status, body, headers: pickOriginHeaders(res.headers) };
+    const originHeaders = pickOriginHeaders(res.headers);
+    return {
+      status: res.status,
+      body,
+      headers: opts.redact === false ? originHeaders : redactOriginHeaders(originHeaders, item),
+    };
   } catch (err) {
     if (err instanceof HttpError) throw err;
     throw new HttpError(502, describeOriginFailure(err, host, ac.signal.aborted, timeoutMs));

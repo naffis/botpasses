@@ -6,7 +6,7 @@
 import type { OauthGrantType } from "../../hosted-types.ts";
 import { redactOauthJson } from "../../redact.ts";
 import { executeConnector, redactConnectorBody, type ConnectorFetch, type ConnectorItem, type ConnectorResult, type PinnedTlsOpts } from "../connector.ts";
-import { HttpError } from "../errors.ts";
+import { HttpError, InjectDeniedError } from "../errors.ts";
 import type { MintedToken, Provider } from "./types.ts";
 
 export type TokenEngineDeps = {
@@ -22,6 +22,20 @@ function last4(value: string): string {
 }
 
 /** Parse a token endpoint's JSON. Throws 502 on anything that is not a bearer token payload. */
+/** The token endpoint is a send like any other: the operator must have allowlisted it. */
+function assertTokenHostAllowed(item: { allowedHosts: string[] }, provider: Provider): string[] {
+  if (!item.allowedHosts.includes(provider.tokenHost)) {
+    throw new InjectDeniedError(
+      {
+        status: "inject_denied",
+        hint: `Add ${provider.tokenHost} to this credential's allowed hosts to mint or refresh tokens with it.`,
+      },
+      400,
+    );
+  }
+  return item.allowedHosts;
+}
+
 export function readMintedAccessToken(body: string): MintedToken {
   let parsed: unknown;
   try {
@@ -58,9 +72,7 @@ function tokenEndpointItem(provider: Provider, item: ConnectorItem, clientId: st
     ...item,
     username: clientId,
     inject,
-    allowedHosts: item.allowedHosts.includes(provider.tokenHost)
-      ? item.allowedHosts
-      : [...item.allowedHosts, provider.tokenHost],
+    allowedHosts: assertTokenHostAllowed(item, provider),
   };
 }
 

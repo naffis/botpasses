@@ -28,10 +28,14 @@ export class NeedItemError extends HttpError {
   }
 }
 
-/** 403 `inject_denied`: no active grant admits this client and item. The connector asks for one. */
+/**
+ * `inject_denied`: policy stopped the send. 403 (the default) when no active grant admits this
+ * client and item, so the connector asks for one; 400 when the item itself cannot be used for
+ * the call (for example its allowed hosts do not include the provider token host).
+ */
 export class InjectDeniedError extends HttpError {
-  constructor(extra: Record<string, unknown> = {}) {
-    super(403, "inject_denied", extra);
+  constructor(extra: Record<string, unknown> = {}, status: 400 | 403 = 403) {
+    super(status, "inject_denied", extra);
     this.name = "InjectDeniedError";
   }
 }

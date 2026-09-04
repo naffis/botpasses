@@ -53,7 +53,7 @@ export async function handleClientRoutes(
     const body = await readJson(req);
     const created = await kernel.createModelClient({
       orgId: op.orgId,
-      name: String(body.name ?? "grok"),
+      name: String(body.name ?? "agent"),
       environment: asEnv(body.environment),
       issueBearer: true,
     });

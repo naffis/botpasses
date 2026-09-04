@@ -221,8 +221,13 @@ export class PostgresStore implements VaultStore {
     try {
       await client.query("BEGIN");
       await client.query(
-        `DELETE FROM oidc_payloads WHERE payload::jsonb ->> 'accountId' IN (
+        `DELETE FROM oidc_payloads WHERE account_id IN (
            SELECT user_id FROM org_members WHERE org_id = $1
+         ) AND (
+           client_id IN (SELECT id FROM clients WHERE org_id = $1)
+           OR (client_id IS NULL AND NOT EXISTS (
+             SELECT 1 FROM org_members m2 WHERE m2.user_id = oidc_payloads.account_id AND m2.org_id <> $1
+           ))
          )`,
         [orgId],
       );
@@ -1227,7 +1232,7 @@ export class PostgresStore implements VaultStore {
     if (clientIds.length === 0) return;
     await this.#pool.query(
       `DELETE FROM oidc_payloads WHERE kind = $1 AND client_id = ANY($2::text[])
-       AND (account_id IS NULL OR account_id = $3)`,
+       AND (($3::text IS NULL AND account_id IS NULL) OR account_id = $3)`,
       [kind, clientIds, accountId],
     );
   }

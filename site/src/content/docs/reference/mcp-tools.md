@@ -143,13 +143,7 @@ The `initialize` response carries these instructions. They are written for the m
 
 ## Local MCP (SQLite)
 
-`npx vault mcp` exposes `list_secrets`, `request_grant` (`secret_name`, `agent_id`, `tool_id`, optional `scope` of `once` or `session`), and `list_grants`. Inject on the local plane is `vault run`; there is no `http_request` and no `collect_url`. A miss is an MCP error that tells the operator to store the name with `vault set`.
-
-## Related
-
-- [HTTP API](/docs/reference/http-api): the routes that wrap the same vault.
-- [Rate limits](/docs/reference/rate-limits).
-- [Troubleshooting](/docs/troubleshooting): `host_mismatch`, pending approvals, connect cards.
+`npx vault mcp` (stdio, SQLite) exposes the same five tools as hosted with the same argument shapes: `list_items`, `find_items`, `request_grant`, `list_grants`, and `http_request`. `list_secrets` and `http.request` are accepted as aliases for one release. The agent id is the MCP client's name from `initialize`. `http_request` needs an active grant for that credential, agent, and tool (`vault grant --secret NAME --agent A --tool http_request`), decrypts in-process, and calls the same connector, so results are redacted the same way. Store hosts and an inject mode with `vault set NAME --host api.example.com --inject bearer`. A miss returns `need_item` with a message to run `vault set`; there is no `collect_url` locally.
 
 ## Result shape
 
@@ -158,3 +152,9 @@ A successful call returns `origin_status` (the API's HTTP status), a redacted `b
 ## Providers and inject modes
 
 Botpasses mints and refreshes OAuth tokens for Spotify, GitHub, Google, Slack, and Stripe Connect; pass `client_id` when the credential is an OAuth client secret. Credentials can be sent as `bearer`, `basic`, `header:<name>`, `query:<param>`, `cookie:<name>`, AWS `sigv4`, or a request signature (`hmac:stripe_sig`, `hmac:slack_sig`, `hmac:github_sig`). Unknown modes are refused when stored.
+
+## Related
+
+- [HTTP API](/docs/reference/http-api): the routes that wrap the same vault.
+- [Rate limits](/docs/reference/rate-limits).
+- [Troubleshooting](/docs/troubleshooting): `host_mismatch`, pending approvals, connect cards.

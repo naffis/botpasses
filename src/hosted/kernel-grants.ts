@@ -61,6 +61,7 @@ export {
   SESSION_TTL_MS,
   STANDING_TTL_MAX_SECONDS,
   TTL_MIN_SECONDS,
+  pathWithinPrefix,
   resolveApprovalScope,
   scopeDenialReason,
   type ConnectorCall,

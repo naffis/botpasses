@@ -102,4 +102,22 @@ export function assertSafePath(path: string): void {
   if (!path.startsWith("/") || path.startsWith("//") || path.includes("://")) {
     throw new HttpError(400, "path must start with /");
   }
+  if (hasDotSegments(path)) {
+    throw new HttpError(400, "path must not contain . or .. segments");
+  }
+}
+
+/** True when any path segment is `.` or `..`, raw or percent-encoded (URL parsing would collapse it). */
+export function hasDotSegments(path: string): boolean {
+  const q = path.indexOf("?");
+  const pathname = q === -1 ? path : path.slice(0, q);
+  return pathname.split("/").some((seg) => {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(seg);
+    } catch {
+      return true;
+    }
+    return decoded === "." || decoded === "..";
+  });
 }

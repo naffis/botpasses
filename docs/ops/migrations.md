@@ -24,3 +24,16 @@ SELECT version, applied_at FROM schema_migrations ORDER BY version;
 ```
 
 A release stuck on the advisory lock means another runner is mid-migration; wait, do not kill it. Neon's pooled `-pooler` host can drop session state between statements, which is why the runner uses the direct URL.
+
+## Before deploying the inject-mode grammar (0.5.0)
+
+Items whose `inject` string is outside the grammar (`bearer`, `basic`, `client_credentials`, `refresh`, `sigv4`, `header:<name>`, `query:<param>`, `cookie:<name>`, `hmac:stripe_sig|slack_sig|github_sig`) fail at send time with `500 inject_unsupported` instead of falling through to Bearer. Find them first:
+
+```sql
+SELECT id, name, inject FROM items
+WHERE inject NOT IN ('bearer','basic','client_credentials','refresh','sigv4')
+  AND inject NOT LIKE 'header:%' AND inject NOT LIKE 'query:%'
+  AND inject NOT LIKE 'cookie:%' AND inject NOT LIKE 'hmac:%';
+```
+
+Fix each row from the console (Edit, Change how it is sent) before the deploy.

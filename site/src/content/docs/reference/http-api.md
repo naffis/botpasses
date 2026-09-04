@@ -17,7 +17,7 @@ Operator JSON never includes secret values after submit. Model tokens cannot res
 | Model (agent) | OAuth access JWT (`aud` is `https://botpasses.com/mcp`) or a console-issued `avm_...` bearer | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
 | Trusted runtime | `avt_...` bearer | `POST /runtime/resolve` only |
 
-A session that has not completed the authenticator step gets 403 `{ "error": "mfa_required", "enroll_url": "/enroll-totp" }`. Ids from another organisation are 404. A foreign browser `Origin` on `/api` is 403 with no CORS allow header; `/mcp`, the well-known documents, and `/oauth` reflect the caller's Origin so browser-based MCP hosts can connect. Invalid bearer on public HTML is ignored (the page loads); the same bearer on `/api` or `POST /mcp` is 401.
+A session that has not completed the authenticator step gets 403 `{ "error": "mfa_required", "enroll_url": "/enroll-totp" }` when no authenticator is enrolled, or `{ "error": "mfa_required", "verify_url": "/verify-totp" }` when one is and this session has not passed it yet. Ids from another organisation are 404. A foreign browser `Origin` on `/api` is 403 with no CORS allow header; `/mcp`, the well-known documents, and `/oauth` reflect the caller's Origin so browser-based MCP hosts can connect. Invalid bearer on public HTML is ignored (the page loads); the same bearer on `/api` or `POST /mcp` is 401.
 
 ## Health and discovery
 
@@ -34,17 +34,21 @@ A session that has not completed the authenticator step gets 403 `{ "error": "mf
 
 | Method | Path | Body |
 | --- | --- | --- |
-| GET | `/sign-in`, `/sign-up` | HTML. A ready session redirects to `/console`; a verified email without an authenticator redirects to `/enroll-totp` |
-| GET | `/enroll-totp` | HTML. Session required |
+| GET | `/sign-in`, `/sign-up` | HTML. A ready session redirects to `/console`; a verified email without an authenticator redirects to `/enroll-totp`; an enrolled account that has not passed the authenticator step this session redirects to `/verify-totp` |
+| GET | `/enroll-totp` | HTML. Session required. Shows backup codes once after confirm |
+| GET | `/verify-totp` | HTML. The sign-in authenticator step: one field for an authenticator code or a backup code |
 | POST | `/api/auth/otp/send` | `{ "email" }`. Returns `{ "ok": true }` for known and unknown emails. A still-valid unused code is not sent again |
-| POST | `/api/auth/otp/verify` | `{ "email", "otp" }`. Sets the session cookie. Returns `{ "ok", "enroll" }` |
-| POST | `/api/auth/totp/start` | Begin authenticator enrollment. Returns `otpauth_url` and a locally rendered `qr_svg` |
+| POST | `/api/auth/otp/verify` | `{ "email", "otp" }`. Sets a pending session cookie. Returns `{ "ok", "enroll", "verify" }`: `enroll` means go to `/enroll-totp`, `verify` means go to `/verify-totp`. A 401 carries `attempts_remaining` |
+| POST | `/api/auth/totp/start` | Begin authenticator enrollment. Returns `otpauth_url` and a locally rendered `qr_svg`. Re-enrolling needs a ready session and `{ "current_code" }` |
 | POST | `/api/auth/totp/confirm` | `{ "code" }`. Marks the session ready and returns backup codes once |
-| POST | `/api/auth/logout` | Clears the session cookies |
+| POST | `/api/auth/totp/verify` | `{ "code" }`. The sign-in authenticator step: an authenticator code or an unused backup code. Marks the session ready. Ten failures lock the account for 15 minutes (429 with `retry_after`) |
+| GET | `/api/auth/me` | `{ "email", "totp_enabled", "backup_codes_remaining", "created_at" }` |
+| POST | `/api/auth/backup-codes/regenerate` | `{ "code" }`. Replaces every unused backup code and returns the new set once |
+| POST | `/api/auth/logout` | Clears the session cookies and ends the OAuth sign-in session. Needs `X-CSRF-Token` |
 | POST | `/api/orgs` | `{ "name" }`. Creates an organisation for the signed-in user |
 | DELETE | `/api/orgs` | `{ "confirm_name" }`. Deletes the organisation and everything in it |
 
-Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end the challenge. Authenticator codes are RFC 6238 (SHA-1, 6 digits) with replay protection.
+Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end the challenge. Authenticator codes are RFC 6238 (SHA-1, 6 digits) with replay protection. Authenticator secrets are encrypted under a key that `vault kek-rotate` re-wraps.
 
 ## Items and collect
 
@@ -126,10 +130,10 @@ PKCE S256 is required. Access tokens are RS256 JWTs with audience `https://botpa
 | `POST /api/secrets` | Store `{ name, value }` |
 | `GET /api/grants` | Grant metadata |
 | `POST /api/grants/request` | Request a pending grant |
-| `POST /api/grants` | Approve (`scope` is `once` or `session`) |
+| `POST /api/grants` | Approve (`scope` is `once` or `session`; `tool_id` is `http_request` for agent calls) |
 | `POST /api/grants/:id/revoke` | Revoke |
 | `GET /api/audit` | Events, no values |
-| `POST /mcp` | Local MCP JSON-RPC |
+| `POST /mcp` | Local MCP JSON-RPC, the same five tools as hosted |
 
 There is no `/api/items`, OAuth, or Access panel on the local plane.
 

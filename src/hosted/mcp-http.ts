@@ -491,7 +491,9 @@ async function prepareOrGrant(
 
 /**
  * Resolve the item and grant exactly as a real call would, then report instead of sending.
- * Reads only: no origin call, no grant consumed, no need created, no audit row.
+ * Reads only: no origin call, no grant consumed, no need created, no audit row. Listing grants
+ * may mark an already-expired grant `expired`, which is idempotent bookkeeping, not a side effect
+ * of the dry run itself.
  */
 async function dryRun(deps: ConnectorCallDeps, target: ConnectorTarget, environment: VaultEnvName): Promise<DryRunReport> {
   const { kernel, principal } = deps;

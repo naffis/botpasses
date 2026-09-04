@@ -23,7 +23,14 @@ test("IpWindowLimiter caps its key set with least-recently-used eviction", () =>
   assert.equal(limiter.allow("a", 1, 1000, 5), true, "a was the oldest and got evicted in turn");
 });
 
-test("S8: a spoofed first X-Forwarded-For hop does not bypass the per-IP OTP limit", async () => {
+test("S8: a spoofed first X-Forwarded-For hop does not bypass the per-IP OTP limit", async (t) => {
+  // Fly-Client-IP is trusted only behind Fly or with VAULT_TRUST_PROXY=1; this test runs as if behind Fly.
+  const prevTrust = process.env.VAULT_TRUST_PROXY;
+  process.env.VAULT_TRUST_PROXY = "1";
+  t.after(() => {
+    if (prevTrust === undefined) delete process.env.VAULT_TRUST_PROXY;
+    else process.env.VAULT_TRUST_PROXY = prevTrust;
+  });
   const ctx = await identityServer();
   try {
     const statuses: number[] = [];

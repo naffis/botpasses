@@ -176,7 +176,7 @@ for (const backend of backends) {
         consentedByUserId: id("user_a"),
       });
       assert.equal(await store.getOidcPayload(id("rt_a"), "RefreshToken"), undefined, "A's token gone");
-      assert.equal(await store.getOidcPayload(id("rt_none"), "RefreshToken"), undefined, "unattributed token gone");
+      assert.ok(await store.getOidcPayload(id("rt_none"), "RefreshToken"), "unattributed rows for a shared client id are not this tenant's to delete");
       assert.ok(await store.getOidcPayload(id("rt_b"), "RefreshToken"), "B's token for the same DCR id survives");
       assert.ok(await store.getOidcPayload(id("rt_other"), "RefreshToken"), "other client untouched");
 

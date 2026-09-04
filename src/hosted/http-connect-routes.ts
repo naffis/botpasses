@@ -28,7 +28,7 @@ export async function handleConnectCallback(
   const match = CONNECT_CALLBACK_RE.exec(path);
   if (method !== "GET" || !match) return false;
   const providerId = match[1] ?? "";
-  if (!principal || principal.channel !== "operator") {
+  if (!principal || principal.channel !== "operator" || principal.ready === false) {
     redirect(res, "/sign-in");
     return true;
   }
