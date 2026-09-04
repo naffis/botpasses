@@ -62,9 +62,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - run: npm audit --omit=dev --audit-level=high
+      - run: scripts/audit.sh
       - run: npm --prefix site ci
-      - run: npm --prefix site audit --omit=dev --audit-level=high
+      - run: scripts/audit.sh --prefix site
       - run: npm run site:build
       - run: npm run lint
       - run: npm run typecheck
