@@ -179,10 +179,10 @@ export function bindAccount(): void {
   byId("account-signout")?.addEventListener("click", () => void signOut());
   byId("sign-out")?.addEventListener("click", () => void signOut());
   byId("account-regen")?.addEventListener("click", () => {
-    askForCode("Enter your current authenticator code to replace every backup code.", regenerate);
+    askForCode("Enter your current authenticator code, or one of your backup codes, to replace every backup code.", regenerate);
   });
   byId("account-reenroll")?.addEventListener("click", () => {
-    askForCode("Enter your current authenticator code. You will then scan a new QR code.", reenroll);
+    askForCode("Enter your current authenticator code, or one of your backup codes. You will then scan a new QR code.", reenroll);
   });
   byId("backup-dialog")?.addEventListener("close", () => {
     flash("Backup codes are no longer shown. Regenerate them if you did not save them.", true);

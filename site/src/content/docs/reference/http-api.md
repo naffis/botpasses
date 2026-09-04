@@ -7,7 +7,7 @@ order: 2
 
 Hosted JSON lives under `/api`. MCP is `POST /mcp` (see [MCP tools](/docs/reference/mcp-tools)). OAuth is `/oauth/*` on botpasses.com, which is its own authorization server. Local `npx vault serve` is a smaller loopback API, listed at the end.
 
-Operator JSON never includes secret values after submit. Model tokens cannot resolve a value. Trusted tokens cannot call MCP. JSON bodies over 128 KiB are 413.
+Operator JSON never includes secret values after submit. Model tokens cannot resolve a value. Trusted tokens cannot call MCP. JSON bodies must be sent as `Content-Type: application/json` (anything else is 415); bodies over 128 KiB are 413.
 
 ## Who may call what
 
@@ -35,11 +35,12 @@ A session that has not completed the authenticator step gets 403 `{ "error": "mf
 | Method | Path | Body |
 | --- | --- | --- |
 | GET | `/sign-in`, `/sign-up` | HTML. A ready session redirects to `/console`; a verified email without an authenticator redirects to `/enroll-totp`; an enrolled account that has not passed the authenticator step this session redirects to `/verify-totp` |
-| GET | `/enroll-totp` | HTML. Session required. Shows backup codes once after confirm |
+| GET | `/enroll-totp` | HTML. Session required. Shows backup codes once after confirm. A ready session that started a re-enroll from the console lands here and sees the pending QR |
 | GET | `/verify-totp` | HTML. The sign-in authenticator step: one field for an authenticator code or a backup code |
 | POST | `/api/auth/otp/send` | `{ "email" }`. Returns `{ "ok": true }` for known and unknown emails. Sending again replaces the previous code; five sends per email in 15 minutes |
 | POST | `/api/auth/otp/verify` | `{ "email", "otp" }`. Sets a pending session cookie. Returns `{ "ok", "enroll", "verify" }`: `enroll` means go to `/enroll-totp`, `verify` means go to `/verify-totp`. A 401 carries `attempts_remaining` |
 | POST | `/api/auth/totp/start` | Begin authenticator enrollment. Returns `otpauth_url` and a locally rendered `qr_svg`. Re-enrolling needs a ready session and `{ "current_code" }` |
+| GET | `/api/auth/totp/pending` | The enrollment in flight (`otpauth_url`, `qr_svg`) while it is live, 10 minutes from `start`; 404 `no_pending_enrollment` otherwise. The enroll page reads this before calling `start`, so a reload or a re-enroll shows the secret that `confirm` will check |
 | POST | `/api/auth/totp/confirm` | `{ "code" }`. Marks the session ready and returns backup codes once |
 | POST | `/api/auth/totp/verify` | `{ "code" }`. The sign-in authenticator step: an authenticator code or an unused backup code. Marks the session ready. Ten failures lock the account for 15 minutes (429 with `retry_after`) |
 | GET | `/api/auth/me` | `{ "email", "totp_enabled", "backup_codes_remaining", "created_at" }` |
@@ -116,7 +117,7 @@ PKCE S256 is required. Access tokens are RS256 JWTs with audience `https://botpa
 | `/oauth/register` | Dynamic client registration. `redirect_uris` may be `https`, loopback `http`, or a desktop scheme such as `cursor://`. `javascript:`, `data:`, and `file:` are rejected. 20 per IP per hour |
 | `/oauth/device/auth` | RFC 8628 device code. The operator finishes at `/device` |
 | `/oauth/revoke` | RFC 7009. Marks the token revoked in the Access ledger |
-| `/consent`, `/device` | HTML pages for the two flows above |
+| `/consent`, `/device` | HTML pages for the two flows above. The consent page's script posts `{ "uid", "decision" }` with `Accept: application/json` and gets `200 { "location" }` to navigate to; other callers get a 303 to the same resume URL |
 
 ## Local vault serve (loopback)
 
@@ -147,4 +148,5 @@ There is no `/api/items`, OAuth, or Access panel on the local plane.
 | 409 | Duplicate credential name, reused approval code |
 | 410 | Expired approval |
 | 413 | Body over 128 KiB |
+| 415 | A JSON route was sent a body that is not `application/json` |
 | 429 | Rate limit. See [Rate limits](/docs/reference/rate-limits) |

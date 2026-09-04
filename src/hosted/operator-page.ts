@@ -3,6 +3,7 @@ import type { VaultEnvName } from "../hosted-types.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
 import { consoleDialogsHtml } from "./console-dialogs.ts";
 import { consolePanelsHtml } from "./console-panels.ts";
+import { assetPath } from "./hosted-assets.ts";
 
 /** Store and issue default to the plane's own environment (D13). */
 export function defaultEnvironmentForPlane(plane: VaultEnvName): VaultEnvName {
@@ -75,6 +76,7 @@ export function hostedOperatorHtml(
     ? `<p id="console-signin" class="signin" data-testid="console-signin" hidden><a href="/sign-in">Sign in</a> or <a href="/sign-up">Create account</a></p>`
     : `<p id="console-signin" class="signin" data-testid="console-signin">Local operator console. Sign in is not required on loopback.</p>`;
   const planeLabel = plane === "staging" ? `<p class="plane-label" data-testid="plane-label">Staging</p>` : "";
+  const mark = assetPath("mark.svg");
   return `<!doctype html>
 <html lang="en" data-deploy-plane="${plane}" data-environments="${envAttr}" data-default-environment="${defaultEnv}">
 <head>
@@ -82,14 +84,14 @@ export function hostedOperatorHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
   <title>${PRODUCT_NAME} console</title>
-  <link rel="icon" href="/assets/mark.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/assets/console.css" />
+  <link rel="icon" href="${mark}" type="image/svg+xml" />
+  <link rel="stylesheet" href="${assetPath("console.css")}" />
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <div class="app-shell" data-testid="app-shell">
     <aside class="rail">
-      <a class="brand" href="/console#inbox"><img src="/assets/mark.svg" alt="" width="28" height="28" /><span class="brand-mark">${PRODUCT_NAME}</span></a>
+      <a class="brand" href="/console#inbox"><img src="${mark}" alt="" width="28" height="28" /><span class="brand-mark">${PRODUCT_NAME}</span></a>
       ${planeLabel}
       <label id="org-switch" class="org-switch" hidden><span class="visually-hidden">Workspace</span><select id="org-switcher" data-testid="org-switcher"></select></label>
       <nav class="rail-nav" aria-label="Console">
@@ -138,7 +140,7 @@ export function hostedOperatorHtml(
     </div>
   </div>
   ${consoleDialogsHtml(plane, defaultEnv)}
-  <script${opts.nonce ? ` nonce="${opts.nonce}"` : ""} src="/assets/console.js"></script>
+  <script${opts.nonce ? ` nonce="${opts.nonce}"` : ""} src="${assetPath("console.js")}"></script>
 </body>
 </html>`;
 }

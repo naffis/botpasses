@@ -237,5 +237,12 @@ declare module "oidc-provider" {
       result: InteractionResult,
       opts?: { mergeWithLastSubmission?: boolean },
     ): Promise<void>;
+    /** Stores the result like `interactionFinished` and returns the resume URL instead of redirecting. */
+    interactionResult(
+      req: IncomingMessage,
+      res: ServerResponse,
+      result: InteractionResult,
+      opts?: { mergeWithLastSubmission?: boolean },
+    ): Promise<string>;
   }
 }

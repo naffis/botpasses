@@ -145,11 +145,22 @@ function showBackupCodes(codes) {
   const cont = document.getElementById("backups-continue");
   if (cont) cont.focus();
 }
+async function loadEnrollment() {
+  // A secret already in flight (a reload, or a re-enroll started from the console with the
+  // current code) is shown as is; only when there is none does the page start a fresh one.
+  const pending = await fetch("/api/auth/totp/pending", { credentials: "include" });
+  if (pending.ok) {
+    const p = await pending.json().catch(function() { return {}; });
+    if (p.otpauth_url) return { ok: true, body: p };
+  }
+  const start = await fetch("/api/auth/totp/start", { method: "POST", credentials: "include", headers: headers(true), body: "{}" });
+  return { ok: start.ok, body: await start.json().catch(function() { return {}; }) };
+}
 if (totpForm) {
   (async function() {
-    const start = await fetch("/api/auth/totp/start", { method: "POST", credentials: "include", headers: headers(true), body: "{}" });
-    const j = await start.json().catch(function() { return {}; });
-    if (!start.ok || !j.otpauth_url) {
+    const loaded = await loadEnrollment();
+    const j = loaded.body;
+    if (!loaded.ok || !j.otpauth_url) {
       flash(note, j.error || "Could not start authenticator setup", false);
       return;
     }
@@ -210,16 +221,19 @@ if (consentForm) {
     e.preventDefault();
     const fd = new FormData(consentForm);
     const btn = e.submitter;
+    // A script cannot read a redirect's Location, so the server answers a JSON caller with
+    // the resume URL and the page navigates there itself.
+    const h = headers(true);
+    h.accept = "application/json";
     const r = await fetch("/consent", {
       method: "POST",
       credentials: "include",
-      headers: headers(true),
-      redirect: "manual",
+      headers: h,
       body: JSON.stringify({ uid: fd.get("uid"), decision: btn && btn.value ? btn.value : fd.get("decision") }),
     });
-    const loc = r.headers.get("location");
-    if (loc) { location.href = loc; return; }
-    flash(note, "Consent failed", false);
+    const j = await r.json().catch(function() { return {}; });
+    if (r.ok && typeof j.location === "string" && j.location) { location.href = j.location; return; }
+    flash(note, j.error || "Consent failed", false);
   });
 }
 `;

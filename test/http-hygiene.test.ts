@@ -139,6 +139,44 @@ test("malformed JSON is 400 Invalid JSON and does not echo the body (S13)", asyn
   }
 });
 
+test("a JSON route refuses a body that is not application/json with 415; a bodiless POST still reads as {} (B7)", async () => {
+  const ctx = await setup();
+  try {
+    const noType = Object.fromEntries(Object.entries(ctx.op).filter(([name]) => name !== "content-type"));
+    const body = JSON.stringify({ name: "X", value: CANARY, environment: "staging", allowed_hosts: ["api.stripe.com"] });
+    for (const type of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "application/jsonx"]) {
+      const res = await fetch(`${ctx.base}/api/items`, { method: "POST", headers: { ...noType, "content-type": type }, body });
+      assert.equal(res.status, 415, type);
+      const text = await res.text();
+      assert.match(text, /Content-Type must be application\/json/);
+      assert.doesNotMatch(text, new RegExp(CANARY));
+    }
+    assert.equal((await ctx.store.listItems(ctx.orgId)).some((i) => i.name === "X"), false, "nothing stored");
+    // fetch labels a string body text/plain when no type is given: refused the same way.
+    const untyped = await fetch(`${ctx.base}/api/items`, { method: "POST", headers: noType, body });
+    assert.equal(untyped.status, 415);
+    // A charset parameter is fine.
+    const charset = await fetch(`${ctx.base}/api/items`, {
+      method: "POST",
+      headers: { ...noType, "content-type": "application/json; charset=utf-8" },
+      body,
+    });
+    assert.equal(charset.status, 200, await charset.text());
+    // No body and no type (logout, revoke): the handler sees {}.
+    const empty = await fetch(`${ctx.base}/api/clients/${ctx.model.id}/revoke`, { method: "POST", headers: noType });
+    assert.equal(empty.status, 200, await empty.text());
+    // The MCP endpoint is a JSON route too.
+    const mcp = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { "x-test-channel": "model", "x-test-client": ctx.model.id, "content-type": "text/plain" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    assert.equal(mcp.status, 415);
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("HEAD /console behaves like GET (D9)", async () => {
   const ctx = await setup();
   try {

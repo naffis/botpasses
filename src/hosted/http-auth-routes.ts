@@ -1,13 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  authEntryHtml,
-  consentHtml,
-  deviceHtml,
-  enrollTotpHtml,
-  verifyTotpHtml,
-} from "./auth-pages.ts";
+import * as OTPAuth from "otpauth";
+import { authEntryHtml, enrollTotpHtml, verifyTotpHtml } from "./auth-pages.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { totpEnabled } from "./operator-identity.ts";
+import { otpauthUrl, pendingEnvelope } from "./identity-totp.ts";
+import { otpauthQrSvg } from "./totp-qr.ts";
 import { requestClientIp } from "./identity-limiter.ts";
 import { logAuthEvent } from "./observe.ts";
 import { needsTotpVerify } from "./identity.ts";
@@ -52,13 +49,42 @@ function pendingStep(op: OperatorPrincipal): "/verify-totp" | "/enroll-totp" {
   return needsTotpVerify(op) ? "/verify-totp" : "/enroll-totp";
 }
 
-export function tryAuthPage(
+/** True while the user has a live (unexpired) in-flight enrollment secret. */
+export async function hasPendingTotp(identity: OperatorIdentity, userId: string): Promise<boolean> {
+  const user = await identity.store.getUser(userId);
+  return Boolean(user && pendingEnvelope(user, identity.now().getTime()));
+}
+
+/**
+ * The live in-flight enrollment as `totp/start` first returned it, so a reload of `/enroll-totp`
+ * or the re-enroll page (which cannot call `start` again without a current code) shows the same
+ * QR that the pending secret will be confirmed against. Undefined when none is in flight.
+ */
+export async function pendingTotpEnrollment(
+  identity: OperatorIdentity,
+  userId: string,
+): Promise<{ otpauth_url: string; qr_svg: string } | undefined> {
+  const user = await identity.store.getUser(userId);
+  if (!user) return undefined;
+  const envelope = pendingEnvelope(user, identity.now().getTime());
+  if (!envelope) return undefined;
+  const { secret } = await identity.keys.unwrap(user.id, "totp_pending", envelope);
+  const otpauth_url = otpauthUrl(OTPAuth.Secret.fromBase32(secret), user.email);
+  return { otpauth_url, qr_svg: otpauthQrSvg(otpauth_url) };
+}
+
+/**
+ * First-party auth pages. `/consent` and `/device` are not here: the OAuth provider owns them
+ * (`handleConsentGet`, `handleOauth`) and without a provider they are simply not mounted.
+ */
+export async function tryAuthPage(
   method: string,
   path: string,
   res: ServerResponse,
   extra: Record<string, string>,
   principal?: Principal,
-): boolean {
+  pendingTotp?: (userId: string) => Promise<boolean>,
+): Promise<boolean> {
   if (method !== "GET" && method !== "HEAD") return false;
   const op = principal?.channel === "operator" ? principal : undefined;
   if (path === "/sign-in" || path === "/sign-up") {
@@ -68,8 +94,10 @@ export function tryAuthPage(
     return true;
   }
   if (path === "/enroll-totp") {
-    if (op?.ready) return redirect(res, "/console");
     if (!op) return redirect(res, "/sign-in");
+    // A ready operator lands here only while re-enrolling (a pending secret started with a
+    // current code); otherwise the page has nothing to show and the console is the place to be.
+    if (op.ready && !(pendingTotp && (await pendingTotp(op.userId)))) return redirect(res, "/console");
     if (needsTotpVerify(op)) return redirect(res, "/verify-totp");
     sendHtml(res, enrollTotpHtml(), extra);
     return true;
@@ -79,14 +107,6 @@ export function tryAuthPage(
     if (!op) return redirect(res, "/sign-in");
     if (!needsTotpVerify(op)) return redirect(res, "/enroll-totp");
     sendHtml(res, verifyTotpHtml(), extra);
-    return true;
-  }
-  if (path === "/consent") {
-    sendHtml(res, consentHtml("MCP client", ""), extra);
-    return true;
-  }
-  if (path === "/device") {
-    sendHtml(res, deviceHtml(), extra);
     return true;
   }
   return false;
@@ -143,6 +163,15 @@ export async function handleAuthApi(
     const currentCode = typeof body.current_code === "string" ? body.current_code : undefined;
     const result = await opts.identity.startTotp(op.userId, { currentCode, sessionReady: op.ready !== false });
     opts.json(res, 200, result);
+    return true;
+  }
+  if (method === "GET" && path === "/api/auth/totp/pending") {
+    const op = requireSession(principal);
+    // Same gate as a re-enroll `start`: an enrolled account only from a session that passed the step.
+    if (op.ready === false && needsTotpVerify(op)) throw new HttpError(403, "mfa_required", { verify_url: "/verify-totp" });
+    const pending = await pendingTotpEnrollment(opts.identity, op.userId);
+    if (!pending) throw new HttpError(404, "no_pending_enrollment");
+    opts.json(res, 200, pending);
     return true;
   }
   if (method === "POST" && path === "/api/auth/totp/confirm") {

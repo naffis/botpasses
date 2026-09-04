@@ -47,7 +47,7 @@ test("AC-14 auth HTML has one h1 and no secrets", () => {
   }
   assert.doesNotMatch(AUTH_JS, /—/);
   assert.match(signInHtml(), /data-testid="sign-in"/);
-  assert.match(signInHtml(), /\/assets\/console\.css/);
+  assert.match(signInHtml(), /\/assets\/console\.[0-9a-f]{8}\.css/);
   assert.match(signInHtml(), /id="otp-verify" hidden/);
   assert.match(signInHtml(), /class="auth-body"/);
   assert.doesNotMatch(signInHtml(), /<img/);
@@ -152,6 +152,31 @@ test("AC-14 GET /sign-in is HTML with CSP self only", async () => {
     assert.equal(logout.status, 200);
     assert.equal(logout.headers.get("x-frame-options"), "DENY");
     assert.equal(logout.headers.get("cache-control"), "no-store");
+  } finally {
+    await http.close();
+    await store.close();
+    cleanup(home);
+  }
+});
+
+test("B10 /consent and /device are not mounted without the OAuth provider", async () => {
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "auth.sqlite"));
+  const kek = parseMasterKey(generateMasterKey());
+  const kernel = new HostedKernel({ store, kek, publicUrl: "http://127.0.0.1:8788" });
+  const identity = new OperatorIdentity({ store, sessionSecret: TEST_SESSION_SECRET, kek });
+  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0, identity, deployPlane: "staging" });
+  const addr = await http.listen();
+  try {
+    for (const path of ["/consent", "/consent?uid=abc", "/device"]) {
+      const res = await fetch(`http://${addr.host}:${addr.port}${path}`);
+      assert.equal(res.status, 404, path);
+      assert.match(res.headers.get("content-type") ?? "", /application\/json/, path);
+      assert.doesNotMatch(await res.text(), /<form/, `${path} must not render an unbacked consent or device form`);
+    }
+    // The first-party pages are unaffected.
+    const signIn = await fetch(`http://${addr.host}:${addr.port}/sign-in`);
+    assert.equal(signIn.status, 200);
   } finally {
     await http.close();
     await store.close();
