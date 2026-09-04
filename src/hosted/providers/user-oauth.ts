@@ -22,6 +22,8 @@ export type ProviderOauthState = {
   redirectUri: string;
   codeVerifier: string;
   exp: number;
+  /** Botpasses model client that gets an `item_standing` policy on the refresh item after connect. */
+  agentClientId?: string;
 };
 
 export function pkceVerifier(): string {

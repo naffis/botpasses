@@ -94,18 +94,20 @@ function tokenDialog(): string {
   </dialog>`;
 }
 
-function spotifyDialog(): string {
-  return `<dialog id="spotify-dialog" data-testid="spotify-dialog" aria-labelledby="spotify-title">
-    <h2 id="spotify-title">Connect Spotify user</h2>
-    <p class="hint">Authorization Code with PKCE. The redirect is this site's callback or <code>http://127.0.0.1:8888/callback</code>; add that URI on the Spotify app. The refresh token is stored as part of this credential and the model never sees it.</p>
-    <p id="spotify-error" class="flash" role="alert"></p>
-    <form id="spotify-user" novalidate>
+/** Provider user connect. The bundle fills the provider name from the registry when it opens. */
+function connectDialog(): string {
+  return `<dialog id="connect-dialog" data-testid="connect-dialog" aria-labelledby="connect-title">
+    <h2 id="connect-title">Connect account</h2>
+    <p class="hint">Authorization Code (with PKCE when the provider supports it). The redirect is this site's callback or <code>http://127.0.0.1:8888/callback</code>; add that URI on the <span id="connect-provider-name">provider</span> app. The refresh token is stored next to this credential and the model never sees it.</p>
+    <p id="connect-error" class="flash" role="alert"></p>
+    <form id="connect-provider" novalidate>
+      <input type="hidden" name="provider_id" />
       <input type="hidden" name="item_name" />
       <input type="hidden" name="environment" />
-      <label for="spotify-client-id">Spotify Client ID</label>
-      <input id="spotify-client-id" name="client_id" required autocomplete="off" />
+      <label for="connect-client-id"><span id="connect-client-id-label">Client ID</span></label>
+      <input id="connect-client-id" name="client_id" required autocomplete="off" />
       <div class="dialog-actions">
-        <button type="submit" class="btn-primary">Open Spotify</button>
+        <button type="submit" id="connect-submit" class="btn-primary">Continue</button>
         <button type="button" class="btn-ghost" data-close>Cancel</button>
       </div>
     </form>
@@ -161,7 +163,7 @@ export function consoleDialogsHtml(plane: VaultEnvName, defaultEnv: VaultEnvName
     rotateDialog(),
     confirmDialog(),
     tokenDialog(),
-    spotifyDialog(),
+    connectDialog(),
     itemDrawer(),
     codeDialog(),
     backupCodesDialog(),

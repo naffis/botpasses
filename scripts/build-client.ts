@@ -20,6 +20,7 @@ const OUT = join(ROOT, "src/hosted/client-bundle.ts");
 export const CLIENT_BUNDLES: Record<string, string[]> = {
   CONSOLE_BUNDLE_JS: [
     "src/hosted/store-form-fields.ts",
+    "src/hosted/providers/registry.ts",
     "src/hosted/client/shared.ts",
     "src/hosted/client/routes.ts",
     "src/hosted/client/activity.ts",

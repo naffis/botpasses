@@ -1,6 +1,8 @@
 /// <reference lib="dom" />
 /** Credentials panel: filterable, sortable table plus a detail drawer. */
 import { kindPillLabel } from "../store-form-fields.ts";
+import { providerForHost } from "../providers/registry.ts";
+import type { Provider } from "../providers/types.ts";
 import type { AccessGrant, ItemRow } from "./types.ts";
 import {
   api,
@@ -25,7 +27,7 @@ export type CredentialHandlers = {
   onEdit: (item: ItemRow) => void;
   onRotate: (item: ItemRow) => void;
   onDelete: (item: ItemRow) => void;
-  onSpotify: (item: ItemRow) => void;
+  onConnect: (item: ItemRow, provider: Provider) => void;
   /** Called with the new hash when the drawer opens or closes by user action. */
   navigate: (hash: string) => void;
 };
@@ -41,6 +43,20 @@ function isItem(v: unknown): v is ItemRow {
 
 export function itemHosts(i: ItemRow): string[] {
   return i.allowedHosts ?? i.allowed_hosts ?? [];
+}
+
+/**
+ * The provider whose user connect flow this item can start: one of its hosts belongs to a
+ * registry provider with an authorize URL. A stored refresh token is the output of that flow,
+ * not its input, so `refresh` items offer no connect.
+ */
+export function connectProviderFor(i: ItemRow): Provider | undefined {
+  if (i.inject === "refresh") return undefined;
+  for (const host of itemHosts(i)) {
+    const provider = providerForHost(host);
+    if (provider?.authorizeUrl) return provider;
+  }
+  return undefined;
 }
 
 function updatedAt(i: ItemRow): string {
@@ -73,7 +89,7 @@ export function readFilter(): ItemFilter {
 
 function rowHtml(i: ItemRow): SafeHtml {
   const hosts = itemHosts(i);
-  const spotify = hosts.some((h) => h.includes("spotify"));
+  const provider = connectProviderFor(i);
   return html`<tr data-item="${i.id}" tabindex="0" role="row" data-testid="item-row">
     <td role="cell" class="name"><span class="cell-label">Name</span><span class="cell-value mono">${i.name}</span></td>
     <td role="cell"><span class="cell-label">Kind</span><span class="cell-value"><span class="pill">${kindPillLabel(i.kind, i.inject)}</span></span></td>
@@ -83,7 +99,7 @@ function rowHtml(i: ItemRow): SafeHtml {
     <td role="cell" class="actions"><span class="cell-label">Actions</span><span class="cell-value row-actions">
       <button type="button" class="btn-ghost btn-small" data-act="edit" data-testid="item-edit">Edit</button>
       <button type="button" class="btn-ghost btn-small" data-act="rotate" data-testid="item-rotate">Rotate</button>
-      ${spotify ? html`<button type="button" class="btn-ghost btn-small" data-act="spotify">Connect Spotify user</button>` : ""}
+      ${provider ? html`<button type="button" class="btn-ghost btn-small" data-act="connect" data-testid="item-connect">Connect ${provider.displayName} account</button>` : ""}
       <button type="button" class="btn-danger btn-small" data-act="delete" data-testid="item-delete">Delete</button>
     </span></td>
   </tr>`;
@@ -200,7 +216,10 @@ export function bindCredentials(h: CredentialHandlers, onRevokeGrant: (id: strin
     if (action === "edit") credHandlers.onEdit(item);
     else if (action === "rotate") credHandlers.onRotate(item);
     else if (action === "delete") credHandlers.onDelete(item);
-    else if (action === "spotify") credHandlers.onSpotify(item);
+    else if (action === "connect") {
+      const provider = connectProviderFor(item);
+      if (provider) credHandlers.onConnect(item, provider);
+    }
   };
   body?.addEventListener("click", (e) => {
     if (!(e.target instanceof Element)) return;

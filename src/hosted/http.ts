@@ -47,6 +47,9 @@ export function hostAllowed(hostHeader: string, allowed: string[], allowLoopback
   return allowed.some((a) => (a.split(":")[0] ?? "").toLowerCase() === host);
 }
 
+/** `GET /integrations/:provider/callback`; `spotify` is one value of `:provider`. */
+const CONNECT_CALLBACK_RE = /^\/integrations\/([a-z0-9_-]+)\/callback$/;
+
 export type HostedHttpOpts = {
   kernel: HostedKernel;
   host?: string;
@@ -268,7 +271,9 @@ export function createHostedServer(opts: HostedHttpOpts) {
       return;
     }
 
-    if (method === "GET" && path === "/integrations/spotify/callback") {
+    const connectCallback = CONNECT_CALLBACK_RE.exec(path);
+    if (method === "GET" && connectCallback) {
+      const providerId = connectCallback[1] ?? "";
       if (!principal || principal.channel !== "operator") {
         res.writeHead(302, { location: "/sign-in" });
         res.end();
@@ -283,17 +288,18 @@ export function createHostedServer(opts: HostedHttpOpts) {
         return;
       }
       try {
-        await opts.kernel.finishSpotifyUserOauth({
+        await opts.kernel.finishProviderUserOauth({
+          providerId,
           orgId: principal.orgId,
           userId: principal.userId,
           state,
           code,
           fetchImpl: opts.fetchImpl,
         });
-        res.writeHead(302, { location: "/console#vault?spotify=connected" });
+        res.writeHead(302, { location: `/console#vault?connected=${encodeURIComponent(providerId)}` });
         res.end();
       } catch {
-        res.writeHead(302, { location: "/console#vault?spotify=error" });
+        res.writeHead(302, { location: `/console#vault?connect_error=${encodeURIComponent(providerId)}` });
         res.end();
       }
       return;

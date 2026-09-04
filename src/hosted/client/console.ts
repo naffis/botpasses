@@ -1,6 +1,8 @@
 /// <reference lib="dom" />
 /** Console boot: routing, session gate, dialogs, and the wiring between panels. */
 import { formKindForItem, storeRequestBody } from "../store-form-fields.ts";
+import { providerById } from "../providers/registry.ts";
+import type { Provider } from "../providers/types.ts";
 import { bindAccess, loadAccess, setAgentsTab } from "./access.ts";
 import { bindAccount, loadAccount } from "./account.ts";
 import { bindCredentials, closeDrawer, loadItems, openDrawer } from "./credentials.ts";
@@ -303,44 +305,60 @@ function bindRotate(): void {
   });
 }
 
-/* ---------- spotify user connect (only for spotify-host items) ---------- */
+/* ---------- provider user connect (items whose hosts belong to a registry provider) ---------- */
 
-function openSpotify(item: ItemRow): void {
-  const form = byId<HTMLFormElement>("spotify-user");
+function openConnect(item: ItemRow, provider: Provider): void {
+  const form = byId<HTMLFormElement>("connect-provider");
   if (!form) return;
-  setFormNotice("spotify-error", "", true);
+  setFormNotice("connect-error", "", true);
+  setField(form, "provider_id", provider.id);
   setField(form, "item_name", item.name);
   setField(form, "environment", item.environment || "staging");
-  if (item.username) setField(form, "client_id", item.username);
-  openDialog("spotify-dialog");
+  setField(form, "client_id", item.username ?? "");
+  text(byId("connect-title"), `Connect ${provider.displayName} account`);
+  text(byId("connect-provider-name"), provider.displayName);
+  text(byId("connect-client-id-label"), `${provider.displayName} Client ID`);
+  text(byId("connect-submit"), `Open ${provider.displayName}`);
+  openDialog("connect-dialog");
+  byId<HTMLInputElement>("connect-client-id")?.focus();
 }
 
-function bindSpotify(): void {
-  const form = byId<HTMLFormElement>("spotify-user");
+function bindConnect(): void {
+  const form = byId<HTMLFormElement>("connect-provider");
   form?.addEventListener("submit", (e) => {
     e.preventDefault();
-    setFormNotice("spotify-error", "", true);
+    setFormNotice("connect-error", "", true);
     const read = (n: string): string => (form.elements.namedItem(n) as HTMLInputElement | null)?.value ?? "";
+    const name = providerById(read("provider_id"))?.displayName ?? "provider";
     void busy(form, async () => {
       try {
-        const r = await api("/api/integrations/spotify/start", {
+        const r = await api(`/api/integrations/${encodeURIComponent(read("provider_id"))}/start`, {
           method: "POST",
           body: JSON.stringify({ item_name: read("item_name"), environment: read("environment"), client_id: read("client_id") }),
         });
         const url = r.body.authorize_url;
         if (!r.ok || typeof url !== "string") {
-          setFormNotice("spotify-error", errorMessage(r, "Could not start Spotify connect"), false);
+          setFormNotice("connect-error", errorMessage(r, `Could not start the ${name} connect`), false);
           return;
         }
         window.location.href = url;
       } catch (err) {
-        setFormNotice("spotify-error", loadErrorText(err, "Could not start Spotify connect"), false);
+        setFormNotice("connect-error", loadErrorText(err, `Could not start the ${name} connect`), false);
       }
     });
   });
-  const q = current.query;
-  if (q.get("spotify") === "connected") flash("Spotify user connected. The refresh token is stored; the model never sees it.", true);
-  if (q.get("spotify") === "error") flash("Spotify user connect failed. Check the Client ID and the redirect URI on the Spotify app.", false);
+  // The callback lands on `#vault?connected=<provider>` or `#vault?connect_error=<provider>`.
+  const q = parseRoute(location.hash).query;
+  const connected = q.get("connected");
+  const failed = q.get("connect_error");
+  if (connected) {
+    const name = providerById(connected)?.displayName ?? "Account";
+    flash(`${name} account connected. The refresh token is stored; the model never sees it.`, true);
+  }
+  if (failed) {
+    const name = providerById(failed)?.displayName ?? "The provider";
+    flash(`${name} connect failed. Check the Client ID and the redirect URI on the ${name} app.`, false);
+  }
 }
 
 /* ---------- issue token ---------- */
@@ -402,7 +420,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindConfirm();
   bindStore();
   bindRotate();
-  bindSpotify();
+  bindConnect();
   bindIssue();
   bindBreakglass();
   bindAccount();
@@ -458,7 +476,7 @@ document.addEventListener("DOMContentLoaded", () => {
     {
       onEdit: (item) => openStore(item),
       onRotate: openRotate,
-      onSpotify: openSpotify,
+      onConnect: openConnect,
       onDelete: (item) =>
         openConfirm({
           title: `Delete ${item.name}?`,

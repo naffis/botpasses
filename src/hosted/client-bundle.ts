@@ -5,6 +5,7 @@
  */
 /** Bundle of:
  *   src/hosted/store-form-fields.ts
+ *   src/hosted/providers/registry.ts
  *   src/hosted/client/shared.ts
  *   src/hosted/client/routes.ts
  *   src/hosted/client/activity.ts
@@ -237,6 +238,146 @@ function storeRequestBody(values                 , opts                      )  
   if (!opts.editing || values.value) body.value = values.value;
   if (values.environment) body.environment = values.environment;
   return body;
+}
+
+// ---- src/hosted/providers/registry.ts ----
+/**
+ * Known OAuth2 providers. Every vendor fact (hosts, token endpoint shape, scopes, hints) is an
+ * entry here; connector.ts and mcp-http.ts stay vendor-free and look providers up by host.
+ */
+
+const OAUTH_TOKEN_KEYS = ["access_token", "refresh_token", "id_token"];
+
+const PROVIDERS                      = [
+  {
+    id: "spotify",
+    displayName: "Spotify",
+    apiHosts: ["api.spotify.com"],
+    tokenHost: "accounts.spotify.com",
+    tokenPath: "/api/token",
+    tokenAuth: "basic",
+    grantTypes: ["client_credentials", "authorization_code", "refresh_token"],
+    authorizeUrl: "https://accounts.spotify.com/authorize",
+    scopesParam: "scope",
+    defaultScopes: [
+      "user-read-email",
+      "user-read-private",
+      "playlist-read-private",
+      "playlist-read-collaborative",
+      "playlist-modify-public",
+      "playlist-modify-private",
+    ],
+    pkce: true,
+    redactKeys: OAUTH_TOKEN_KEYS,
+    userPathHints: [
+      {
+        pathPrefixes: ["/v1/me", "/v1/playlists", "/v1/users/*/playlists"],
+        message:
+          "Client credentials cannot call this path or private playlists. Connect a Spotify user in the Botpasses console (Authorization Code + PKCE). Public search (GET /v1/search) works with the app token.",
+      },
+    ],
+    docsUrl: "https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow",
+  },
+  {
+    id: "github",
+    displayName: "GitHub",
+    apiHosts: ["api.github.com"],
+    tokenHost: "github.com",
+    tokenPath: "/login/oauth/access_token",
+    tokenAuth: "post_body",
+    // GitHub Apps have no client_credentials grant; app tokens come from user or installation flows.
+    grantTypes: ["authorization_code", "refresh_token"],
+    authorizeUrl: "https://github.com/login/oauth/authorize",
+    scopesParam: "scope",
+    pkce: false,
+    redactKeys: OAUTH_TOKEN_KEYS,
+    docsUrl: "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps",
+  },
+  {
+    id: "google",
+    displayName: "Google",
+    apiHosts: ["www.googleapis.com", "gmail.googleapis.com", "sheets.googleapis.com"],
+    tokenHost: "oauth2.googleapis.com",
+    tokenPath: "/token",
+    tokenAuth: "post_body",
+    grantTypes: ["authorization_code", "refresh_token"],
+    authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    scopesParam: "scope",
+    pkce: true,
+    redactKeys: OAUTH_TOKEN_KEYS,
+    docsUrl: "https://developers.google.com/identity/protocols/oauth2/web-server",
+  },
+  {
+    id: "slack",
+    displayName: "Slack",
+    apiHosts: ["slack.com"],
+    tokenHost: "slack.com",
+    tokenPath: "/api/oauth.v2.access",
+    tokenAuth: "basic",
+    grantTypes: ["authorization_code", "refresh_token"],
+    authorizeUrl: "https://slack.com/oauth/v2/authorize",
+    scopesParam: "scope",
+    pkce: false,
+    redactKeys: OAUTH_TOKEN_KEYS,
+    docsUrl: "https://api.slack.com/authentication/oauth-v2",
+  },
+  {
+    id: "stripe",
+    displayName: "Stripe Connect",
+    apiHosts: ["api.stripe.com"],
+    tokenHost: "connect.stripe.com",
+    tokenPath: "/oauth/token",
+    tokenAuth: "post_body",
+    grantTypes: ["authorization_code", "refresh_token"],
+    authorizeUrl: "https://connect.stripe.com/oauth/authorize",
+    scopesParam: "scope",
+    defaultScopes: ["read_write"],
+    pkce: false,
+    redactKeys: OAUTH_TOKEN_KEYS,
+    docsUrl: "https://docs.stripe.com/connect/oauth-reference",
+  },
+];
+
+function providerById(id        )                       {
+  return PROVIDERS.find((p) => p.id === id);
+}
+
+/** Provider whose API hosts or token host include \`host\`. Exact, case-insensitive. */
+function providerForHost(host        )                       {
+  const h = host.toLowerCase();
+  return PROVIDERS.find((p) => p.tokenHost === h || p.apiHosts.includes(h));
+}
+
+function isProviderId(value        )                      {
+  return PROVIDERS.some((p) => p.id === value);
+}
+
+function pathOnly(path        )         {
+  return path.split("?")[0] ?? "";
+}
+
+/** True when \`host\`/\`path\` is the provider's token endpoint (query string ignored). */
+function isTokenPath(provider          , host        , path        )          {
+  return host.toLowerCase() === provider.tokenHost && pathOnly(path) === provider.tokenPath;
+}
+
+/** True when the API host belongs to the provider (the token host does not count). */
+function isApiHost(provider          , host        )          {
+  return provider.apiHosts.includes(host.toLowerCase());
+}
+
+/** Prefix match where \`*\` stands for exactly one path segment. */
+function pathMatchesPrefix(path        , prefix        )          {
+  const segs = pathOnly(path).split("/").filter(Boolean);
+  const want = prefix.split("/").filter(Boolean);
+  if (want.length > segs.length) return false;
+  return want.every((w, i) => w === "*" || w === segs[i]);
+}
+
+/** The hint whose prefixes cover this API path, if the path needs a user token. */
+function userPathHint(provider          , host        , path        )                           {
+  if (!isApiHost(provider, host)) return undefined;
+  return provider.userPathHints?.find((hint) => hint.pathPrefixes.some((p) => pathMatchesPrefix(path, p)));
 }
 
 // ---- src/hosted/client/shared.ts ----
@@ -1153,6 +1294,20 @@ function itemHosts(i         )           {
   return i.allowedHosts ?? i.allowed_hosts ?? [];
 }
 
+/**
+ * The provider whose user connect flow this item can start: one of its hosts belongs to a
+ * registry provider with an authorize URL. A stored refresh token is the output of that flow,
+ * not its input, so \`refresh\` items offer no connect.
+ */
+function connectProviderFor(i         )                       {
+  if (i.inject === "refresh") return undefined;
+  for (const host of itemHosts(i)) {
+    const provider = providerForHost(host);
+    if (provider?.authorizeUrl) return provider;
+  }
+  return undefined;
+}
+
 function updatedAt(i         )         {
   return i.updated_at ?? i.updatedAt ?? i.created_at ?? i.createdAt ?? "";
 }
@@ -1183,7 +1338,7 @@ function readFilter()             {
 
 function rowHtml(i         )           {
   const hosts = itemHosts(i);
-  const spotify = hosts.some((h) => h.includes("spotify"));
+  const provider = connectProviderFor(i);
   return html\`<tr data-item="\${i.id}" tabindex="0" role="row" data-testid="item-row">
     <td role="cell" class="name"><span class="cell-label">Name</span><span class="cell-value mono">\${i.name}</span></td>
     <td role="cell"><span class="cell-label">Kind</span><span class="cell-value"><span class="pill">\${kindPillLabel(i.kind, i.inject)}</span></span></td>
@@ -1193,7 +1348,7 @@ function rowHtml(i         )           {
     <td role="cell" class="actions"><span class="cell-label">Actions</span><span class="cell-value row-actions">
       <button type="button" class="btn-ghost btn-small" data-act="edit" data-testid="item-edit">Edit</button>
       <button type="button" class="btn-ghost btn-small" data-act="rotate" data-testid="item-rotate">Rotate</button>
-      \${spotify ? html\`<button type="button" class="btn-ghost btn-small" data-act="spotify">Connect Spotify user</button>\` : ""}
+      \${provider ? html\`<button type="button" class="btn-ghost btn-small" data-act="connect" data-testid="item-connect">Connect \${provider.displayName} account</button>\` : ""}
       <button type="button" class="btn-danger btn-small" data-act="delete" data-testid="item-delete">Delete</button>
     </span></td>
   </tr>\`;
@@ -1310,7 +1465,10 @@ function bindCredentials(h                    , onRevokeGrant                   
     if (action === "edit") credHandlers.onEdit(item);
     else if (action === "rotate") credHandlers.onRotate(item);
     else if (action === "delete") credHandlers.onDelete(item);
-    else if (action === "spotify") credHandlers.onSpotify(item);
+    else if (action === "connect") {
+      const provider = connectProviderFor(item);
+      if (provider) credHandlers.onConnect(item, provider);
+    }
   };
   body?.addEventListener("click", (e) => {
     if (!(e.target instanceof Element)) return;
@@ -2328,44 +2486,60 @@ function bindRotate()       {
   });
 }
 
-/* ---------- spotify user connect (only for spotify-host items) ---------- */
+/* ---------- provider user connect (items whose hosts belong to a registry provider) ---------- */
 
-function openSpotify(item         )       {
-  const form = byId                 ("spotify-user");
+function openConnect(item         , provider          )       {
+  const form = byId                 ("connect-provider");
   if (!form) return;
-  setFormNotice("spotify-error", "", true);
+  setFormNotice("connect-error", "", true);
+  setField(form, "provider_id", provider.id);
   setField(form, "item_name", item.name);
   setField(form, "environment", item.environment || "staging");
-  if (item.username) setField(form, "client_id", item.username);
-  openDialog("spotify-dialog");
+  setField(form, "client_id", item.username ?? "");
+  text(byId("connect-title"), \`Connect \${provider.displayName} account\`);
+  text(byId("connect-provider-name"), provider.displayName);
+  text(byId("connect-client-id-label"), \`\${provider.displayName} Client ID\`);
+  text(byId("connect-submit"), \`Open \${provider.displayName}\`);
+  openDialog("connect-dialog");
+  byId                  ("connect-client-id")?.focus();
 }
 
-function bindSpotify()       {
-  const form = byId                 ("spotify-user");
+function bindConnect()       {
+  const form = byId                 ("connect-provider");
   form?.addEventListener("submit", (e) => {
     e.preventDefault();
-    setFormNotice("spotify-error", "", true);
+    setFormNotice("connect-error", "", true);
     const read = (n        )         => (form.elements.namedItem(n)                           )?.value ?? "";
+    const name = providerById(read("provider_id"))?.displayName ?? "provider";
     void busy(form, async () => {
       try {
-        const r = await api("/api/integrations/spotify/start", {
+        const r = await api(\`/api/integrations/\${encodeURIComponent(read("provider_id"))}/start\`, {
           method: "POST",
           body: JSON.stringify({ item_name: read("item_name"), environment: read("environment"), client_id: read("client_id") }),
         });
         const url = r.body.authorize_url;
         if (!r.ok || typeof url !== "string") {
-          setFormNotice("spotify-error", errorMessage(r, "Could not start Spotify connect"), false);
+          setFormNotice("connect-error", errorMessage(r, \`Could not start the \${name} connect\`), false);
           return;
         }
         window.location.href = url;
       } catch (err) {
-        setFormNotice("spotify-error", loadErrorText(err, "Could not start Spotify connect"), false);
+        setFormNotice("connect-error", loadErrorText(err, \`Could not start the \${name} connect\`), false);
       }
     });
   });
-  const q = current.query;
-  if (q.get("spotify") === "connected") flash("Spotify user connected. The refresh token is stored; the model never sees it.", true);
-  if (q.get("spotify") === "error") flash("Spotify user connect failed. Check the Client ID and the redirect URI on the Spotify app.", false);
+  // The callback lands on \`#vault?connected=<provider>\` or \`#vault?connect_error=<provider>\`.
+  const q = parseRoute(location.hash).query;
+  const connected = q.get("connected");
+  const failed = q.get("connect_error");
+  if (connected) {
+    const name = providerById(connected)?.displayName ?? "Account";
+    flash(\`\${name} account connected. The refresh token is stored; the model never sees it.\`, true);
+  }
+  if (failed) {
+    const name = providerById(failed)?.displayName ?? "The provider";
+    flash(\`\${name} connect failed. Check the Client ID and the redirect URI on the \${name} app.\`, false);
+  }
 }
 
 /* ---------- issue token ---------- */
@@ -2427,7 +2601,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindConfirm();
   bindStore();
   bindRotate();
-  bindSpotify();
+  bindConnect();
   bindIssue();
   bindBreakglass();
   bindAccount();
@@ -2483,7 +2657,7 @@ document.addEventListener("DOMContentLoaded", () => {
     {
       onEdit: (item) => openStore(item),
       onRotate: openRotate,
-      onSpotify: openSpotify,
+      onConnect: openConnect,
       onDelete: (item) =>
         openConfirm({
           title: \`Delete \${item.name}?\`,

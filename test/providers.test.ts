@@ -12,7 +12,7 @@ import { assertRedirectUri } from "../src/hosted/oauth-as.ts";
 import { isTokenPath, pathMatchesPrefix, PROVIDERS, providerById, providerForHost, userPathHint } from "../src/hosted/providers/registry.ts";
 import { cachedMint, clearMintCache, storeMint } from "../src/hosted/providers/token-cache.ts";
 import { authorizeUrl, chooseRedirect, openOauthState, sealOauthState } from "../src/hosted/providers/user-oauth.ts";
-import { chooseSpotifyRedirect, spotifyAuthorizeUrl } from "../src/hosted/spotify.ts";
+import { isHttpError } from "../src/hosted/errors.ts";
 import { redactOauthJson } from "../src/redact.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
@@ -177,7 +177,7 @@ test("registry: token paths and user-path hints are answered from data", () => {
   assert.match(userPathHint(spotify, "api.spotify.com", "/v1/me")?.message ?? "", /Connect a Spotify user/);
 });
 
-test("user connect helpers are provider-generic; the spotify shim delegates to them", () => {
+test("user connect helpers are provider-generic", () => {
   const spotify = providerById("spotify");
   const google = providerById("google");
   const stripe = providerById("stripe");
@@ -186,13 +186,12 @@ test("user connect helpers are provider-generic; the spotify shim delegates to t
   assert.equal(url.origin + url.pathname, "https://accounts.spotify.com/authorize");
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
   assert.match(url.searchParams.get("scope") ?? "", /playlist-read-private/);
-  assert.equal(spotifyAuthorizeUrl({ clientId: "cid", redirectUri: "https://x/cb", state: "s", codeVerifier: "v".repeat(43) }), url.toString());
   const stripeUrl = new URL(authorizeUrl(stripe, { clientId: "ca_x", redirectUri: "https://x/cb", state: "s", codeVerifier: "v" }));
   assert.equal(stripeUrl.searchParams.get("code_challenge"), null, "no PKCE for providers that do not support it");
   assert.equal(stripeUrl.searchParams.get("scope"), "read_write");
   assert.equal(chooseRedirect(google, "https://botpasses.com"), "https://botpasses.com/integrations/google/callback");
   assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8888/callback");
-  assert.equal(chooseSpotifyRedirect("https://botpasses.com"), "https://botpasses.com/integrations/spotify/callback");
+  assert.equal(chooseRedirect(spotify, "https://botpasses.com"), "https://botpasses.com/integrations/spotify/callback");
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "https://evil.example/cb"), /redirect_uri/);
   const kek = parseMasterKey(generateMasterKey());
   const state = sealOauthState(
@@ -201,6 +200,172 @@ test("user connect helpers are provider-generic; the spotify shim delegates to t
   );
   assert.equal(openOauthState(state, kek).providerId, "google");
   assert.throws(() => openOauthState(state, parseMasterKey(generateMasterKey())), /Invalid OAuth state/);
+});
+
+/** The provider's authorize URL from `POST /api/integrations/:provider/start`, with its sealed state. */
+async function startConnect(ctx: Ctx, providerId: string, body: Record<string, unknown>) {
+  const res = await fetch(`${ctx.base}/api/integrations/${providerId}/start`, {
+    method: "POST",
+    headers: ctx.op,
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json()) as { authorize_url?: string; redirect_uri?: string; provider?: string; error?: string };
+  const url = json.authorize_url ? new URL(json.authorize_url) : undefined;
+  return { res, json, url, state: url?.searchParams.get("state") ?? "" };
+}
+
+async function callback(ctx: Ctx, providerId: string, query: Record<string, string>) {
+  const res = await fetch(`${ctx.base}/integrations/${providerId}/callback?${new URLSearchParams(query)}`, {
+    headers: ctx.op,
+    redirect: "manual",
+  });
+  return { status: res.status, location: res.headers.get("location") ?? "" };
+}
+
+/** Token endpoint that accepts the code exchange for one provider and hands back a refresh token. */
+function codeExchangeHandler(tokenUrl: string, wantVerifier: boolean) {
+  return async (url: string, init?: RequestInit) => {
+    if (!url.includes(tokenUrl)) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    const ok =
+      form.get("grant_type") === "authorization_code" &&
+      form.get("code") === "c0de" &&
+      Boolean(form.get("redirect_uri")) &&
+      (wantVerifier ? Boolean(form.get("code_verifier")) : true);
+    if (!ok) return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    return tokenJson({ refresh_token: REFRESH, scope: "user-read-email" });
+  };
+}
+
+test("user connect over HTTP: start returns the provider authorize URL; the callback stores <ITEM>_REFRESH with inject refresh", async () => {
+  const ctx = await setup(codeExchangeHandler("accounts.spotify.com/api/token", true));
+  try {
+    const started = await startConnect(ctx, "spotify", { item_name: "SPOTIFY_SECRET", environment: "staging" });
+    assert.equal(started.res.status, 200, JSON.stringify(started.json));
+    assert.ok(started.url);
+    assert.equal(started.url.origin + started.url.pathname, "https://accounts.spotify.com/authorize");
+    assert.equal(started.url.searchParams.get("client_id"), CLIENT_ID, "client id falls back to the item username");
+    assert.equal(started.url.searchParams.get("code_challenge_method"), "S256");
+    assert.equal(started.json.redirect_uri, "http://127.0.0.1:8888/callback");
+    assert.equal(started.json.provider, "spotify");
+    assert.doesNotMatch(JSON.stringify(started.json), new RegExp(CLIENT_SECRET));
+
+    const done = await callback(ctx, "spotify", { code: "c0de", state: started.state });
+    assert.equal(done.status, 302);
+    assert.equal(done.location, "/console#vault?connected=spotify");
+    const items = await ctx.kernel.listItems(ctx.orgId, "staging");
+    const refresh = items.find((i) => i.name === "SPOTIFY_REFRESH");
+    assert.ok(refresh, "refresh item stored");
+    assert.equal(refresh.inject, "refresh");
+    assert.equal(refresh.kind, "secret");
+    assert.equal(refresh.username, CLIENT_ID);
+    assert.equal(refresh.last4, REFRESH.slice(-4));
+    assert.deepEqual(refresh.allowedHosts, ["api.spotify.com", "accounts.spotify.com"], "provider API hosts plus the token host");
+    assert.equal(await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, refresh.id), undefined, "no policy without agent_client_id");
+    const decrypted = await ctx.kernel.decryptItem(ctx.orgId, refresh.id);
+    assert.equal(decrypted.secret, REFRESH);
+
+    // A second connect rotates the stored refresh token in place.
+    const again = await startConnect(ctx, "spotify", { item_name: "SPOTIFY_SECRET", environment: "staging" });
+    const rotated = await callback(ctx, "spotify", { code: "c0de", state: again.state });
+    assert.equal(rotated.location, "/console#vault?connected=spotify");
+    assert.equal((await ctx.kernel.listItems(ctx.orgId, "staging")).filter((i) => i.name === "SPOTIFY_REFRESH").length, 1);
+
+    // Unknown provider, and a provider-less callback (denied at the vendor) both land back on the console.
+    const nope = await startConnect(ctx, "nope", { item_name: "SPOTIFY_SECRET", environment: "staging" });
+    assert.equal(nope.res.status, 404);
+    const denied = await callback(ctx, "spotify", { error: "access_denied", state: "x" });
+    assert.equal(denied.location, "/console#vault");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("user connect for a second provider (GitHub, no PKCE) and the narrowed auto-policy for one named agent", async () => {
+  const GH_SECRET = "gh_app_client_secret_CANARY_2c3d";
+  const ctx = await setup(codeExchangeHandler("github.com/login/oauth/access_token", false));
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "client_secret",
+      name: "GITHUB_APP_SECRET",
+      value: GH_SECRET,
+      username: "Iv1.abc123",
+      allowedHosts: ["api.github.com", "github.com"],
+      inject: "client_credentials",
+    });
+    const { client: other } = await ctx.kernel.createModelClient({ orgId: ctx.orgId, name: "other", environment: "staging" });
+    const started = await startConnect(ctx, "github", {
+      item_name: "GITHUB_APP_SECRET",
+      environment: "staging",
+      agent_client_id: ctx.model.id,
+    });
+    assert.equal(started.res.status, 200, JSON.stringify(started.json));
+    assert.ok(started.url);
+    assert.equal(started.url.origin + started.url.pathname, "https://github.com/login/oauth/authorize");
+    assert.equal(started.url.searchParams.get("code_challenge"), null);
+    assert.equal(started.json.redirect_uri, "http://127.0.0.1:8888/callback");
+
+    const done = await callback(ctx, "github", { code: "c0de", state: started.state });
+    assert.equal(done.location, "/console#vault?connected=github");
+    const refresh = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "GITHUB_APP_REFRESH");
+    assert.ok(refresh);
+    assert.deepEqual(refresh.allowedHosts, ["api.github.com", "github.com"]);
+    const mine = await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, refresh.id);
+    assert.equal(mine?.kind, "item_standing", "the named agent gets a standing policy");
+    assert.equal(await ctx.kernel.store.findItemPolicy(ctx.orgId, other.id, refresh.id), undefined, "other agents do not");
+    const exchange = ctx.hits.find((h) => h.url.includes("/login/oauth/access_token"));
+    assert.ok(exchange);
+    assert.equal(exchange.auth, "", "post_body providers carry the client secret in the form");
+    assert.equal(new URLSearchParams(exchange.body).get("client_secret"), GH_SECRET);
+    assert.doesNotMatch(JSON.stringify(ctx.hits.map((h) => h.url)), new RegExp(GH_SECRET));
+
+    const bad = await startConnect(ctx, "github", { item_name: "GITHUB_APP_SECRET", environment: "staging", agent_client_id: "cli_nope" });
+    assert.equal(bad.res.status, 404, "agent_client_id must be a client in this org");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("user connect rejects a state minted for another provider, another org, or another KEK", async () => {
+  const ctx = await setup(codeExchangeHandler("accounts.spotify.com/api/token", true));
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "client_secret",
+      name: "GOOGLE_SECRET",
+      value: "google_client_secret_CANARY_9e8f",
+      username: "123.apps.googleusercontent.com",
+      allowedHosts: ["www.googleapis.com", "oauth2.googleapis.com"],
+      inject: "client_credentials",
+    });
+    const google = await startConnect(ctx, "google", { item_name: "GOOGLE_SECRET", environment: "staging" });
+    assert.equal(google.res.status, 200, JSON.stringify(google.json));
+    // The Google state arrives on the Spotify callback: refused before any token request leaves.
+    const crossed = await callback(ctx, "spotify", { code: "c0de", state: google.state });
+    assert.equal(crossed.location, "/console#vault?connect_error=spotify");
+    assert.equal(ctx.hits.length, 0, "no code exchange was attempted");
+    await assert.rejects(
+      () => ctx.kernel.finishProviderUserOauth({ providerId: "spotify", orgId: ctx.orgId, userId: "user_owner", state: google.state, code: "c0de" }),
+      (err: unknown) => isHttpError(err) && err.status === 400 && /another provider/.test(err.message),
+    );
+    await assert.rejects(
+      () => ctx.kernel.finishProviderUserOauth({ providerId: "google", orgId: "org_other", userId: "user_owner", state: google.state, code: "c0de" }),
+      (err: unknown) => isHttpError(err) && err.status === 403,
+    );
+    const foreignKek = new HostedKernel({ store: ctx.store, kek: parseMasterKey(generateMasterKey()), publicUrl: "http://127.0.0.1:8788" });
+    await assert.rejects(
+      () => foreignKek.finishProviderUserOauth({ orgId: ctx.orgId, userId: "user_owner", state: google.state, code: "c0de" }),
+      (err: unknown) => isHttpError(err) && err.status === 400,
+    );
+    assert.equal((await ctx.kernel.listItems(ctx.orgId, "staging")).some((i) => i.name.endsWith("_REFRESH")), false);
+  } finally {
+    await teardown(ctx);
+  }
 });
 
 test("token cache is keyed by org, item, client, and grant type and drops entries near expiry", () => {

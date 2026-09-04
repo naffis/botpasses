@@ -23,8 +23,11 @@ test("operator page uses the product vocabulary and no vendor names in generic c
   // Vendor tips only inside collapsed disclosures.
   const grok = html.match(/<details class="vendor-tip">\s*<summary>Connecting Grok\?<\/summary>[\s\S]*?<\/details>/);
   assert.ok(grok, "Grok tip is a collapsed details");
-  const withoutTips = html.replace(/<details class="vendor-tip">[\s\S]*?<\/details>/g, "").replace(/<dialog id="spotify-dialog"[\s\S]*?<\/dialog>/, "");
+  const withoutTips = html.replace(/<details class="vendor-tip">[\s\S]*?<\/details>/g, "");
   assert.doesNotMatch(withoutTips, /Grok|Spotify|spotify/);
+  // The connect dialog is vendor-free markup; the bundle names the provider when it opens.
+  assert.match(html, /<dialog id="connect-dialog" data-testid="connect-dialog" aria-labelledby="connect-title">/);
+  assert.match(html, /<input type="hidden" name="provider_id" \/>/);
   assert.match(html, /data-testid="item-delete-confirm"/);
   assert.doesNotMatch(html, /access-revoke/);
   assert.match(html, /data-testid="access-panel"/);

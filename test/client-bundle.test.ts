@@ -81,7 +81,7 @@ test("routes: deep links parse, legacy hashes map, and hashes round-trip", () =>
   const legacy = parseRoute("#access/client/cli_2/item/GITHUB_TOKEN");
   assert.deepEqual([legacy.panel, legacy.tab, legacy.agent, legacy.credential], ["agents", "activity", "cli_2", "GITHUB_TOKEN"]);
   assert.equal(parseRoute("#connect").panel, "agents");
-  assert.equal(parseRoute("#vault?spotify=connected").query.get("spotify"), "connected");
+  assert.equal(parseRoute("#vault?connected=spotify").query.get("connected"), "spotify");
   assert.equal(agentsHash("activity", { agent: "a b" }), "#agents/activity?agent=a+b");
   assert.equal(itemHash("itm/1"), "#credentials/item/itm%2F1");
   for (const h of ["#inbox", "#account", "#breakglass", "#credentials", "#credentials/item/x", "#agents/sessions", "#agents/activity?agent=a"]) {

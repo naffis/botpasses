@@ -90,17 +90,11 @@ import { OrgRateLimiter } from "./rate-limit.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
 import { IdentityKeyring, type IdentityRotateResult } from "./identity-keys.ts";
 import { itemStoresLoginPayload, storedItemUsername } from "./store-form-fields.ts";
-import {
-  chooseSpotifyRedirect,
-  mintSpotifyAccessToken,
-  openOauthState,
-  pkceVerifier,
-  refreshItemName,
-  sealOauthState,
-  spotifyAuthorizeUrl,
-  SPOTIFY_ACCOUNTS_HOST,
-  SPOTIFY_API_HOST,
-} from "./spotify.ts";
+import type { ConnectorFetch } from "./connector.ts";
+import { exchangeAuthorizationCode, refreshItemName } from "./providers/oauth.ts";
+import { providerById } from "./providers/registry.ts";
+import type { Provider, ProviderId } from "./providers/types.ts";
+import { authorizeUrl, chooseRedirect, openOauthState, pkceVerifier, sealOauthState } from "./providers/user-oauth.ts";
 
 const MAX_ITEM_BYTES = 64 * 1024;
 /** Access shows `idHash.slice(0, 12)`; anything shorter is not a session id. */
@@ -1020,23 +1014,52 @@ export class HostedKernel {
     return this.#publicItem(nextEnv.name, saved);
   }
 
-  async startSpotifyUserOauth(input: {
+  /* ---- provider user connect (authorization_code) ---- */
+
+  /** A registry provider with a user connect flow; 404 for unknown ids, 400 when it has no authorize URL. */
+  #connectProvider(providerId: string): Provider {
+    const provider = providerById(providerId);
+    if (!provider) throw new HttpError(404, "Unknown provider", { provider: providerId });
+    if (!provider.authorizeUrl) {
+      throw new HttpError(400, `${provider.displayName} has no user connect flow`, { provider: provider.id });
+    }
+    return provider;
+  }
+
+  /**
+   * Starts the user connect for `providerId` against a stored client-secret item. The sealed
+   * state carries the provider id, so the callback rejects a state minted for another provider.
+   * `agentClientId` names the one model client that gets an `item_standing` policy on the
+   * refresh item after connect; without it the operator approves normally.
+   */
+  async startProviderUserOauth(input: {
+    providerId: string;
     orgId: string;
     userId: string;
     itemName: string;
     environment: VaultEnvName;
     clientId?: string;
     redirectUri?: string;
-  }): Promise<{ authorize_url: string; redirect_uri: string }> {
+    agentClientId?: string;
+  }): Promise<{ authorize_url: string; redirect_uri: string; provider: ProviderId }> {
+    const provider = this.#connectProvider(input.providerId);
     const env = await this.envFor(input.orgId, input.environment);
-    const item = await this.store.getItemByName(env.id, normalizeSecretName(input.itemName));
+    const item = await this.store.getItemByName(env.id, normalizeItemName(input.itemName));
     if (!item) throw new HttpError(404, "Unknown item");
     const clientId = (input.clientId ?? item.username ?? "").trim();
-    if (!clientId) throw new HttpError(400, "Spotify Client ID is required (item username or client_id)");
-    const redirectUri = chooseSpotifyRedirect(this.publicUrl, input.redirectUri);
+    if (!clientId) {
+      throw new HttpError(400, `${provider.displayName} Client ID is required (item username or client_id)`);
+    }
+    const agentClientId = input.agentClientId?.trim() || undefined;
+    if (agentClientId) {
+      const agent = await this.#clientInOrg(input.orgId, agentClientId);
+      if (agent.kind !== "model" || agent.revokedAt) throw new HttpError(400, "agent_client_id must be an active model client");
+    }
+    const redirectUri = chooseRedirect(provider, this.publicUrl, input.redirectUri);
     const codeVerifier = pkceVerifier();
     const state = sealOauthState(
       {
+        providerId: provider.id,
         orgId: input.orgId,
         userId: input.userId,
         itemId: item.id,
@@ -1046,45 +1069,59 @@ export class HostedKernel {
         redirectUri,
         codeVerifier,
         exp: this.now().getTime() + 10 * 60 * 1000,
+        ...(agentClientId ? { agentClientId } : {}),
       },
       this.#kek,
     );
     return {
-      authorize_url: spotifyAuthorizeUrl({ clientId, redirectUri, state, codeVerifier }),
+      authorize_url: authorizeUrl(provider, { clientId, redirectUri, state, codeVerifier }),
       redirect_uri: redirectUri,
+      provider: provider.id,
     };
   }
 
-  async finishSpotifyUserOauth(input: {
+  /**
+   * Exchanges the callback code with the client-secret item and stores the refresh token as
+   * `<ITEM>_REFRESH` (`inject: refresh`, allowed on the provider's API and token hosts). When
+   * `providerId` is given (the callback route's `:provider`) the state must have been minted for it.
+   */
+  async finishProviderUserOauth(input: {
+    providerId?: string;
     orgId: string;
     userId: string;
     state: string;
     code: string;
-    fetchImpl?: import("./connector.ts").ConnectorFetch;
-  }): Promise<{ item_name: string; last4: string }> {
+    fetchImpl?: ConnectorFetch;
+  }): Promise<{ item_name: string; last4: string; provider: ProviderId }> {
     const opened = openOauthState(input.state, this.#kek, this.now().getTime());
-    if (opened.orgId !== input.orgId) throw new HttpError(403, "Spotify OAuth state is not for this org");
+    if (input.providerId !== undefined && opened.providerId !== input.providerId) {
+      throw new HttpError(400, "OAuth state is for another provider", { provider: opened.providerId });
+    }
+    const provider = this.#connectProvider(opened.providerId);
+    if (opened.orgId !== input.orgId) throw new HttpError(403, "OAuth state is not for this org");
     const item = await this.store.getItem(opened.itemId);
     if (!item) throw new HttpError(404, "Unknown item");
     const decrypted = await this.decryptItem(input.orgId, item.id);
-    const exchange = await mintSpotifyAccessToken({
-      item: decrypted,
-      clientId: opened.clientId,
-      grantType: "authorization_code",
-      code: input.code,
-      redirectUri: opened.redirectUri,
-      codeVerifier: opened.codeVerifier,
-      fetchImpl: input.fetchImpl,
-    });
+    const exchange = await exchangeAuthorizationCode(
+      provider,
+      decrypted,
+      {
+        clientId: opened.clientId,
+        code: input.code,
+        redirectUri: opened.redirectUri,
+        codeVerifier: opened.codeVerifier,
+      },
+      { fetchImpl: input.fetchImpl },
+    );
     if (exchange.origin.status < 200 || exchange.origin.status >= 300) {
       throw new HttpError(
         exchange.origin.status >= 400 ? exchange.origin.status : 502,
-        "Spotify code exchange failed",
+        `${provider.displayName} code exchange failed`,
       );
     }
     const refresh = exchange.minted.refreshToken;
     if (!refresh) {
-      throw new HttpError(502, "Spotify did not return a refresh token");
+      throw new HttpError(502, `${provider.displayName} did not return a refresh token`);
     }
     const name = refreshItemName(opened.itemName);
     const envName = opened.environment === "production" ? "production" : "staging";
@@ -1109,32 +1146,31 @@ export class HostedKernel {
         name,
         value: refresh,
         username: opened.clientId,
-        allowedHosts: [SPOTIFY_API_HOST, SPOTIFY_ACCOUNTS_HOST],
+        allowedHosts: [...new Set([...provider.apiHosts, provider.tokenHost])],
         inject: "refresh",
       });
       last = created.last4;
       refreshId = created.id;
     }
-    const clients = await this.store.listClients(input.orgId);
-    const at = nowIso(this.now());
-    for (const client of clients) {
-      if (client.kind !== "model" || client.revokedAt) continue;
-      const have = await this.store.findItemPolicy(input.orgId, client.id, refreshId);
-      if (have) continue;
-      await this.store.insertPolicy({
-        id: `pol_${randomUUID()}`,
-        orgId: input.orgId,
-        clientId: client.id,
-        itemId: refreshId,
-        folderId: null,
-        environmentId: env.id,
-        kind: "item_standing",
-        createdAt: at,
-        ...unscopedFields(),
-        expiresAt: null,
-      });
+    if (opened.agentClientId) {
+      const agent = await this.#clientInOrg(input.orgId, opened.agentClientId);
+      const have = await this.store.findItemPolicy(input.orgId, agent.id, refreshId);
+      if (agent.kind === "model" && !agent.revokedAt && !have) {
+        await this.store.insertPolicy({
+          id: `pol_${randomUUID()}`,
+          orgId: input.orgId,
+          clientId: agent.id,
+          itemId: refreshId,
+          folderId: null,
+          environmentId: env.id,
+          kind: "item_standing",
+          createdAt: nowIso(this.now()),
+          ...unscopedFields(),
+          expiresAt: null,
+        });
+      }
     }
-    return { item_name: name, last4: last };
+    return { item_name: name, last4: last, provider: provider.id };
   }
 
   /** Validates a magic link and returns what approving it would do. No state change. */

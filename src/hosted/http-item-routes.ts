@@ -1,10 +1,13 @@
-/** Operator vault item routes: /api/items, /api/folders, /api/need-items, Spotify user connect. */
+/** Operator vault item routes: /api/items, /api/folders, /api/need-items, provider user connect. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { requireOperator, type Principal } from "./auth.ts";
 import { asEnv, asHosts, asKind, json, optional, readJson } from "./http-util.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { defaultInjectForKind } from "./store-form-fields.ts";
 import { parseInjectMode } from "./providers/inject.ts";
+
+/** `POST /api/integrations/:provider/start`; `spotify` is one value of `:provider`. */
+const CONNECT_START_RE = /^\/api\/integrations\/([a-z0-9_-]+)\/start$/;
 
 export async function handleItemRoutes(
   req: IncomingMessage,
@@ -115,16 +118,19 @@ export async function handleItemRoutes(
     json(res, 200, { item });
     return true;
   }
-  if (method === "POST" && path === "/api/integrations/spotify/start") {
+  const connectStart = CONNECT_START_RE.exec(path);
+  if (method === "POST" && connectStart) {
     const op = requireOperator(principal);
     const body = await readJson(req);
-    const started = await kernel.startSpotifyUserOauth({
+    const started = await kernel.startProviderUserOauth({
+      providerId: connectStart[1] ?? "",
       orgId: op.orgId,
       userId: op.userId,
       itemName: String(body.item_name ?? body.itemName ?? ""),
       environment: asEnv(body.environment),
       clientId: optional(body.client_id ?? body.clientId),
       redirectUri: optional(body.redirect_uri ?? body.redirectUri),
+      agentClientId: optional(body.agent_client_id ?? body.agentClientId),
     });
     json(res, 200, started);
     return true;
