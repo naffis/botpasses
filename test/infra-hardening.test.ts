@@ -542,6 +542,8 @@ test("N6, N10: deploy and backup secrets are environment-scoped, flyctl names it
   const backup = readFileSync(join(process.cwd(), ".github/workflows/backup-prod.yml"), "utf8");
   assert.match(staging, /environment: staging/);
   assert.match(staging, /flyctl deploy [^\n]*-a botpasses-staging/);
+  assert.match(staging, /"machine", "start"/, "a stopped Machine after deploy is started");
+  assert.match(staging, /botpasses-staging\.fly\.dev\/ready/, "deploy waits until /ready answers");
   assert.match(prod, /environment: production/);
   assert.match(prod, /flyctl deploy [^\n]*-a botpasses-prod/);
   assert.match(prod, /actions: read/);

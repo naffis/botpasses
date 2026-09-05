@@ -38,3 +38,39 @@ jobs:
       - run: flyctl deploy --remote-only -c fly.staging.toml -a botpasses-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # After a failed rolling update flyctl 0.4 can leave the Machine stopped and still
+      # exit 0 ("reached stopped state" / "now in a good state"). Start it and wait until
+      # /ready answers on the Fly hostname before calling the deploy green.
+      - name: Start a stopped Machine and wait for /ready
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl machine list -a botpasses-staging
+          python3 - <<'PY'
+          import json, subprocess, sys
+          raw = subprocess.check_output(
+              ["flyctl", "machine", "list", "-a", "botpasses-staging", "--json"],
+              text=True,
+          )
+          machines = json.loads(raw)
+          if not machines:
+              sys.exit("no machines on botpasses-staging")
+          for m in machines:
+              mid = m.get("id") or ""
+              state = m.get("state") or ""
+              if mid and state != "started":
+                  print(f"starting {mid} (was {state})", flush=True)
+                  subprocess.check_call(["flyctl", "machine", "start", mid, "-a", "botpasses-staging"])
+          PY
+          for i in $(seq 1 30); do
+            if curl -fsS -m 5 https://botpasses-staging.fly.dev/ready; then
+              echo
+              echo "/ready is 200"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::botpasses-staging.fly.dev/ready did not become 200 after start"
+          flyctl machine list -a botpasses-staging
+          exit 1
