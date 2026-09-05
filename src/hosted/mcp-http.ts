@@ -20,6 +20,8 @@ import type { ModelPrincipal } from "./auth.ts";
 import { canonicalRequestPath } from "./ssrf.ts";
 import {
   clientIdRequiredHint,
+  clientSecretItemNames,
+  clientSecretRequiredHint,
   emptyOriginHint,
   isClientSecretShaped,
   itemWithAccessToken,
@@ -27,6 +29,8 @@ import {
   mintFailedHint,
   readMintedAccessToken,
   refreshAccessToken,
+  refreshAccessTokenPublic,
+  refreshFailedHint,
   refreshItemName,
   resolveClientId,
 } from "./providers/oauth.ts";
@@ -341,6 +345,7 @@ async function dispatchConnector(
   const request = { method: target.method, path: target.path, host, body: args.body, contentType: target.contentType };
 
   if (provider && isTokenPath(provider, host, target.path)) {
+    if (injectModeOf(item.inject) === "refresh") return refreshTokenCall(deps, provider, item, target, args, environment);
     return tokenEndpointCall(deps, provider, item, target, args, host, clientId);
   }
 
@@ -412,6 +417,111 @@ async function tokenEndpointCall(
     }
   }
   return originPayload({ ...origin, body: redact(), headers: headers() });
+}
+
+type RefreshDenied = {
+  status: "inject_denied";
+  item_name: string;
+  /** The client-secret item the exchange needs and the environment does not hold. */
+  missing_item: string | null;
+  hint: string;
+};
+
+/** `grant_type` the caller put in a token-endpoint body, whether it came as a form string or an object. */
+function bodyGrantType(body: unknown): string | undefined {
+  if (typeof body === "string") return new URLSearchParams(body).get("grant_type") ?? undefined;
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const value = (body as { grant_type?: unknown }).grant_type;
+    return typeof value === "string" ? value : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The client-secret item an `<ITEM>_REFRESH` belongs to, read for the send without a grant of its
+ * own. When both `<ITEM>_SECRET` and `<ITEM>` exist, the one whose username is the refresh item's
+ * client id wins (the connect flow stored that id on the refresh item).
+ */
+async function findClientSecretSibling(
+  deps: ConnectorCallDeps,
+  refreshItem: ConnectorItem,
+  environment: VaultEnvName,
+): Promise<ConnectorItem | undefined> {
+  let fallback: { id: string } | undefined;
+  for (const name of clientSecretItemNames(refreshItem.name)) {
+    const stored = await deps.kernel.findStoredItem(deps.principal.orgId, environment, name);
+    if (!stored) continue;
+    if (stored.username === refreshItem.username) {
+      fallback = stored;
+      break;
+    }
+    fallback ??= stored;
+  }
+  if (!fallback) return undefined;
+  const decrypted = await deps.kernel.decryptItem(deps.principal.orgId, fallback.id);
+  return { ...decrypted, itemId: fallback.id };
+}
+
+/**
+ * The model posts the `<ITEM>_REFRESH` item to the provider token endpoint itself. The exchange
+ * is built the way `tryUserToken` builds it (`refreshAccessToken`): the sibling client-secret
+ * item (`<ITEM>_SECRET` or `<ITEM>`, same environment) authenticates the app per
+ * `provider.tokenAuth`, the refresh token rides in the form as `refresh_token`, and both items
+ * must allow the token host. The model needs only its approval on the refresh item; the sibling
+ * is read for the send, audited `inject` under this client like the refresh item, and never
+ * handed out. Without a sibling, a PKCE provider's public-client exchange goes out with
+ * `client_id` alone; any other provider would answer `invalid_client`, so the call is refused
+ * before dialing with the item name the environment is missing.
+ */
+async function refreshTokenCall(
+  deps: ConnectorCallDeps,
+  provider: Provider,
+  refreshItem: ConnectorItem,
+  target: ConnectorTarget,
+  args: Record<string, unknown>,
+  environment: VaultEnvName,
+): Promise<OriginPayload | RefreshDenied | { status: number; error: string; hint: string }> {
+  const refreshName = refreshItem.name;
+  const asked = bodyGrantType(args.body);
+  if (asked !== undefined && asked !== "refresh_token") {
+    throw new HttpError(400, `${refreshName} holds a refresh token; the only grant it can run is refresh_token, not ${asked}`, {
+      status: "inject_denied",
+    });
+  }
+  const sibling = await findClientSecretSibling(deps, refreshItem, environment);
+  const clientId = resolveClientId(refreshItem, target.clientId) ?? (sibling ? resolveClientId(sibling, target.clientId) : undefined);
+  if (!clientId) {
+    return { status: 400, error: "client_id_required", hint: clientIdRequiredHint(provider) };
+  }
+  let exchange: Awaited<ReturnType<typeof refreshAccessToken>>;
+  if (sibling) {
+    try {
+      exchange = await refreshAccessToken(provider, refreshItem, sibling, clientId, connectorOpts(deps, target));
+    } catch (err) {
+      await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, sibling.name, failureOutcome(err));
+      throw err;
+    }
+    await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, sibling.name, "inject");
+  } else if (provider.pkce) {
+    exchange = await refreshAccessTokenPublic(provider, refreshItem, clientId, connectorOpts(deps, target));
+  } else {
+    const wanted = clientSecretItemNames(refreshName);
+    return {
+      status: "inject_denied",
+      item_name: refreshName,
+      missing_item: wanted[0] ?? null,
+      hint: clientSecretRequiredHint(provider, refreshName, wanted.length > 0 ? wanted : [`${refreshName}_SECRET`], environment),
+    };
+  }
+  const { minted, origin } = exchange;
+  if (origin.status < 200 || origin.status >= 300 || !minted.accessToken) {
+    return originPayload(origin, { hint: refreshFailedHint(provider) });
+  }
+  storeMint(deps.principal.orgId, refreshItem.itemId ?? refreshName, clientId, "refresh_token", minted);
+  if (minted.refreshToken && minted.refreshToken !== refreshItem.secret) {
+    await persistRotatedRefresh(deps, refreshItem, refreshName, minted.refreshToken);
+  }
+  return originPayload(origin, { refreshed: true, token_last4: minted.last4 });
 }
 
 async function ensureAppToken(

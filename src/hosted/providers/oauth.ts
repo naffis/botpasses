@@ -170,6 +170,28 @@ export async function refreshAccessToken(
   );
 }
 
+/**
+ * RFC 6749 section 6 for a public (PKCE) client: no client secret exists, so the exchange carries
+ * `client_id` alone next to `grant_type=refresh_token` and the refresh token (the `refresh` inject
+ * mode adds all three). Only a provider with `pkce: true` accepts this; a confidential client's
+ * provider answers `invalid_client`, which is why callers must try the sibling secret first.
+ */
+export async function refreshAccessTokenPublic(
+  provider: Provider,
+  refreshItem: ConnectorItem,
+  clientId: string,
+  deps: TokenEngineDeps = {},
+): Promise<MintOutcome> {
+  assertGrant(provider, "refresh_token");
+  const tokenItem: ConnectorItem = {
+    ...refreshItem,
+    username: clientId,
+    inject: "refresh",
+    allowedHosts: assertTokenHostAllowed(refreshItem, provider),
+  };
+  return postTokenRequest(provider, tokenItem, refreshItem, {}, deps);
+}
+
 /** RFC 6749 section 4.1.3 (+ RFC 7636 code_verifier): exchange a code with the client secret item. */
 export async function exchangeAuthorizationCode(
   provider: Provider,
@@ -204,6 +226,17 @@ export function refreshItemName(secretName: string): string {
   return secretName.endsWith("_SECRET") ? secretName.replace(/_SECRET$/, "_REFRESH") : `${secretName}_REFRESH`;
 }
 
+/**
+ * The inverse of `refreshItemName`: the client-secret items an `<ITEM>_REFRESH` can belong to, in
+ * lookup order. `FOO_REFRESH` was stored by a connect on `FOO_SECRET` or on `FOO`; a name without
+ * the suffix has no sibling.
+ */
+export function clientSecretItemNames(refreshName: string): string[] {
+  if (!refreshName.endsWith("_REFRESH")) return [];
+  const stem = refreshName.slice(0, -"_REFRESH".length);
+  return stem ? [`${stem}_SECRET`, stem] : [];
+}
+
 /** Public client id for a client-secret item: the argument wins, then the stored username. */
 export function resolveClientId(item: { username: string | null }, argsClientId?: string): string | undefined {
   const fromArgs = argsClientId?.trim();
@@ -232,6 +265,23 @@ export function mintFailedHint(provider: Provider): string {
   return (
     `${provider.displayName} token mint failed at ${provider.tokenHost}${provider.tokenPath}. ` +
     `Check the client id and that the secret is the current one, then retry. ${APPROVAL_SPENT}`
+  );
+}
+
+export function refreshFailedHint(provider: Provider): string {
+  return (
+    `${provider.displayName} refused the refresh at ${provider.tokenHost}${provider.tokenPath}. ` +
+    "invalid_grant means the refresh token was revoked or expired: reconnect the account in the Botpasses console. " +
+    `invalid_client means the stored client secret or client id is wrong. ${APPROVAL_SPENT}`
+  );
+}
+
+/** Why a confidential provider's refresh cannot go out without the app's client secret item. */
+export function clientSecretRequiredHint(provider: Provider, refreshName: string, wanted: string[], environment: string): string {
+  return (
+    `${provider.displayName} refuses a refresh_token exchange without the app's client secret (invalid_client). ` +
+    `Store it as ${wanted.join(" or ")} in the ${environment} environment with ${provider.tokenHost} in its allowed hosts, ` +
+    `then retry with ${refreshName}. The agent needs no approval on the client secret item.`
   );
 }
 

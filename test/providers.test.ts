@@ -12,7 +12,7 @@ import { HostedKernel } from "../src/hosted/kernel.ts";
 import { assertRedirectUri } from "../src/hosted/oauth-as.ts";
 import { isTokenPath, pathMatchesPrefix, PROVIDERS, providerById, providerForHost, userPathHint } from "../src/hosted/providers/registry.ts";
 import { cachedMint, clearMintCache, storeMint } from "../src/hosted/providers/token-cache.ts";
-import { itemWithAccessToken, readMintedAccessToken, refreshAccessToken } from "../src/hosted/providers/oauth.ts";
+import { clientSecretItemNames, itemWithAccessToken, readMintedAccessToken, refreshAccessToken, refreshItemName } from "../src/hosted/providers/oauth.ts";
 import type { ConnectorItem } from "../src/hosted/connector.ts";
 import { authorizeUrl, chooseRedirect, openOauthState, sealOauthState } from "../src/hosted/providers/user-oauth.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
@@ -962,4 +962,353 @@ test("isolation: canary secret never appears after store grant mint or search", 
   } finally {
     await teardown(ctx);
   }
+});
+
+/* ---- R4a: the direct refresh path (an agent posts <ITEM>_REFRESH to the token endpoint itself) ---- */
+
+const ROTATED_REFRESH = "1//rotated_refresh_token_do_not_leak_9f9f";
+
+type RefreshPair = {
+  providerId: "google" | "slack" | "github" | "stripe" | "spotify";
+  secretName: string;
+  refreshName: string;
+  clientId: string;
+  secret: string;
+  refresh: string;
+};
+
+/**
+ * The two rows the connect flow leaves behind: the client secret item and its `<ITEM>_REFRESH`,
+ * both allowed on the provider's API and token hosts. Only the refresh item is approved for the
+ * agent; the sibling gets no grant and no policy, which is the point of the direct path.
+ */
+async function storeRefreshPair(ctx: Ctx, pair: RefreshPair, opts: { sibling?: boolean; policy?: "prompt" | "item_standing" } = {}) {
+  const provider = providerById(pair.providerId);
+  assert.ok(provider);
+  const hosts = [...new Set([...provider.apiHosts, provider.tokenHost])];
+  let siblingId: string | undefined;
+  if (opts.sibling !== false) {
+    const sibling = await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "client_secret",
+      name: pair.secretName,
+      value: pair.secret,
+      username: pair.clientId,
+      allowedHosts: hosts,
+      inject: "client_credentials",
+    });
+    siblingId = sibling.id;
+  }
+  const refresh = await ctx.kernel.createItem({
+    orgId: ctx.orgId,
+    actor: "user_owner",
+    environment: "staging",
+    kind: "secret",
+    name: pair.refreshName,
+    value: pair.refresh,
+    username: pair.clientId,
+    allowedHosts: hosts,
+    inject: "refresh",
+  });
+  const grantId = await approve(ctx, pair.refreshName, opts.policy ?? "item_standing");
+  return { provider, refreshId: refresh.id, siblingId, grantId, tokenUrl: `https://${provider.tokenHost}${provider.tokenPath}` };
+}
+
+function escapeRe(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The result and every audit row must be free of both stored values, the Basic form, and the tokens the endpoint minted. */
+async function assertNothingLeaked(ctx: Ctx, payload: unknown, pair: RefreshPair) {
+  const audit = await ctx.kernel.store.listAudit(ctx.orgId, 100);
+  const blob = JSON.stringify({ payload, audit });
+  const basic = Buffer.from(`${pair.clientId}:${pair.secret}`).toString("base64");
+  for (const secret of [pair.secret, pair.refresh, basic, ACCESS, ROTATED_REFRESH]) {
+    assert.doesNotMatch(blob, new RegExp(escapeRe(secret)), `${secret.slice(0, 8)}... reached the result or the audit`);
+  }
+  return audit;
+}
+
+type AuditRow = { action: string; itemName: string | null; actor: string; clientId: string | null };
+
+/** Both items are audited `inject` under the calling agent, as `tryUserToken` records them. */
+function assertInjectRows(ctx: Ctx, audit: AuditRow[], pair: RefreshPair) {
+  for (const name of [pair.refreshName, pair.secretName]) {
+    const rows = audit.filter((a) => a.action === "inject" && a.itemName === name);
+    assert.equal(rows.length, 1, `${name} is audited inject exactly once`);
+    assert.equal(rows[0]?.actor, ctx.model.id);
+    assert.equal(rows[0]?.clientId, ctx.model.id);
+  }
+  assert.equal(audit.filter((a) => a.action === "inject_denied" || a.action === "inject_failed").length, 0);
+}
+
+function refreshCall(pair: RefreshPair, tokenUrl: string, body: Record<string, unknown> = { grant_type: "refresh_token" }) {
+  return { item_name: pair.refreshName, method: "POST", path: tokenUrl, body };
+}
+
+test("direct refresh, Google (post_body): client_id and client_secret ride in the form from the sibling item, the rotated refresh token is persisted", async () => {
+  const pair: RefreshPair = {
+    providerId: "google",
+    secretName: "GOOGLE_SECRET",
+    refreshName: "GOOGLE_REFRESH",
+    clientId: "1234.apps.googleusercontent.com",
+    secret: "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77aa",
+    refresh: "1//google_refresh_token_do_not_leak_11bb",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("oauth2.googleapis.com/token")) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_id") !== pair.clientId || form.get("client_secret") !== pair.secret) {
+      return new Response(JSON.stringify({ error: "invalid_client" }), { status: 401 });
+    }
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    return tokenJson({ refresh_token: ROTATED_REFRESH, scope: "openid email" });
+  });
+  try {
+    const { refreshId, siblingId, tokenUrl } = await storeRefreshPair(ctx, pair);
+    assert.ok(siblingId);
+    assert.ok((await ctx.kernel.store.listGrants(ctx.orgId)).every((g) => g.itemId !== siblingId), "the agent holds no grant on the client secret item");
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    assert.equal(payload.token_last4, ACCESS.slice(-4));
+    assert.match(String(payload.body), /"access_token":"\[redacted\]"/);
+    assert.match(String(payload.body), /"refresh_token":"\[redacted\]"/);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "", "a post_body provider gets no Authorization header");
+    assert.match(hit.contentType, /x-www-form-urlencoded/);
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("client_secret"), pair.secret);
+    assert.equal(form.get("grant_type"), "refresh_token");
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, ROTATED_REFRESH, "the rotated refresh token replaced the stored value");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+    const rotated = audit.find((a) => a.action === "refresh_rotated");
+    assert.equal(rotated?.itemName, pair.refreshName);
+    assert.equal(rotated?.actor, "provider");
+    // The minted user token is cached under the refresh item, as the user-token path caches it.
+    assert.equal(cachedMint(ctx.orgId, refreshId, pair.clientId, "refresh_token")?.last4, ACCESS.slice(-4));
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, Slack (basic): the sibling secret goes out as HTTP Basic, never in the form; the user token is read from authed_user", async () => {
+  const pair: RefreshPair = {
+    providerId: "slack",
+    secretName: "SLACK_APP_SECRET",
+    refreshName: "SLACK_APP_REFRESH",
+    clientId: "1234567890.0987654321",
+    secret: "slack_client_secret_CANARY_3c3c",
+    refresh: "xoxe-1-slack_refresh_token_do_not_leak_4d4d",
+  };
+  const basic = `Basic ${Buffer.from(`${pair.clientId}:${pair.secret}`).toString("base64")}`;
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("slack.com/api/oauth.v2.access")) return new Response("nope", { status: 404 });
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (auth !== basic) return new Response(JSON.stringify({ ok: false, error: "invalid_client" }), { status: 200 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ ok: false, error: "invalid_refresh_token" }), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({ ok: true, authed_user: { id: "U1", access_token: ACCESS, refresh_token: pair.refresh, token_type: "user", expires_in: 43200 } }),
+      { status: 200 },
+    );
+  });
+  try {
+    const { refreshId, tokenUrl } = await storeRefreshPair(ctx, pair);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, basic, "a basic provider authenticates the app in the Authorization header");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_secret"), null, "and never in the form");
+    assert.equal(form.get("client_id"), null);
+    assert.equal(form.get("grant_type"), "refresh_token");
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, pair.refresh, "an unchanged refresh token is left alone");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+    assert.equal(audit.some((a) => a.action === "refresh_rotated"), false);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, GitHub (post_body): the sibling is found as <ITEM>_SECRET and the exchange carries its secret in the form", async () => {
+  const pair: RefreshPair = {
+    providerId: "github",
+    secretName: "GITHUB_APP_SECRET",
+    refreshName: "GITHUB_APP_REFRESH",
+    clientId: "Iv1.abc123",
+    secret: "gh_app_client_secret_CANARY_5e5e",
+    refresh: "ghr_github_refresh_token_do_not_leak_6f6f",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("github.com/login/oauth/access_token")) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_id") !== pair.clientId || form.get("client_secret") !== pair.secret) {
+      return new Response(JSON.stringify({ error: "incorrect_client_credentials" }), { status: 200 });
+    }
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "bad_refresh_token" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ access_token: ACCESS, expires_in: 28800, refresh_token: ROTATED_REFRESH, token_type: "bearer" }), { status: 200 });
+  });
+  try {
+    const { refreshId, tokenUrl } = await storeRefreshPair(ctx, pair);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_secret"), pair.secret);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, ROTATED_REFRESH, "GitHub Apps rotate the refresh token on every exchange");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, Stripe Connect (post_body): the exchange carries the platform secret in the form and the answer is redacted", async () => {
+  const pair: RefreshPair = {
+    providerId: "stripe",
+    secretName: "STRIPE_CONNECT_SECRET",
+    refreshName: "STRIPE_CONNECT_REFRESH",
+    clientId: "ca_platform_client_id",
+    secret: "sk_live_stripe_platform_secret_CANARY_7a7a",
+    refresh: "rt_stripe_refresh_token_do_not_leak_8b8b",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("connect.stripe.com/oauth/token")) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_secret") !== pair.secret) {
+      return new Response(JSON.stringify({ error: "invalid_client", error_description: "No such client secret" }), { status: 401 });
+    }
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    return new Response(
+      JSON.stringify({ access_token: ACCESS, refresh_token: pair.refresh, token_type: "bearer", stripe_user_id: "acct_1", scope: "read_write" }),
+      { status: 200 },
+    );
+  });
+  try {
+    const { tokenUrl } = await storeRefreshPair(ctx, pair);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    assert.match(String(payload.body), /"stripe_user_id":"acct_1"/, "non-secret fields still reach the model");
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("client_secret"), pair.secret);
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, Spotify PKCE without a sibling: the public-client exchange goes out with client_id alone", async () => {
+  const pair: RefreshPair = {
+    providerId: "spotify",
+    secretName: "SPOTIFY_PUBLIC_SECRET",
+    refreshName: "SPOTIFY_PUBLIC_REFRESH",
+    clientId: "public_pkce_client_id_0000",
+    secret: "never_stored_CANARY",
+    refresh: "AQD_public_refresh_token_do_not_leak_9c9c",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("accounts.spotify.com/api/token")) return new Response("nope", { status: 404 });
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    // A PKCE public client has no secret: Spotify accepts client_id in the form and no Basic header.
+    if (auth !== "") return new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_id") !== pair.clientId || form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    return tokenJson({ refresh_token: ROTATED_REFRESH, scope: "user-read-email" });
+  });
+  try {
+    const { refreshId, siblingId, tokenUrl } = await storeRefreshPair(ctx, pair, { sibling: false });
+    assert.equal(siblingId, undefined);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("client_secret"), null);
+    assert.equal(form.get("grant_type"), "refresh_token");
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, ROTATED_REFRESH);
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === pair.refreshName).length, 1);
+    assert.equal(audit.some((a) => a.itemName === pair.secretName), false, "no sibling, no sibling row");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh without a sibling on a confidential provider is refused before dialing, naming the missing item; a one-call approval comes back", async () => {
+  const pair: RefreshPair = {
+    providerId: "github",
+    secretName: "GH_ONLY_SECRET",
+    refreshName: "GH_ONLY_REFRESH",
+    clientId: "Iv1.lonely",
+    secret: "never_stored_CANARY",
+    refresh: "ghr_lonely_refresh_token_do_not_leak_0d0d",
+  };
+  const ctx = await setup(async () => new Response(JSON.stringify({ error: "incorrect_client_credentials" }), { status: 200 }));
+  try {
+    const { grantId, tokenUrl } = await storeRefreshPair(ctx, pair, { sibling: false, policy: "prompt" });
+    const { rpc, payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal((rpc as { result?: { isError?: boolean } }).result?.isError, undefined, "a structured refusal, not an MCP error");
+    assert.equal(payload.status, "inject_denied", JSON.stringify(payload));
+    assert.equal(payload.item_name, pair.refreshName);
+    assert.equal(payload.missing_item, pair.secretName);
+    assert.match(String(payload.hint), /GH_ONLY_SECRET or GH_ONLY/);
+    assert.match(String(payload.hint), /github\.com/);
+    assert.match(String(payload.hint), /invalid_client/);
+    assert.equal(ctx.hits.length, 0, "nothing was sent: no silent invalid_client from the vendor");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active", "the one-call approval was handed back");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assert.equal(audit.filter((a) => a.action === "inject_denied" && a.itemName === pair.refreshName).length, 1);
+    assert.equal(audit.filter((a) => a.action === "inject").length, 0);
+
+    // A refresh item can only run the refresh_token grant.
+    const wrong = await call(ctx, refreshCall(pair, tokenUrl, { grant_type: "authorization_code", code: "c0de" }));
+    assert.match(String(wrong.payload.error), /only grant it can run is refresh_token/);
+    assert.equal(ctx.hits.length, 0);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("clientSecretItemNames inverts refreshItemName for both connect spellings", () => {
+  assert.deepEqual(clientSecretItemNames(refreshItemName("FOO_SECRET")), ["FOO_SECRET", "FOO"]);
+  assert.deepEqual(clientSecretItemNames(refreshItemName("FOO")), ["FOO_SECRET", "FOO"]);
+  assert.deepEqual(clientSecretItemNames("FOO"), [], "no suffix, no sibling");
+  assert.deepEqual(clientSecretItemNames("_REFRESH"), []);
 });
