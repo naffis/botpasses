@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { isIPv4, isIPv6 } from "node:net";
 
 /** Upper bound on distinct keys held in memory; the least recently touched key is evicted first. */
 export const LIMITER_MAX_KEYS = 10_000;
@@ -42,27 +43,185 @@ export class IpWindowLimiter {
 }
 
 /**
- * Resolve the caller's address from proxy headers.
- * Order: `Fly-Client-IP` (set by the Fly proxy, never by the client), then the LAST hop of
- * `X-Forwarded-For` (appended by the proxy we trust; clients can prepend but not append),
- * then the socket peer.
+ * Which address headers are believed. The two are split on purpose: `Fly-Client-IP` is set by
+ * the Fly proxy and by nothing else, so it counts only when the process runs on Fly
+ * (`FLY_APP_NAME`). Behind another proxy the deployer controls (`VAULT_TRUST_PROXY=1`, nginx or
+ * Caddy) only the last `X-Forwarded-For` hop counts; honouring `Fly-Client-IP` there would let a
+ * client pick its own address for every limiter, and pick a Cloudflare address to unlock
+ * `CF-Connecting-IP` as well.
+ */
+export type ProxyHeaderTrust = {
+  /** `Fly-Client-IP` is authoritative (the process runs on Fly). */
+  trustFlyHeader: boolean;
+  /** The last `X-Forwarded-For` hop is authoritative (Fly, or `VAULT_TRUST_PROXY=1`). */
+  trustForwarded: boolean;
+};
+
+/** No proxy is trusted: every header is attacker-controlled and the socket peer is the address. */
+export const NO_PROXY_TRUST: ProxyHeaderTrust = { trustFlyHeader: false, trustForwarded: false };
+
+/**
+ * Resolve the caller's address: `Fly-Client-IP` when `trust.trustFlyHeader`, then the LAST hop
+ * of `X-Forwarded-For` when `trust.trustForwarded` (appended by the proxy; clients can prepend
+ * but not append), then the socket peer. `trust` is required so no caller trusts a header by
+ * accident; use `clientIpTrust(env)` for the deployment's setting.
  */
 export function clientIpFrom(
   flyClientIp: string | undefined,
   forwarded: string | undefined,
   remote: string | undefined,
-  trustFlyHeader = true,
+  trust: ProxyHeaderTrust,
 ): string {
-  const fly = trustFlyHeader ? flyClientIp?.trim() : undefined;
-  if (fly) return fly;
-  const hops = (forwarded ?? "")
+  const peer = remote?.trim() || "0.0.0.0";
+  if (trust.trustFlyHeader) {
+    const fly = flyClientIp?.trim();
+    if (fly) return fly;
+  }
+  if (trust.trustForwarded) {
+    const hops = (forwarded ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const last = hops.at(-1);
+    if (last) return last;
+  }
+  return peer;
+}
+
+/**
+ * Cloudflare's published egress ranges (https://www.cloudflare.com/ips/). With the orange
+ * cloud on, the address Fly sees is one of these and the visitor is in `CF-Connecting-IP`.
+ * Override with `VAULT_TRUSTED_PROXY_CIDRS` when the list changes or another CDN fronts a plane.
+ */
+export const CLOUDFLARE_PROXY_CIDRS: readonly string[] = [
+  "173.245.48.0/20",
+  "103.21.244.0/22",
+  "103.22.200.0/22",
+  "103.31.4.0/22",
+  "141.101.64.0/18",
+  "108.162.192.0/18",
+  "190.93.240.0/20",
+  "188.114.96.0/20",
+  "197.234.240.0/22",
+  "198.41.128.0/17",
+  "162.158.0.0/15",
+  "104.16.0.0/13",
+  "104.24.0.0/14",
+  "172.64.0.0/13",
+  "131.0.72.0/22",
+  "2400:cb00::/32",
+  "2606:4700::/32",
+  "2803:f800::/32",
+  "2405:b500::/32",
+  "2405:8100::/32",
+  "2a06:98c0::/29",
+  "2c0f:f248::/32",
+];
+
+type ParsedIp = { bits: 32 | 128; value: bigint };
+
+function stripZone(ip: string): string {
+  const zone = ip.indexOf("%");
+  return zone === -1 ? ip : ip.slice(0, zone);
+}
+
+function ipv4ToBigInt(ip: string): bigint {
+  return ip.split(".").reduce((acc, octet) => (acc << 8n) | BigInt(Number(octet)), 0n);
+}
+
+function ipv6ToBigInt(ip: string): bigint {
+  let text = ip;
+  // Embedded IPv4 tail (`::ffff:203.0.113.9`): fold it into two hextets.
+  const lastColon = text.lastIndexOf(":");
+  const tail = text.slice(lastColon + 1);
+  if (tail.includes(".")) {
+    const v4 = ipv4ToBigInt(tail);
+    const hi = ((v4 >> 16n) & 0xffffn).toString(16);
+    const lo = (v4 & 0xffffn).toString(16);
+    text = `${text.slice(0, lastColon)}:${hi}:${lo}`;
+  }
+  const [head = "", rest] = text.split("::");
+  const headParts = head ? head.split(":") : [];
+  const tailParts = rest !== undefined && rest ? rest.split(":") : [];
+  const missing = 8 - headParts.length - tailParts.length;
+  const parts = rest === undefined ? headParts : [...headParts, ...Array<string>(Math.max(0, missing)).fill("0"), ...tailParts];
+  return parts.reduce((acc, hextet) => (acc << 16n) | BigInt(parseInt(hextet || "0", 16)), 0n);
+}
+
+/** IPv4 or IPv6 (zone ids and IPv4-mapped IPv6 handled). Undefined for anything else. */
+function parseIp(raw: string | undefined): ParsedIp | undefined {
+  const ip = stripZone((raw ?? "").trim());
+  if (!ip) return undefined;
+  if (isIPv4(ip)) return { bits: 32, value: ipv4ToBigInt(ip) };
+  if (isIPv6(ip)) {
+    const value = ipv6ToBigInt(ip);
+    // ::ffff:a.b.c.d is the IPv4 address for range purposes (dual-stack sockets report it).
+    if (value >> 32n === 0xffffn) return { bits: 32, value: value & 0xffffffffn };
+    return { bits: 128, value };
+  }
+  return undefined;
+}
+
+type Cidr = { bits: 32 | 128; network: bigint; prefix: number };
+
+function parseCidr(raw: string): Cidr | undefined {
+  const [ipPart, prefixPart] = raw.trim().split("/");
+  const ip = parseIp(ipPart);
+  if (!ip) return undefined;
+  const prefix = prefixPart === undefined ? ip.bits : Number(prefixPart);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > ip.bits) return undefined;
+  const mask = prefix === 0 ? 0n : ((1n << BigInt(prefix)) - 1n) << BigInt(ip.bits - prefix);
+  return { bits: ip.bits, network: ip.value & mask, prefix };
+}
+
+/** True when `ip` lies inside any of `cidrs`. Malformed entries on either side never match. */
+export function ipInCidrs(ip: string | undefined, cidrs: readonly string[]): boolean {
+  const parsed = parseIp(ip);
+  if (!parsed) return false;
+  for (const raw of cidrs) {
+    const cidr = parseCidr(raw);
+    if (!cidr || cidr.bits !== parsed.bits) continue;
+    const shift = BigInt(cidr.bits - cidr.prefix);
+    if (parsed.value >> shift === cidr.network >> shift) return true;
+  }
+  return false;
+}
+
+/**
+ * The proxies whose `CF-Connecting-IP` is believed. Unset: Cloudflare's ranges. Set: a
+ * comma-separated CIDR list; an empty value means no proxy is trusted and the header is ignored.
+ */
+export function trustedProxyCidrs(env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  const raw = env.VAULT_TRUSTED_PROXY_CIDRS;
+  if (raw === undefined) return CLOUDFLARE_PROXY_CIDRS;
+  return raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const last = hops.at(-1);
-  if (last) return last;
-  const peer = remote?.trim();
-  return peer || "0.0.0.0";
+}
+
+export type ClientIpHeaders = {
+  cfConnectingIp?: string;
+  flyClientIp?: string;
+  forwarded?: string;
+  remote?: string;
+};
+
+export type ClientIpTrust = ProxyHeaderTrust & {
+  trustedProxyCidrs: readonly string[];
+};
+
+/**
+ * Full resolution: the peer as the trusted proxy saw it (`clientIpFrom`), then one more hop
+ * through the CDN. `CF-Connecting-IP` is only read when that peer is inside the trusted proxy
+ * ranges; a client that reaches the plane directly can set the header but cannot make its own
+ * address Cloudflare's, and off Fly it cannot claim one through `Fly-Client-IP` either.
+ */
+export function clientIpFromHeaders(headers: ClientIpHeaders, trust: ClientIpTrust): string {
+  const peer = clientIpFrom(headers.flyClientIp, headers.forwarded, headers.remote, trust);
+  const cf = headers.cfConnectingIp?.trim() ?? "";
+  if (cf && parseIp(cf) && ipInCidrs(peer, trust.trustedProxyCidrs)) return cf;
+  return peer;
 }
 
 function headerValue(req: IncomingMessage, name: string): string | undefined {
@@ -71,16 +230,33 @@ function headerValue(req: IncomingMessage, name: string): string | undefined {
   return raw;
 }
 
-/** `Fly-Client-IP` is authoritative only behind Fly (or when the deployer opts in with VAULT_TRUST_PROXY=1). */
-export function trustsFlyClientIp(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.FLY_APP_NAME?.trim()) || env.VAULT_TRUST_PROXY === "1";
+/** The process runs on a Fly Machine, so `Fly-*` request headers were set by the Fly proxy. */
+export function runsOnFly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.FLY_APP_NAME?.trim());
+}
+
+/** Some proxy is trusted for client addresses: Fly, or the deployer's opt-in with VAULT_TRUST_PROXY=1. */
+export function trustsProxyHeaders(env: NodeJS.ProcessEnv = process.env): boolean {
+  return runsOnFly(env) || env.VAULT_TRUST_PROXY === "1";
+}
+
+/** The deployment's header trust: `Fly-Client-IP` only on Fly, `X-Forwarded-For` on Fly or with the opt-in. */
+export function clientIpTrust(env: NodeJS.ProcessEnv = process.env): ClientIpTrust {
+  return {
+    trustFlyHeader: runsOnFly(env),
+    trustForwarded: trustsProxyHeaders(env),
+    trustedProxyCidrs: trustedProxyCidrs(env),
+  };
 }
 
 export function requestClientIp(req: IncomingMessage): string {
-  return clientIpFrom(
-    headerValue(req, "fly-client-ip"),
-    headerValue(req, "x-forwarded-for"),
-    req.socket?.remoteAddress,
-    trustsFlyClientIp(),
+  return clientIpFromHeaders(
+    {
+      cfConnectingIp: headerValue(req, "cf-connecting-ip"),
+      flyClientIp: headerValue(req, "fly-client-ip"),
+      forwarded: headerValue(req, "x-forwarded-for"),
+      remote: req.socket?.remoteAddress,
+    },
+    clientIpTrust(),
   );
 }

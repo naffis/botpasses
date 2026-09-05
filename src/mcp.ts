@@ -5,14 +5,16 @@
  * `initialize` `clientInfo.name`; grants are keyed (item, agent, tool) with tool `http_request`.
  * Never returns secret values. There is no get_secret.
  */
+import { randomBytes } from "node:crypto";
 import { MCP_INSTRUCTIONS_LOCAL, MCP_SERVER_NAME } from "./brand.ts";
 import type { ConnectorFetch } from "./hosted/connector.ts";
 import { isHttpError } from "./hosted/errors.ts";
 import { connectorTargetFromArgs, retryFields } from "./hosted/mcp-http.ts";
 import { normalizeActorId, normalizeSecretName } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
+import { hostAllowedBy } from "./hosted/connector.ts";
 import { HTTP_REQUEST_TOOL, publicLocalGrant, type Vault } from "./vault.ts";
-import type { GrantScope } from "./types.ts";
+import type { LocalGrantScope } from "./types.ts";
 
 export const MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
@@ -37,7 +39,7 @@ export const MCP_TOOL_ALIASES: Record<string, McpToolName> = {
   "http.request": "http_request",
 };
 
-/** Agent id used when a client never sent `initialize` (stateless HTTP callers). */
+/** Agent id when `initialize` named no client (no `clientInfo.name`), or a stdio client skipped it. */
 export const DEFAULT_AGENT_ID = "mcp";
 
 const FORBIDDEN_TOOL_NAMES = [
@@ -99,6 +101,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
         item_name: { type: "string", description: "Exact credential name, e.g. STRIPE_KEY" },
         task_id: { type: "string" },
         task_description: TASK_DESCRIPTION,
+        scope: { type: "string", enum: ["once", "session"], description: "once (default): one call. session: reusable until it expires." },
       },
       required: ["item_name"],
       additionalProperties: false,
@@ -125,13 +128,32 @@ export const MCP_TOOLS: McpToolDefinition[] = [
         path: { type: "string", description: "Path on the allowlisted origin (/v1/me) or a full https URL." },
         body: { type: "object", description: "Object body for POST, PUT, or PATCH. JSON by default." },
         content_type: { type: "string", enum: ["application/json", "application/x-www-form-urlencoded"] },
+        client_id: { type: "string", description: "Public OAuth client id sent as the username at a provider token endpoint; overrides the stored username for this call." },
         task_description: TASK_DESCRIPTION,
+        timeout_ms: { type: "number", minimum: 1000, maximum: 30000, description: "Origin deadline in ms (default 10000)." },
+        dry_run: { type: "boolean", description: "When true, report which item and grant would be used without sending or spending anything." },
       },
       required: ["method", "path"],
       additionalProperties: false,
     },
   },
 ];
+
+/**
+ * Every tool schema is `additionalProperties: false`; an argument the schema does not name is
+ * refused instead of silently honoured (an `agent_id` or `tool_id` argument used to rebind the
+ * caller's identity). Returns the offending keys.
+ */
+export function unknownArgumentKeys(name: string, args: Record<string, unknown>): string[] {
+  const tool = MCP_TOOLS.find((t) => t.name === name);
+  if (!tool) return [];
+  const known = new Set(Object.keys(tool.inputSchema.properties));
+  return Object.keys(args).filter((k) => !known.has(k));
+}
+
+export function invalidParamsMessage(name: string, keys: string[]): string {
+  return `Invalid params: unknown argument${keys.length === 1 ? "" : "s"} ${keys.join(", ")} for tool ${name}`;
+}
 
 export type McpCallResult = {
   content: { type: "text"; text: string }[];
@@ -143,6 +165,73 @@ export type McpSession = { agentId: string | undefined };
 
 export function newMcpSession(): McpSession {
   return { agentId: undefined };
+}
+
+/** A session that saw no request for this long is forgotten; the client re-initializes (404). */
+export const MCP_SESSION_IDLE_MS = 8 * 60 * 60 * 1000;
+/** Upper bound on live HTTP sessions; past it the least recently used one is dropped. */
+export const MCP_SESSION_MAX = 1000;
+
+export type McpSessionRegistryOptions = {
+  idleMs?: number;
+  maxSessions?: number;
+  now?: () => number;
+};
+
+/**
+ * Per-client sessions for the HTTP transport. Every `initialize` mints a random `Mcp-Session-Id`
+ * bound to its own `McpSession`, so two clients on one server never share an agent id: grants
+ * keyed on (item, agent, tool) stay with the client that initialised, whoever initialises next.
+ * The stdio transport holds one `McpSession` per process and never uses this.
+ */
+export class McpSessionRegistry {
+  readonly #sessions = new Map<string, { session: McpSession; lastSeen: number }>();
+  readonly #idleMs: number;
+  readonly #max: number;
+  readonly #now: () => number;
+
+  constructor(opts: McpSessionRegistryOptions = {}) {
+    this.#idleMs = opts.idleMs ?? MCP_SESSION_IDLE_MS;
+    this.#max = Math.max(1, opts.maxSessions ?? MCP_SESSION_MAX);
+    this.#now = opts.now ?? Date.now;
+  }
+
+  get size(): number {
+    return this.#sessions.size;
+  }
+
+  /** A fresh session under an unguessable id (128 bits, base64url). */
+  create(): { id: string; session: McpSession } {
+    this.#sweep();
+    const id = randomBytes(16).toString("base64url");
+    const session = newMcpSession();
+    this.#sessions.set(id, { session, lastSeen: this.#now() });
+    while (this.#sessions.size > this.#max) {
+      const oldest = this.#sessions.keys().next();
+      if (oldest.done) break;
+      this.#sessions.delete(oldest.value);
+    }
+    return { id, session };
+  }
+
+  /** The live session for `id`, touched so it stays live; undefined when unknown or idle too long. */
+  get(id: string): McpSession | undefined {
+    this.#sweep();
+    const entry = this.#sessions.get(id);
+    if (!entry) return undefined;
+    // Re-insert so Map iteration order doubles as recency order.
+    this.#sessions.delete(id);
+    entry.lastSeen = this.#now();
+    this.#sessions.set(id, entry);
+    return entry.session;
+  }
+
+  #sweep(): void {
+    const cutoff = this.#now() - this.#idleMs;
+    for (const [id, entry] of this.#sessions) {
+      if (entry.lastSeen < cutoff) this.#sessions.delete(id);
+    }
+  }
 }
 
 export type McpCallContext = {
@@ -177,6 +266,8 @@ export async function callMcpTool(
     return fail(`Tool ${name} is not available. Vault MCP never returns secret values. Revoke is operator-only.`);
   }
   const canonical = MCP_TOOL_ALIASES[name] ?? name;
+  const unknown = unknownArgumentKeys(canonical, args);
+  if (unknown.length > 0) return fail(invalidParamsMessage(canonical, unknown));
   try {
     const payload = await dispatch(vault, canonical, args, ctx);
     assertSafePublicObject(`mcp:${name}`, payload);
@@ -196,19 +287,13 @@ export async function callMcpTool(
   }
 }
 
-function agentFor(args: Record<string, unknown>, ctx: McpCallContext): string {
-  // `agent_id` is the pre-3.8 argument; still honoured for one release.
-  if (typeof args.agent_id === "string" && args.agent_id.trim()) return normalizeActorId(args.agent_id, "agent");
+/** The agent is the MCP client that connected (`initialize`), never something an argument names. */
+function agentFor(ctx: McpCallContext): string {
   return ctx.session?.agentId ?? DEFAULT_AGENT_ID;
 }
 
-function toolFor(args: Record<string, unknown>): string {
-  if (typeof args.tool_id === "string" && args.tool_id.trim()) return normalizeActorId(args.tool_id, "tool");
-  return HTTP_REQUEST_TOOL;
-}
-
-function publicItem(m: { name: string; last4: string; allowedHosts: string[]; inject: string }) {
-  return { name: m.name, kind: "secret", last4: m.last4, username: null, environment: "local", inject: m.inject, allowed_hosts: m.allowedHosts };
+function publicItem(m: { name: string; last4: string; allowedHosts: string[]; inject: string; username: string | null }) {
+  return { name: m.name, kind: "secret", last4: m.last4, username: m.username, environment: "local", inject: m.inject, allowed_hosts: m.allowedHosts };
 }
 
 function itemSummary(m: { name: string; last4: string; allowedHosts: string[]; inject: string }) {
@@ -235,7 +320,7 @@ async function dispatch(vault: Vault, name: string, args: Record<string, unknown
       if (itemName) {
         const item = vault.getItem(itemName);
         if (!item) return needItem(itemName, host);
-        if (host && !item.allowedHosts.includes(host)) return { status: "host_mismatch", item: itemSummary(item) };
+        if (host && !hostAllowedBy(item.allowedHosts, host)) return { status: "host_mismatch", item: itemSummary(item) };
         return { status: "found", item: itemSummary(item) };
       }
       if (host) {
@@ -247,36 +332,33 @@ async function dispatch(vault: Vault, name: string, args: Record<string, unknown
       return { items: [] };
     }
     case "request_grant": {
-      const rawName = optionalString(args.item_name) ?? optionalString(args.secret_name);
+      const rawName = optionalString(args.item_name);
       if (!rawName) throw new Error("Missing required string argument: item_name");
       const itemName = normalizeSecretName(rawName);
       if (!vault.getItem(itemName)) return needItem(itemName, undefined);
       const grant = vault.requestGrant({
         secretName: itemName,
-        agentId: agentFor(args, ctx),
-        toolId: toolFor(args),
+        agentId: agentFor(ctx),
+        toolId: HTTP_REQUEST_TOOL,
         scope: optionalScope(args.scope),
       });
       return {
         ...publicLocalGrant(grant),
         task_id: optionalString(args.task_id) ?? null,
-        task_description: optionalString(args.task_description) ?? null,
+        task_description: optionalString(args.task_description)?.slice(0, 500) ?? null,
         message: `Approve with: vault grant --secret ${grant.secretName} --agent ${grant.agentId} --tool ${grant.toolId} --once (or --session), or in the local console.`,
       };
     }
     case "list_grants": {
-      const agentId = agentFor(args, ctx);
-      const toolId = typeof args.tool_id === "string" && args.tool_id.trim() ? normalizeActorId(args.tool_id, "tool") : undefined;
-      const grants = vault
-        .listGrants()
-        .filter((g) => g.agentId === agentId && (toolId === undefined || g.toolId === toolId));
+      const agentId = agentFor(ctx);
+      const grants = vault.listGrants().filter((g) => g.agentId === agentId);
       return { grants: grants.map(publicLocalGrant) };
     }
     case "http_request": {
       const target = connectorTargetFromArgs(args);
       const result = await vault.httpRequest({
-        agentId: agentFor(args, ctx),
-        toolId: toolFor(args),
+        agentId: agentFor(ctx),
+        toolId: HTTP_REQUEST_TOOL,
         itemName: target.itemName,
         host: target.host,
         method: target.method,
@@ -284,6 +366,9 @@ async function dispatch(vault: Vault, name: string, args: Record<string, unknown
         body: args.body,
         contentType: target.contentType,
         taskDescription: target.taskDescription,
+        clientId: target.clientId,
+        timeoutMs: target.timeoutMs,
+        dryRun: target.dryRun,
         fetchImpl: ctx.fetchImpl,
         resolveAddresses: ctx.resolveAddresses,
       });
@@ -301,7 +386,7 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
-function optionalScope(value: unknown): GrantScope | undefined {
+function optionalScope(value: unknown): LocalGrantScope | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (value === "once" || value === "session") return value;
   throw new Error("scope must be once or session");
@@ -328,15 +413,20 @@ export type JsonRpcResponse = {
   error?: { code: number; message: string };
 };
 
-/** `session` is per connection; the stdio runner and the loopback server each hold one. */
+/** `session` is per connection: one per stdio process, one per `Mcp-Session-Id` on the loopback server. */
 export async function handleMcpRpc(
   vault: Vault,
   req: JsonRpcRequest,
   session: McpSession = newMcpSession(),
   ctx: Omit<McpCallContext, "session"> = {},
 ): Promise<JsonRpcResponse | null> {
-  const id = req.id ?? null;
-  const method = req.method ?? "";
+  const id = typeof req.id === "string" || typeof req.id === "number" ? req.id : null;
+  // A frame without a method is not a request at all (JSON-RPC 2.0 section 5.1: -32600), which
+  // is different from a request for a method this server does not have (-32601).
+  if (typeof req.method !== "string" || req.method === "") {
+    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request: missing method" } };
+  }
+  const method = req.method;
   if (method.startsWith("notifications/")) return null;
 
   try {
@@ -362,6 +452,11 @@ export async function handleMcpRpc(
           params.arguments && typeof params.arguments === "object"
             ? (params.arguments as Record<string, unknown>)
             : {};
+        const canonical = MCP_TOOL_ALIASES[name] ?? name;
+        const unknown = unknownArgumentKeys(canonical, args);
+        if (unknown.length > 0) {
+          return { jsonrpc: "2.0", id, error: { code: -32602, message: invalidParamsMessage(canonical, unknown) } };
+        }
         return ok(id, await callMcpTool(vault, name, args, { ...ctx, session }));
       }
       default:

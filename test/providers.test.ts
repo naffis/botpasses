@@ -6,11 +6,14 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { assertRedirectUri } from "../src/hosted/oauth-as.ts";
 import { isTokenPath, pathMatchesPrefix, PROVIDERS, providerById, providerForHost, userPathHint } from "../src/hosted/providers/registry.ts";
 import { cachedMint, clearMintCache, storeMint } from "../src/hosted/providers/token-cache.ts";
+import { clientSecretItemNames, itemWithAccessToken, readMintedAccessToken, refreshAccessToken, refreshItemName } from "../src/hosted/providers/oauth.ts";
+import type { ConnectorItem } from "../src/hosted/connector.ts";
 import { authorizeUrl, chooseRedirect, openOauthState, sealOauthState } from "../src/hosted/providers/user-oauth.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
 import { redactOauthJson } from "../src/redact.ts";
@@ -55,6 +58,7 @@ async function setup(handler: (url: string, init?: RequestInit) => Promise<Respo
   });
   const hits: { url: string; auth: string; contentType: string; body: string }[] = [];
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,
@@ -204,6 +208,134 @@ test("user connect helpers are provider-generic", () => {
   assert.throws(() => openOauthState(state, parseMasterKey(generateMasterKey())), /Invalid OAuth state/);
 });
 
+test("Google and Slack authorize URLs carry the scopes their endpoints require", () => {
+  const google = providerById("google");
+  const slack = providerById("slack");
+  const github = providerById("github");
+  assert.ok(google && slack && github);
+  const base = { clientId: "cid", redirectUri: "https://x/cb", state: "s", codeVerifier: "v".repeat(43) };
+
+  const g = new URL(authorizeUrl(google, base));
+  const googleScopes = (g.searchParams.get("scope") ?? "").split(" ");
+  assert.ok(googleScopes.includes("openid") && googleScopes.includes("email"), googleScopes.join(" "));
+  assert.ok(googleScopes.includes("https://www.googleapis.com/auth/gmail.readonly"), "Gmail read scope for gmail.googleapis.com");
+  assert.ok(googleScopes.includes("https://www.googleapis.com/auth/spreadsheets.readonly"), "Sheets read scope for sheets.googleapis.com");
+  assert.ok(googleScopes.includes("https://www.googleapis.com/auth/drive.file"), "per-file Drive scope for www.googleapis.com");
+  assert.equal(g.searchParams.get("access_type"), "offline", "Google issues a refresh token only for offline access");
+  assert.equal(g.searchParams.get("prompt"), "consent", "a re-connect must get a refresh token again");
+
+  const s = new URL(authorizeUrl(slack, base));
+  assert.equal(s.searchParams.get("scope"), null, "scope would ask Slack for a bot token");
+  assert.equal(s.searchParams.get("user_scope"), "users:read,channels:read,chat:write", "user token scopes, comma-joined");
+
+  // An empty scope list is refused for a provider whose endpoint rejects it, with a 400 the route can pass on.
+  for (const p of [google, slack]) {
+    assert.throws(
+      () => authorizeUrl(p, { ...base, scopes: [] }),
+      (err: unknown) => isHttpError(err) && err.status === 400 && /scope/.test(err.message) && err.extra.provider === p.id,
+      `${p.id} refuses an authorize URL with no scopes`,
+    );
+  }
+  // GitHub's endpoint accepts no scope at all; nothing changes for it.
+  assert.equal(new URL(authorizeUrl(github, { ...base, scopes: [] })).searchParams.get("scope"), null);
+});
+
+test("a Slack user-scope token exchange is read from authed_user", () => {
+  const nested = readMintedAccessToken(
+    JSON.stringify({ ok: true, token_type: "user", authed_user: { id: "U1", access_token: "xoxp-user-token-1234", refresh_token: "xoxe-1-refresh", expires_in: 43200 } }),
+  );
+  assert.equal(nested.accessToken, "xoxp-user-token-1234");
+  assert.equal(nested.refreshToken, "xoxe-1-refresh");
+  assert.equal(nested.last4, "1234");
+  const top = readMintedAccessToken(JSON.stringify({ access_token: "xoxb-bot-token-9999", authed_user: { id: "U1" } }));
+  assert.equal(top.accessToken, "xoxb-bot-token-9999", "a top-level token still wins");
+  // A Slack refresh (token rotation) answer carries the rotated user token at the top level and no authed_user.
+  const refreshed = readMintedAccessToken(
+    JSON.stringify({ ok: true, access_token: "xoxe.xoxp-1-rotated-5678", refresh_token: "xoxe-1-rotated-refresh", token_type: "user", expires_in: 43200 }),
+  );
+  assert.equal(refreshed.accessToken, "xoxe.xoxp-1-rotated-5678");
+  assert.equal(refreshed.refreshToken, "xoxe-1-rotated-refresh");
+  assert.equal(refreshed.last4, "5678");
+  assert.throws(() => readMintedAccessToken(JSON.stringify({ ok: true, authed_user: { id: "U1" } })), /did not return access_token/);
+});
+
+test("token_last4 never shows a whole short token: under four characters reads as **** (R3-9)", () => {
+  assert.equal(readMintedAccessToken(JSON.stringify({ access_token: "abc" })).last4, "****");
+  assert.equal(readMintedAccessToken(JSON.stringify({ access_token: "abcd" })).last4, "abcd");
+  assert.equal(readMintedAccessToken(JSON.stringify({ access_token: ACCESS })).last4, ACCESS.slice(-4));
+  const base: ConnectorItem = { secret: "s", username: "u", last4: "****", inject: "client_credentials", allowedHosts: ["api.spotify.com"], name: "X", kind: "client_secret" };
+  assert.equal(itemWithAccessToken(base, "abc").last4, "****");
+  assert.equal(itemWithAccessToken(base, ACCESS).last4, ACCESS.slice(-4));
+});
+
+/**
+ * R3-3: a refresh_token exchange authenticates the app like the code exchange did. `basic`
+ * providers get the client id and secret as HTTP Basic; `post_body` providers get `client_id`
+ * and `client_secret` form fields. The refresh token rides in the form, and none of the three
+ * values (client secret, refresh token, minted access token) reaches the returned body or headers.
+ */
+test("refreshAccessToken places the client secret per provider.tokenAuth for every provider and redacts every secret", async () => {
+  const CS = "provider_client_secret_CANARY_77aa";
+  const RT = "provider_refresh_token_CANARY_88bb";
+  for (const provider of PROVIDERS) {
+    const hosts = [...provider.apiHosts, provider.tokenHost];
+    const clientSecret: ConnectorItem = { secret: CS, username: CLIENT_ID, last4: CS.slice(-4), inject: "client_credentials", allowedHosts: hosts, name: "APP_SECRET", kind: "client_secret" };
+    const refresh: ConnectorItem = { secret: RT, username: CLIENT_ID, last4: RT.slice(-4), inject: "refresh", allowedHosts: hosts, name: "APP_REFRESH", kind: "secret" };
+    let sent: { url: string; auth: string; form: URLSearchParams } | undefined;
+    const { minted, origin } = await refreshAccessToken(provider, refresh, clientSecret, CLIENT_ID, {
+      resolveAddresses: async () => ["8.8.8.8"],
+      fetchImpl: async (url, init) => {
+        const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+        sent = { url: String(url), auth: new Headers(init?.headers).get("authorization") ?? "", form };
+        // An origin that echoes the request back in its body and a header, like a debug endpoint would.
+        return new Response(JSON.stringify({ access_token: ACCESS, token_type: "Bearer", expires_in: 3600, echo: { form: form.toString(), auth: sent.auth } }), {
+          status: 200,
+          headers: { "content-type": "application/json", "x-request-id": `${RT}:${CS}` },
+        });
+      },
+    });
+    assert.ok(sent, provider.id);
+    assert.equal(sent.url, `https://${provider.tokenHost}${provider.tokenPath}`, provider.id);
+    assert.equal(sent.form.get("grant_type"), "refresh_token", provider.id);
+    assert.equal(sent.form.get("refresh_token"), RT, provider.id);
+    switch (provider.tokenAuth) {
+      case "basic":
+        assert.equal(sent.auth, `Basic ${Buffer.from(`${CLIENT_ID}:${CS}`).toString("base64")}`, `${provider.id}: id and secret as HTTP Basic`);
+        assert.equal(sent.form.get("client_secret"), null, `${provider.id}: the secret is not also in the form`);
+        break;
+      case "post_body":
+        assert.equal(sent.auth, "", `${provider.id}: no Authorization header`);
+        assert.equal(sent.form.get("client_id"), CLIENT_ID, provider.id);
+        assert.equal(sent.form.get("client_secret"), CS, `${provider.id}: the secret is a form field`);
+        break;
+      default: {
+        const _exhaustive: never = provider.tokenAuth;
+        throw new Error(String(_exhaustive));
+      }
+    }
+    assert.equal(minted.accessToken, ACCESS, provider.id);
+    const visible = JSON.stringify(origin);
+    const hidden: [string, string][] = [["client secret", CS], ["refresh token", RT], ["access token", ACCESS], ["Basic pair", Buffer.from(`${CLIENT_ID}:${CS}`).toString("base64")]];
+    for (const [what, value] of hidden) {
+      assert.doesNotMatch(visible, new RegExp(value), `${provider.id}: the ${what} does not reach the result`);
+    }
+    assert.equal(origin.headers["x-request-id"], "[redacted]:[redacted]", provider.id);
+  }
+  // Both items must allow the token host; the refresh item alone is not enough.
+  const spotify = providerById("spotify");
+  assert.ok(spotify);
+  const apiOnly: ConnectorItem = { secret: CS, username: CLIENT_ID, last4: "77aa", inject: "client_credentials", allowedHosts: ["api.spotify.com"], name: "APP_SECRET", kind: "client_secret" };
+  const refreshOk: ConnectorItem = { ...apiOnly, secret: RT, inject: "refresh", allowedHosts: ["api.spotify.com", "accounts.spotify.com"], name: "APP_REFRESH", kind: "secret" };
+  await assert.rejects(
+    () => refreshAccessToken(spotify, refreshOk, apiOnly, CLIENT_ID, { resolveAddresses: async () => ["8.8.8.8"], fetchImpl: async () => tokenJson() }),
+    (err: unknown) => isHttpError(err) && err.status === 400 && err.extra.status === "inject_denied" && /accounts\.spotify\.com/.test(String(err.extra.hint)),
+  );
+  await assert.rejects(
+    () => refreshAccessToken(spotify, { ...refreshOk, allowedHosts: ["api.spotify.com"] }, { ...apiOnly, allowedHosts: refreshOk.allowedHosts }, CLIENT_ID, { resolveAddresses: async () => ["8.8.8.8"], fetchImpl: async () => tokenJson() }),
+    (err: unknown) => isHttpError(err) && err.status === 400 && err.extra.status === "inject_denied",
+  );
+});
+
 /** The provider's authorize URL from `POST /api/integrations/:provider/start`, with its sealed state. */
 async function startConnect(ctx: Ctx, providerId: string, body: Record<string, unknown>) {
   const res = await fetch(`${ctx.base}/api/integrations/${providerId}/start`, {
@@ -293,11 +425,13 @@ test("user connect over HTTP: start returns the provider authorize URL; the call
       (err: unknown) => isHttpError(err) && err.status === 403 && /account/.test(err.message),
     );
 
-    // Unknown provider, and a provider-less callback (denied at the vendor) both land back on the console.
+    // Unknown provider is 404; a callback denied at the vendor lands on the console with a reason code.
     const nope = await startConnect(ctx, "nope", { item_name: "SPOTIFY_SECRET", environment: "staging" });
     assert.equal(nope.res.status, 404);
     const denied = await callback(ctx, "spotify", { error: "access_denied", state: "x" });
-    assert.equal(denied.location, "/console#vault");
+    assert.equal(denied.location, "/console#vault?connect_error=spotify&reason=provider_denied");
+    const noCode = await callback(ctx, "spotify", { state: "x" });
+    assert.equal(noCode.location, "/console#vault", "a bare visit without code or state is not an error");
   } finally {
     await teardown(ctx);
   }
@@ -370,8 +504,10 @@ test("user connect rejects a state minted for another provider, another org, or 
     assert.equal(google.res.status, 200, JSON.stringify(google.json));
     // The Google state arrives on the Spotify callback: refused before any token request leaves.
     const crossed = await callback(ctx, "spotify", { code: "c0de", state: google.state });
-    assert.equal(crossed.location, "/console#vault?connect_error=spotify");
+    assert.equal(crossed.location, "/console#vault?connect_error=spotify&reason=state_expired");
     assert.equal(ctx.hits.length, 0, "no code exchange was attempted");
+    const garbage = await callback(ctx, "google", { code: "c0de", state: "not-a-state" });
+    assert.equal(garbage.location, "/console#vault?connect_error=google&reason=state_expired");
     await assert.rejects(
       () => ctx.kernel.finishProviderUserOauth({ providerId: "spotify", orgId: ctx.orgId, userId: "user_owner", state: google.state, code: "c0de" }),
       (err: unknown) => isHttpError(err) && err.status === 400 && /another provider/.test(err.message),
@@ -476,7 +612,8 @@ test("minted app token calls /v1/search; /v1/me explains user OAuth", async () =
     });
     assert.equal(me.payload.origin_status, 401);
     assert.match(String(me.payload.hint ?? ""), /user OAuth|\/v1\/me|Client credentials|Connect a Spotify user/i);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "the origin answered, so the one-call approval is spent");
+    await approve(ctx);
 
     const search = await call(ctx, {
       item_name: "SPOTIFY_SECRET",
@@ -494,7 +631,7 @@ test("minted app token calls /v1/search; /v1/me explains user OAuth", async () =
   }
 });
 
-test("failed Spotify 401/410 reuses the same prompt grant", async () => {
+test("an origin 401 or 410 spends a one-call approval (the secret left the process); a standing approval covers the retry", async () => {
   let tokenStatus = 401;
   const ctx = await setup(async (url) => {
     if (url.includes("/api/token")) {
@@ -504,38 +641,29 @@ test("failed Spotify 401/410 reuses the same prompt grant", async () => {
     }
     return new Response("nope", { status: 404 });
   });
+  const tokenCall = { item_name: "SPOTIFY_SECRET", method: "POST", path: "https://accounts.spotify.com/api/token", client_id: CLIENT_ID };
   try {
     const grantId = await approve(ctx);
-    const first = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "POST",
-      path: "https://accounts.spotify.com/api/token",
-      client_id: CLIENT_ID,
-    });
+    const first = await call(ctx, tokenCall);
     assert.equal(first.payload.origin_status, 401);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "any origin status spends a prompt grant");
+    const again = await call(ctx, tokenCall);
+    assert.equal(again.payload.status, "pending", "the retry asks for a new approval");
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "nothing was sent without an approval");
 
+    const standingId = await approve(ctx, "SPOTIFY_SECRET", "item_standing");
     tokenStatus = 410;
-    const gone = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "POST",
-      path: "https://accounts.spotify.com/api/token",
-      client_id: CLIENT_ID,
-    });
+    const gone = await call(ctx, tokenCall);
     assert.equal(gone.payload.origin_status, 410);
     assert.equal(gone.payload.body, "");
     assert.match(String(gone.payload.hint), /410/);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active");
+    assert.match(String(gone.payload.hint), /one-call approval is spent/);
+    assert.equal((await ctx.kernel.store.getGrant(standingId))?.status, "active", "a standing approval covers retries");
 
     tokenStatus = 200;
-    const ok = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "POST",
-      path: "https://accounts.spotify.com/api/token",
-      client_id: CLIENT_ID,
-    });
+    const ok = await call(ctx, tokenCall);
     assert.equal(ok.payload.origin_status, 200);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed");
+    assert.equal((await ctx.kernel.store.getGrant(standingId))?.status, "active");
     assert.doesNotMatch(JSON.stringify(ok.payload), new RegExp(CLIENT_SECRET));
     assert.doesNotMatch(JSON.stringify(ok.payload), new RegExp(ACCESS));
   } finally {
@@ -543,12 +671,15 @@ test("failed Spotify 401/410 reuses the same prompt grant", async () => {
   }
 });
 
-test("a stored <ITEM>_REFRESH token is exchanged in the form body (no Basic) and the user path succeeds", async () => {
+test("a stored <ITEM>_REFRESH token is exchanged with the client secret's credentials (Basic for Spotify) and the user path succeeds", async () => {
+  const basic = `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64")}`;
   const ctx = await setup(async (url, init) => {
     const auth = new Headers(init?.headers).get("authorization") ?? "";
     if (url.includes("accounts.spotify.com/api/token")) {
       const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (form.get("grant_type") === "refresh_token" && form.get("refresh_token") === REFRESH && form.get("client_id") === CLIENT_ID && !auth) {
+      // A confidential client: Spotify answers invalid_client to a refresh without the app's credentials.
+      if (auth !== basic) return new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 });
+      if (form.get("grant_type") === "refresh_token" && form.get("refresh_token") === REFRESH) {
         return tokenJson({ refresh_token: REFRESH, scope: "user-read-email" });
       }
       return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
@@ -578,15 +709,172 @@ test("a stored <ITEM>_REFRESH token is exchanged in the form body (no Basic) and
     assert.equal(me.payload.origin_status, 200, JSON.stringify(me.payload));
     assert.equal(me.payload.user_token, true);
     assert.equal(me.payload.token_last4, ACCESS.slice(-4));
-    const blob = JSON.stringify(me.payload);
-    for (const secret of [REFRESH, ACCESS, CLIENT_SECRET]) assert.doesNotMatch(blob, new RegExp(secret));
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    const blob = JSON.stringify({ payload: me.payload, audit });
+    for (const secret of [REFRESH, ACCESS, CLIENT_SECRET, Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64")]) {
+      assert.doesNotMatch(blob, new RegExp(secret), "neither secret reaches the result or the audit");
+    }
+    assert.ok(audit.some((a) => a.action === "inject" && a.itemName === "SPOTIFY_REFRESH"), "the refresh item's use is audited");
+    assert.ok(audit.some((a) => a.action === "inject" && a.itemName === "SPOTIFY_SECRET"), "and so is the client secret's");
     const mint = ctx.hits.find((h) => h.url.includes("/api/token"));
     assert.ok(mint);
-    assert.equal(mint.auth, "", "refresh_token grant carries client_id in the body, not a Basic header");
+    assert.equal(mint.auth, basic, "the refresh_token grant authenticates the app as the code exchange did");
     assert.match(mint.body, /grant_type=refresh_token/);
+    assert.doesNotMatch(mint.body, /client_secret=/, "a basic provider does not also get the secret in the form");
     const second = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
     assert.equal(second.payload.origin_status, 200);
     assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "the refreshed token is cached");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("a rotated refresh token replaces the stored <ITEM>_REFRESH value in place and is audited refresh_rotated", async () => {
+  const ROTATED = "AQD_rotated_refresh_token_do_not_leak_2222";
+  let exchanges = 0;
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("accounts.spotify.com/api/token")) {
+      exchanges += 1;
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      const sent = form.get("refresh_token");
+      // The provider rotates on every exchange: the first value works once, then only the new one.
+      if (form.get("grant_type") === "refresh_token" && sent === (exchanges === 1 ? REFRESH : ROTATED)) {
+        return tokenJson({ refresh_token: ROTATED, expires_in: 30 });
+      }
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    if (url.includes("/v1/me")) {
+      return auth === `Bearer ${ACCESS}` ? new Response(JSON.stringify({ id: "user1" }), { status: 200 }) : new Response("", { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    const stored = await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    await approve(ctx, "SPOTIFY_REFRESH", "item_standing");
+    const first = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(first.payload.origin_status, 200, JSON.stringify(first.payload));
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, stored.id)).secret, ROTATED, "the new refresh token is stored");
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    const rotated = audit.find((a) => a.action === "refresh_rotated");
+    assert.equal(rotated?.itemName, "SPOTIFY_REFRESH");
+    assert.equal(rotated?.actor, "provider");
+    assert.doesNotMatch(JSON.stringify(audit), new RegExp(ROTATED));
+    assert.doesNotMatch(JSON.stringify(first.payload), new RegExp(ROTATED));
+    // The 30 s token is inside the cache skew, so the next call refreshes again: only the rotated
+    // value is accepted now, and the call succeeds because it was persisted.
+    clearMintCache();
+    const second = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(second.payload.origin_status, 200, JSON.stringify(second.payload));
+    assert.equal(exchanges, 2);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("user-token path: a cached token needs no refresh approval; without one the result is the pending <ITEM>_REFRESH grant", async () => {
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("accounts.spotify.com/api/token")) {
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      return form.get("grant_type") === "refresh_token" ? tokenJson() : new Response("", { status: 400 });
+    }
+    if (url.includes("/v1/me")) {
+      return auth === `Bearer ${ACCESS}` ? new Response(JSON.stringify({ id: "user1" }), { status: 200 }) : new Response("", { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    const me = { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" };
+    // No approval on the refresh item: the model is told to get one, not sent an app token that 401s.
+    const secretGrant = await approve(ctx);
+    const halted = await call(ctx, me);
+    assert.equal(halted.payload.status, "pending", JSON.stringify(halted.payload));
+    assert.equal(halted.payload.item_name, "SPOTIFY_REFRESH");
+    assert.match(String(halted.payload.hint), /SPOTIFY_REFRESH/);
+    assert.equal(typeof halted.payload.approval_code, "string");
+    assert.equal(ctx.hits.length, 0, "nothing was sent");
+    assert.equal((await ctx.kernel.store.getGrant(secretGrant))?.status, "active", "the client secret's one-call approval was not spent: nothing left the process");
+    const inbox = await (await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op })).json() as { grants: { item_name: string }[] };
+    assert.ok(inbox.grants.some((g) => g.item_name === "SPOTIFY_REFRESH"), "the operator sees the refresh approval request");
+
+    // Approve the refresh item once: the first call exchanges it, the second reuses the cached
+    // access token and does not need (or spend) another refresh approval.
+    const pendingRefresh = (await ctx.kernel.store.listGrants(ctx.orgId)).find((g) => g.status === "pending");
+    assert.ok(pendingRefresh);
+    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: pendingRefresh.id, policy: "prompt", role: "owner", actor: "user_owner" });
+    const first = await call(ctx, me);
+    assert.equal(first.payload.origin_status, 200, JSON.stringify(first.payload));
+    assert.equal(first.payload.user_token, true);
+    assert.equal((await ctx.kernel.store.getGrant(pendingRefresh.id))?.status, "consumed");
+    await approve(ctx);
+    const second = await call(ctx, me);
+    assert.equal(second.payload.origin_status, 200, JSON.stringify(second.payload));
+    assert.equal(second.payload.user_token, true, "the cached user token served the call without a refresh approval");
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "one exchange");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("a token endpoint that answers 2xx with an unusable body is audited inject, not inject_failed: the credential was sent (R3-6)", async () => {
+  const ctx = await setup(async (url) => {
+    if (url.includes("/api/token")) return new Response("<html>maintenance</html>", { status: 200, headers: { "content-type": "text/html" } });
+    return new Response(JSON.stringify({ tracks: [] }), { status: 200 });
+  });
+  try {
+    const grantId = await approve(ctx);
+    const search = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/search?q=x&type=track" });
+    assert.match(String(search.payload.error), /non-JSON body/, JSON.stringify(search.payload));
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "the mint was sent");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "the one-call approval stays spent");
+    let audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 0, "the origin was reached");
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "SPOTIFY_SECRET").length, 1);
+
+    // The same on the refresh path: the refresh item was sent to the token endpoint.
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_REFRESH",
+      value: REFRESH,
+      username: CLIENT_ID,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "refresh",
+    });
+    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    const refreshGrant = await approve(ctx, "SPOTIFY_REFRESH");
+    const me = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.match(String(me.payload.error), /non-JSON body/);
+    assert.equal((await ctx.kernel.store.getGrant(refreshGrant))?.status, "consumed");
+    audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 0);
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "SPOTIFY_REFRESH").length, 1);
+    assert.doesNotMatch(JSON.stringify({ search, me, audit }), new RegExp(CLIENT_SECRET));
   } finally {
     await teardown(ctx);
   }
@@ -674,4 +962,353 @@ test("isolation: canary secret never appears after store grant mint or search", 
   } finally {
     await teardown(ctx);
   }
+});
+
+/* ---- R4a: the direct refresh path (an agent posts <ITEM>_REFRESH to the token endpoint itself) ---- */
+
+const ROTATED_REFRESH = "1//rotated_refresh_token_do_not_leak_9f9f";
+
+type RefreshPair = {
+  providerId: "google" | "slack" | "github" | "stripe" | "spotify";
+  secretName: string;
+  refreshName: string;
+  clientId: string;
+  secret: string;
+  refresh: string;
+};
+
+/**
+ * The two rows the connect flow leaves behind: the client secret item and its `<ITEM>_REFRESH`,
+ * both allowed on the provider's API and token hosts. Only the refresh item is approved for the
+ * agent; the sibling gets no grant and no policy, which is the point of the direct path.
+ */
+async function storeRefreshPair(ctx: Ctx, pair: RefreshPair, opts: { sibling?: boolean; policy?: "prompt" | "item_standing" } = {}) {
+  const provider = providerById(pair.providerId);
+  assert.ok(provider);
+  const hosts = [...new Set([...provider.apiHosts, provider.tokenHost])];
+  let siblingId: string | undefined;
+  if (opts.sibling !== false) {
+    const sibling = await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "client_secret",
+      name: pair.secretName,
+      value: pair.secret,
+      username: pair.clientId,
+      allowedHosts: hosts,
+      inject: "client_credentials",
+    });
+    siblingId = sibling.id;
+  }
+  const refresh = await ctx.kernel.createItem({
+    orgId: ctx.orgId,
+    actor: "user_owner",
+    environment: "staging",
+    kind: "secret",
+    name: pair.refreshName,
+    value: pair.refresh,
+    username: pair.clientId,
+    allowedHosts: hosts,
+    inject: "refresh",
+  });
+  const grantId = await approve(ctx, pair.refreshName, opts.policy ?? "item_standing");
+  return { provider, refreshId: refresh.id, siblingId, grantId, tokenUrl: `https://${provider.tokenHost}${provider.tokenPath}` };
+}
+
+function escapeRe(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The result and every audit row must be free of both stored values, the Basic form, and the tokens the endpoint minted. */
+async function assertNothingLeaked(ctx: Ctx, payload: unknown, pair: RefreshPair) {
+  const audit = await ctx.kernel.store.listAudit(ctx.orgId, 100);
+  const blob = JSON.stringify({ payload, audit });
+  const basic = Buffer.from(`${pair.clientId}:${pair.secret}`).toString("base64");
+  for (const secret of [pair.secret, pair.refresh, basic, ACCESS, ROTATED_REFRESH]) {
+    assert.doesNotMatch(blob, new RegExp(escapeRe(secret)), `${secret.slice(0, 8)}... reached the result or the audit`);
+  }
+  return audit;
+}
+
+type AuditRow = { action: string; itemName: string | null; actor: string; clientId: string | null };
+
+/** Both items are audited `inject` under the calling agent, as `tryUserToken` records them. */
+function assertInjectRows(ctx: Ctx, audit: AuditRow[], pair: RefreshPair) {
+  for (const name of [pair.refreshName, pair.secretName]) {
+    const rows = audit.filter((a) => a.action === "inject" && a.itemName === name);
+    assert.equal(rows.length, 1, `${name} is audited inject exactly once`);
+    assert.equal(rows[0]?.actor, ctx.model.id);
+    assert.equal(rows[0]?.clientId, ctx.model.id);
+  }
+  assert.equal(audit.filter((a) => a.action === "inject_denied" || a.action === "inject_failed").length, 0);
+}
+
+function refreshCall(pair: RefreshPair, tokenUrl: string, body: Record<string, unknown> = { grant_type: "refresh_token" }) {
+  return { item_name: pair.refreshName, method: "POST", path: tokenUrl, body };
+}
+
+test("direct refresh, Google (post_body): client_id and client_secret ride in the form from the sibling item, the rotated refresh token is persisted", async () => {
+  const pair: RefreshPair = {
+    providerId: "google",
+    secretName: "GOOGLE_SECRET",
+    refreshName: "GOOGLE_REFRESH",
+    clientId: "1234.apps.googleusercontent.com",
+    secret: "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77aa",
+    refresh: "1//google_refresh_token_do_not_leak_11bb",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("oauth2.googleapis.com/token")) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_id") !== pair.clientId || form.get("client_secret") !== pair.secret) {
+      return new Response(JSON.stringify({ error: "invalid_client" }), { status: 401 });
+    }
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    return tokenJson({ refresh_token: ROTATED_REFRESH, scope: "openid email" });
+  });
+  try {
+    const { refreshId, siblingId, tokenUrl } = await storeRefreshPair(ctx, pair);
+    assert.ok(siblingId);
+    assert.ok((await ctx.kernel.store.listGrants(ctx.orgId)).every((g) => g.itemId !== siblingId), "the agent holds no grant on the client secret item");
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    assert.equal(payload.token_last4, ACCESS.slice(-4));
+    assert.match(String(payload.body), /"access_token":"\[redacted\]"/);
+    assert.match(String(payload.body), /"refresh_token":"\[redacted\]"/);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "", "a post_body provider gets no Authorization header");
+    assert.match(hit.contentType, /x-www-form-urlencoded/);
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("client_secret"), pair.secret);
+    assert.equal(form.get("grant_type"), "refresh_token");
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, ROTATED_REFRESH, "the rotated refresh token replaced the stored value");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+    const rotated = audit.find((a) => a.action === "refresh_rotated");
+    assert.equal(rotated?.itemName, pair.refreshName);
+    assert.equal(rotated?.actor, "provider");
+    // The minted user token is cached under the refresh item, as the user-token path caches it.
+    assert.equal(cachedMint(ctx.orgId, refreshId, pair.clientId, "refresh_token")?.last4, ACCESS.slice(-4));
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, Slack (basic): the sibling secret goes out as HTTP Basic, never in the form; the user token is read from authed_user", async () => {
+  const pair: RefreshPair = {
+    providerId: "slack",
+    secretName: "SLACK_APP_SECRET",
+    refreshName: "SLACK_APP_REFRESH",
+    clientId: "1234567890.0987654321",
+    secret: "slack_client_secret_CANARY_3c3c",
+    refresh: "xoxe-1-slack_refresh_token_do_not_leak_4d4d",
+  };
+  const basic = `Basic ${Buffer.from(`${pair.clientId}:${pair.secret}`).toString("base64")}`;
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("slack.com/api/oauth.v2.access")) return new Response("nope", { status: 404 });
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (auth !== basic) return new Response(JSON.stringify({ ok: false, error: "invalid_client" }), { status: 200 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ ok: false, error: "invalid_refresh_token" }), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({ ok: true, authed_user: { id: "U1", access_token: ACCESS, refresh_token: pair.refresh, token_type: "user", expires_in: 43200 } }),
+      { status: 200 },
+    );
+  });
+  try {
+    const { refreshId, tokenUrl } = await storeRefreshPair(ctx, pair);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, basic, "a basic provider authenticates the app in the Authorization header");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_secret"), null, "and never in the form");
+    assert.equal(form.get("client_id"), null);
+    assert.equal(form.get("grant_type"), "refresh_token");
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, pair.refresh, "an unchanged refresh token is left alone");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+    assert.equal(audit.some((a) => a.action === "refresh_rotated"), false);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, GitHub (post_body): the sibling is found as <ITEM>_SECRET and the exchange carries its secret in the form", async () => {
+  const pair: RefreshPair = {
+    providerId: "github",
+    secretName: "GITHUB_APP_SECRET",
+    refreshName: "GITHUB_APP_REFRESH",
+    clientId: "Iv1.abc123",
+    secret: "gh_app_client_secret_CANARY_5e5e",
+    refresh: "ghr_github_refresh_token_do_not_leak_6f6f",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("github.com/login/oauth/access_token")) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_id") !== pair.clientId || form.get("client_secret") !== pair.secret) {
+      return new Response(JSON.stringify({ error: "incorrect_client_credentials" }), { status: 200 });
+    }
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "bad_refresh_token" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ access_token: ACCESS, expires_in: 28800, refresh_token: ROTATED_REFRESH, token_type: "bearer" }), { status: 200 });
+  });
+  try {
+    const { refreshId, tokenUrl } = await storeRefreshPair(ctx, pair);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_secret"), pair.secret);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, ROTATED_REFRESH, "GitHub Apps rotate the refresh token on every exchange");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, Stripe Connect (post_body): the exchange carries the platform secret in the form and the answer is redacted", async () => {
+  const pair: RefreshPair = {
+    providerId: "stripe",
+    secretName: "STRIPE_CONNECT_SECRET",
+    refreshName: "STRIPE_CONNECT_REFRESH",
+    clientId: "ca_platform_client_id",
+    secret: "sk_live_stripe_platform_secret_CANARY_7a7a",
+    refresh: "rt_stripe_refresh_token_do_not_leak_8b8b",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("connect.stripe.com/oauth/token")) return new Response("nope", { status: 404 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_secret") !== pair.secret) {
+      return new Response(JSON.stringify({ error: "invalid_client", error_description: "No such client secret" }), { status: 401 });
+    }
+    if (form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    return new Response(
+      JSON.stringify({ access_token: ACCESS, refresh_token: pair.refresh, token_type: "bearer", stripe_user_id: "acct_1", scope: "read_write" }),
+      { status: 200 },
+    );
+  });
+  try {
+    const { tokenUrl } = await storeRefreshPair(ctx, pair);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    assert.match(String(payload.body), /"stripe_user_id":"acct_1"/, "non-secret fields still reach the model");
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("client_secret"), pair.secret);
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assertInjectRows(ctx, audit, pair);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh, Spotify PKCE without a sibling: the public-client exchange goes out with client_id alone", async () => {
+  const pair: RefreshPair = {
+    providerId: "spotify",
+    secretName: "SPOTIFY_PUBLIC_SECRET",
+    refreshName: "SPOTIFY_PUBLIC_REFRESH",
+    clientId: "public_pkce_client_id_0000",
+    secret: "never_stored_CANARY",
+    refresh: "AQD_public_refresh_token_do_not_leak_9c9c",
+  };
+  const ctx = await setup(async (url, init) => {
+    if (!url.includes("accounts.spotify.com/api/token")) return new Response("nope", { status: 404 });
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    // A PKCE public client has no secret: Spotify accepts client_id in the form and no Basic header.
+    if (auth !== "") return new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 });
+    const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+    if (form.get("client_id") !== pair.clientId || form.get("grant_type") !== "refresh_token" || form.get("refresh_token") !== pair.refresh) {
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }
+    return tokenJson({ refresh_token: ROTATED_REFRESH, scope: "user-read-email" });
+  });
+  try {
+    const { refreshId, siblingId, tokenUrl } = await storeRefreshPair(ctx, pair, { sibling: false });
+    assert.equal(siblingId, undefined);
+    const { payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal(payload.origin_status, 200, JSON.stringify(payload));
+    assert.equal(payload.refreshed, true);
+    const hit = ctx.hits.find((h) => h.url === tokenUrl);
+    assert.ok(hit);
+    assert.equal(hit.auth, "");
+    const form = new URLSearchParams(hit.body);
+    assert.equal(form.get("client_id"), pair.clientId);
+    assert.equal(form.get("client_secret"), null);
+    assert.equal(form.get("grant_type"), "refresh_token");
+    assert.equal(form.get("refresh_token"), pair.refresh);
+    assert.equal((await ctx.kernel.decryptItem(ctx.orgId, refreshId)).secret, ROTATED_REFRESH);
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === pair.refreshName).length, 1);
+    assert.equal(audit.some((a) => a.itemName === pair.secretName), false, "no sibling, no sibling row");
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("direct refresh without a sibling on a confidential provider is refused before dialing, naming the missing item; a one-call approval comes back", async () => {
+  const pair: RefreshPair = {
+    providerId: "github",
+    secretName: "GH_ONLY_SECRET",
+    refreshName: "GH_ONLY_REFRESH",
+    clientId: "Iv1.lonely",
+    secret: "never_stored_CANARY",
+    refresh: "ghr_lonely_refresh_token_do_not_leak_0d0d",
+  };
+  const ctx = await setup(async () => new Response(JSON.stringify({ error: "incorrect_client_credentials" }), { status: 200 }));
+  try {
+    const { grantId, tokenUrl } = await storeRefreshPair(ctx, pair, { sibling: false, policy: "prompt" });
+    const { rpc, payload } = await call(ctx, refreshCall(pair, tokenUrl));
+    assert.equal((rpc as { result?: { isError?: boolean } }).result?.isError, undefined, "a structured refusal, not an MCP error");
+    assert.equal(payload.status, "inject_denied", JSON.stringify(payload));
+    assert.equal(payload.item_name, pair.refreshName);
+    assert.equal(payload.missing_item, pair.secretName);
+    assert.match(String(payload.hint), /GH_ONLY_SECRET or GH_ONLY/);
+    assert.match(String(payload.hint), /github\.com/);
+    assert.match(String(payload.hint), /invalid_client/);
+    assert.equal(ctx.hits.length, 0, "nothing was sent: no silent invalid_client from the vendor");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active", "the one-call approval was handed back");
+    const audit = await assertNothingLeaked(ctx, payload, pair);
+    assert.equal(audit.filter((a) => a.action === "inject_denied" && a.itemName === pair.refreshName).length, 1);
+    assert.equal(audit.filter((a) => a.action === "inject").length, 0);
+
+    // A refresh item can only run the refresh_token grant.
+    const wrong = await call(ctx, refreshCall(pair, tokenUrl, { grant_type: "authorization_code", code: "c0de" }));
+    assert.match(String(wrong.payload.error), /only grant it can run is refresh_token/);
+    assert.equal(ctx.hits.length, 0);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("clientSecretItemNames inverts refreshItemName for both connect spellings", () => {
+  assert.deepEqual(clientSecretItemNames(refreshItemName("FOO_SECRET")), ["FOO_SECRET", "FOO"]);
+  assert.deepEqual(clientSecretItemNames(refreshItemName("FOO")), ["FOO_SECRET", "FOO"]);
+  assert.deepEqual(clientSecretItemNames("FOO"), [], "no suffix, no sibling");
+  assert.deepEqual(clientSecretItemNames("_REFRESH"), []);
 });

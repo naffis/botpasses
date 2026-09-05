@@ -38,6 +38,8 @@ export type OrgRecord = {
   wrappedDekCiphertext: string;
   wrappedDekTag: string;
   createdAt: string;
+  /** User who provisioned the org; null for rows written before migration 010. */
+  createdBy: string | null;
 };
 
 export type MemberRecord = {
@@ -163,6 +165,8 @@ export type AccessEventRecord = {
   issuedAt: string;
   expiresAt: string | null;
   revokedAt: string | null;
+  /** oidc-provider grant id for OAuth tokens, so revoking a refresh token also marks its siblings. */
+  grantId?: string | null;
 };
 
 /**
@@ -318,8 +322,6 @@ export type NeedPublic = {
   expires_at: string;
   status: NeedItemStatus;
 };
-
-export type FindItemsStatus = "found" | "ambiguous" | "need_item" | "host_mismatch";
 
 export type FindItemSummary = {
   name: string;

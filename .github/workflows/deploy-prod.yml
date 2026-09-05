@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  # Reads the deploy-staging run for the SHA (the staging gate below).
+  actions: read
 
 concurrency:
   group: deploy-prod
@@ -18,6 +20,8 @@ jobs:
   deploy:
     # Configure the `production` environment with a required reviewer in
     # Settings -> Environments; the job waits for approval before the first step.
+    # FLY_API_TOKEN is an environment secret of `production`, readable only by jobs that
+    # passed that review; it is not a repository secret.
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -57,6 +61,22 @@ jobs:
             exit 1
           fi
           echo "$STAGING_SHA is on dev"
+      - name: staging_sha must have deployed to staging successfully
+        # "Green on staging" is checked, not trusted: the deploy-staging workflow must have a
+        # completed run for exactly this SHA whose conclusion is success.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_SHA: ${{ github.event.inputs.staging_sha }}
+        run: |
+          set -euo pipefail
+          successes=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy-staging.yml/runs?head_sha=${STAGING_SHA}&status=completed&per_page=50" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
+          if [ "${successes:-0}" -lt 1 ]; then
+            echo "::error::no successful deploy-staging run for $STAGING_SHA. Let staging deploy it first, or check the deploy-staging run for that SHA."
+            exit 1
+          fi
+          echo "$STAGING_SHA deployed to staging ($successes successful run(s))"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -71,6 +91,8 @@ jobs:
       - run: npm run migrate
       - run: npm test
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
-      - run: flyctl deploy --remote-only -c fly.prod.toml
+      # `-a` names the app explicitly: a production-scoped token deploys botpasses-prod and
+      # nothing else, whatever the toml says.
+      - run: flyctl deploy --remote-only -c fly.prod.toml -a botpasses-prod
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -8,12 +8,33 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { isHttpError, isInjectDenied } from "../src/hosted/errors.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
 
 const HMAC = Buffer.from("bb".repeat(32), "hex");
+
+/** The `auth_*` event names logged (as JSON lines on stderr) while `run` executes. */
+async function captureAuthEvents(run: () => Promise<unknown>): Promise<string[]> {
+  const events: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    try {
+      const line = JSON.parse(args.map(String).join(" ")) as { event?: unknown };
+      if (typeof line.event === "string" && line.event.startsWith("auth_")) events.push(line.event);
+    } catch {
+      // not a JSON line
+    }
+  };
+  try {
+    await run();
+  } finally {
+    console.error = original;
+  }
+  return events;
+}
 
 async function setup(opts: { now?: () => Date; clientName?: string } = {}) {
   const home = tempHome();
@@ -64,6 +85,7 @@ async function setup(opts: { now?: () => Date; clientName?: string } = {}) {
   });
   let originHits = 0;
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,
@@ -417,7 +439,7 @@ test("model bearer cannot approve: approve-by-code, /approve, /api/grants/:id/ap
   }
 });
 
-test("ensureModelClient reactivates a revoked OAuth client on re-consent instead of duplicating the unique pair (S15)", async () => {
+test("ensureModelClient reactivates a revoked OAuth client only on re-consent, never duplicating the unique pair (S15, O1)", async () => {
   const ctx = await setup();
   try {
     const first = await ctx.kernel.ensureModelClient({
@@ -427,14 +449,36 @@ test("ensureModelClient reactivates a revoked OAuth client on re-consent instead
       clerkOauthUserId: "dcr_shared",
     });
     await ctx.kernel.revokeClient(ctx.orgId, "user_owner", first.id);
+    await assert.rejects(
+      ctx.kernel.ensureModelClient({ orgId: ctx.orgId, name: "dcr", environment: "staging", clerkOauthUserId: "dcr_shared" }),
+      (err: unknown) => isHttpError(err) && err.status === 409,
+      "a caller that is not a fresh consent gets 409",
+    );
+    assert.ok((await ctx.store.getClient(first.id))?.revokedAt, "still revoked");
     const second = await ctx.kernel.ensureModelClient({
       orgId: ctx.orgId,
       name: "dcr",
       environment: "staging",
       clerkOauthUserId: "dcr_shared",
+      reactivateRevoked: true,
     });
     assert.equal(second.id, first.id);
     assert.equal(second.revokedAt, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("O8 rotateClient refuses a revoked client with 409", async () => {
+  const ctx = await setup();
+  try {
+    const { client } = await ctx.kernel.createModelClient({ orgId: ctx.orgId, name: "rot", environment: "staging", issueBearer: true });
+    await ctx.kernel.revokeClient(ctx.orgId, "user_owner", client.id);
+    await assert.rejects(
+      ctx.kernel.rotateClient(ctx.orgId, "user_owner", client.id),
+      (err: unknown) => isHttpError(err) && err.status === 409,
+    );
+    assert.ok(!(await ctx.store.listAudit(ctx.orgId, 50)).some((a) => a.action === "client_rotate"), "no rotate audit row");
   } finally {
     await ctx.close();
   }
@@ -454,10 +498,15 @@ test("revokeSession needs a 12+ char id and owner role for another member's sess
     const asOp = { userId: "user_op", role: "operator" as const, sessionHash: opHash };
     const asOwner = { userId: "user_owner", role: "owner" as const, sessionHash: ownerHash };
     await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, "a"), (e: unknown) => isHttpError(e) && e.status === 400);
-    await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, ownerHash.slice(0, 12)), (e: unknown) => isHttpError(e) && e.status === 403);
+    // A refused revoke is not a revocation: no session_revoked line for it (R1-2).
+    const refused = await captureAuthEvents(() =>
+      assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, ownerHash.slice(0, 12)), (e: unknown) => isHttpError(e) && e.status === 403),
+    );
+    assert.ok(!refused.includes("auth_session_revoked"), refused.join(","));
     await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOp, opHash), (e: unknown) => isHttpError(e) && e.message === "cannot_revoke_current");
     await assert.rejects(() => ctx.kernel.revokeSession(ctx.orgId, asOwner, opHash.slice(0, 12)), (e: unknown) => isHttpError(e) && e.status === 404, "ambiguous prefix is not a match");
-    await ctx.kernel.revokeSession(ctx.orgId, asOp, opOther);
+    const own = await captureAuthEvents(() => ctx.kernel.revokeSession(ctx.orgId, asOp, opOther));
+    assert.ok(own.includes("auth_session_revoked"), own.join(","));
     assert.equal(await ctx.store.getSession(opOther), undefined);
     await ctx.kernel.revokeSession(ctx.orgId, asOwner, opHash.slice(0, 12));
     assert.equal(await ctx.store.getSession(opHash), undefined);

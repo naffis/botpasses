@@ -4,6 +4,7 @@
  * every body returned to a caller is redacted.
  */
 import type { OauthGrantType } from "../../hosted-types.ts";
+import { last4 } from "../../ids.ts";
 import { redactOauthJson } from "../../redact.ts";
 import { executeConnector, redactConnectorBody, type ConnectorFetch, type ConnectorItem, type ConnectorResult, type PinnedTlsOpts, redactOriginHeaders } from "../connector.ts";
 import { HttpError, InjectDeniedError } from "../errors.ts";
@@ -17,11 +18,6 @@ export type TokenEngineDeps = {
 
 export type MintOutcome = { minted: MintedToken; origin: ConnectorResult };
 
-function last4(value: string): string {
-  return value.length <= 4 ? value : value.slice(-4);
-}
-
-/** Parse a token endpoint's JSON. Throws 502 on anything that is not a bearer token payload. */
 /** The token endpoint is a send like any other: the operator must have allowlisted it. */
 function assertTokenHostAllowed(item: { allowedHosts: string[] }, provider: Provider): string[] {
   if (!item.allowedHosts.includes(provider.tokenHost)) {
@@ -36,6 +32,7 @@ function assertTokenHostAllowed(item: { allowedHosts: string[] }, provider: Prov
   return item.allowedHosts;
 }
 
+/** Parse a token endpoint's JSON. Throws 502 on anything that is not a bearer token payload. */
 export function readMintedAccessToken(body: string): MintedToken {
   let parsed: unknown;
   try {
@@ -46,12 +43,12 @@ export function readMintedAccessToken(body: string): MintedToken {
   if (!parsed || typeof parsed !== "object") {
     throw new HttpError(502, "Token endpoint returned a non-object body");
   }
-  const rec = parsed as {
-    access_token?: unknown;
-    refresh_token?: unknown;
-    expires_in?: unknown;
-    token_type?: unknown;
-  };
+  type TokenBody = { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; token_type?: unknown };
+  const top = parsed as TokenBody & { authed_user?: unknown };
+  // Slack's oauth.v2.access keeps the top level for the bot token and carries the user token (and
+  // its refresh token) under `authed_user`; with user scopes only there is no top-level token.
+  const nested = top.authed_user && typeof top.authed_user === "object" ? (top.authed_user as TokenBody) : undefined;
+  const rec: TokenBody = typeof top.access_token === "string" && top.access_token.length > 0 ? top : nested ?? top;
   if (typeof rec.access_token !== "string" || rec.access_token.length === 0) {
     throw new HttpError(502, "Token endpoint did not return access_token");
   }
@@ -66,12 +63,15 @@ export function readMintedAccessToken(body: string): MintedToken {
   };
 }
 
-/** The stored client-secret item, retargeted at the provider token host with the public client id. */
-function tokenEndpointItem(provider: Provider, item: ConnectorItem, clientId: string, inject: "client_credentials" | "refresh"): ConnectorItem {
+/**
+ * The stored client-secret item, retargeted at the provider token host with the public client
+ * id. `client_credentials` at a token endpoint places the id and secret per `provider.tokenAuth`.
+ */
+function tokenEndpointItem(provider: Provider, item: ConnectorItem, clientId: string): ConnectorItem {
   return {
     ...item,
     username: clientId,
-    inject,
+    inject: "client_credentials",
     allowedHosts: assertTokenHostAllowed(item, provider),
   };
 }
@@ -80,12 +80,18 @@ function failedMint(): MintedToken {
   return { accessToken: "", expiresAt: 0, last4: "", tokenType: "Bearer" };
 }
 
+/**
+ * One POST to the provider token endpoint as `tokenItem`. The body and headers handed back are
+ * redacted for `originalItem` under the client id actually sent, for `extraSecrets` (a refresh
+ * token that travelled in the form), and for the tokens the endpoint minted.
+ */
 async function postTokenRequest(
   provider: Provider,
   tokenItem: ConnectorItem,
   originalItem: ConnectorItem,
   fields: Record<string, string>,
   deps: TokenEngineDeps,
+  extraSecrets: readonly string[] = [],
 ): Promise<MintOutcome> {
   const origin = await executeConnector(
     tokenItem,
@@ -98,21 +104,20 @@ async function postTokenRequest(
     },
     { fetchImpl: deps.fetchImpl, resolveAddresses: deps.resolveAddresses, tls: deps.tls, redact: false },
   );
+  // Redact against the client id the request carried, not only the stored username.
+  const sentAs = tokenItem.username;
+  const redacted = (extra: readonly string[]): ConnectorResult => ({
+    ...origin,
+    body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra, undefined, sentAs),
+    headers: redactOriginHeaders(origin.headers, originalItem, [...extra], sentAs),
+  });
   if (origin.status < 200 || origin.status >= 300) {
-    return {
-      minted: failedMint(),
-      origin: { ...origin, body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem) },
-    };
+    return { minted: failedMint(), origin: redacted(extraSecrets) };
   }
   const minted = readMintedAccessToken(origin.body);
-  const extra = [minted.accessToken, ...(minted.refreshToken ? [minted.refreshToken] : [])];
   return {
     minted,
-    origin: {
-      ...origin,
-      body: redactConnectorBody(redactOauthJson(origin.body, provider.redactKeys), originalItem, extra),
-      headers: redactOriginHeaders(origin.headers, originalItem, extra),
-    },
+    origin: redacted([...extraSecrets, minted.accessToken, ...(minted.refreshToken ? [minted.refreshToken] : [])]),
   };
 }
 
@@ -136,21 +141,55 @@ export async function mintClientCredentials(
   assertGrant(provider, "client_credentials");
   const fields: Record<string, string> = { grant_type: "client_credentials" };
   if (scopes && scopes.length > 0 && provider.scopesParam) fields[provider.scopesParam] = scopes.join(" ");
-  return postTokenRequest(provider, tokenEndpointItem(provider, item, clientId, "client_credentials"), item, fields, deps);
+  return postTokenRequest(provider, tokenEndpointItem(provider, item, clientId), item, fields, deps);
 }
 
 /**
- * RFC 6749 section 6: a fresh access token from a stored refresh token. The refresh item's value
- * is placed in the form body by the connector (`refresh` mode); `clientId` identifies the app.
+ * RFC 6749 section 6: a fresh access token from a stored refresh token. The exchange authenticates
+ * the app exactly as the code exchange did: `clientSecretItem` (the `<ITEM>` whose
+ * `<ITEM>_REFRESH` this is) goes out per `provider.tokenAuth` (HTTP Basic, or `client_id` and
+ * `client_secret` form fields), and the refresh item's value rides in the form as `refresh_token`.
+ * Both items must allow the token host. Neither value reaches the returned body or headers.
  */
 export async function refreshAccessToken(
+  provider: Provider,
+  refreshItem: ConnectorItem,
+  clientSecretItem: ConnectorItem,
+  clientId: string,
+  deps: TokenEngineDeps = {},
+): Promise<MintOutcome> {
+  assertGrant(provider, "refresh_token");
+  assertTokenHostAllowed(refreshItem, provider);
+  return postTokenRequest(
+    provider,
+    tokenEndpointItem(provider, clientSecretItem, clientId),
+    clientSecretItem,
+    { grant_type: "refresh_token", refresh_token: refreshItem.secret },
+    deps,
+    [refreshItem.secret],
+  );
+}
+
+/**
+ * RFC 6749 section 6 for a public (PKCE) client: no client secret exists, so the exchange carries
+ * `client_id` alone next to `grant_type=refresh_token` and the refresh token (the `refresh` inject
+ * mode adds all three). Only a provider with `pkce: true` accepts this; a confidential client's
+ * provider answers `invalid_client`, which is why callers must try the sibling secret first.
+ */
+export async function refreshAccessTokenPublic(
   provider: Provider,
   refreshItem: ConnectorItem,
   clientId: string,
   deps: TokenEngineDeps = {},
 ): Promise<MintOutcome> {
   assertGrant(provider, "refresh_token");
-  return postTokenRequest(provider, tokenEndpointItem(provider, refreshItem, clientId, "refresh"), refreshItem, {}, deps);
+  const tokenItem: ConnectorItem = {
+    ...refreshItem,
+    username: clientId,
+    inject: "refresh",
+    allowedHosts: assertTokenHostAllowed(refreshItem, provider),
+  };
+  return postTokenRequest(provider, tokenItem, refreshItem, {}, deps);
 }
 
 /** RFC 6749 section 4.1.3 (+ RFC 7636 code_verifier): exchange a code with the client secret item. */
@@ -167,13 +206,7 @@ export async function exchangeAuthorizationCode(
     redirect_uri: input.redirectUri,
   };
   if (input.codeVerifier) fields.code_verifier = input.codeVerifier;
-  return postTokenRequest(
-    provider,
-    tokenEndpointItem(provider, clientSecretItem, input.clientId, "client_credentials"),
-    clientSecretItem,
-    fields,
-    deps,
-  );
+  return postTokenRequest(provider, tokenEndpointItem(provider, clientSecretItem, input.clientId), clientSecretItem, fields, deps);
 }
 
 /** The API-call item: a minted token sent as Bearer, with nothing of the client secret left. */
@@ -191,6 +224,17 @@ export function itemWithAccessToken(item: ConnectorItem, accessToken: string): C
 /** `FOO_SECRET` stores its user refresh token as `FOO_REFRESH`; anything else gets `_REFRESH`. */
 export function refreshItemName(secretName: string): string {
   return secretName.endsWith("_SECRET") ? secretName.replace(/_SECRET$/, "_REFRESH") : `${secretName}_REFRESH`;
+}
+
+/**
+ * The inverse of `refreshItemName`: the client-secret items an `<ITEM>_REFRESH` can belong to, in
+ * lookup order. `FOO_REFRESH` was stored by a connect on `FOO_SECRET` or on `FOO`; a name without
+ * the suffix has no sibling.
+ */
+export function clientSecretItemNames(refreshName: string): string[] {
+  if (!refreshName.endsWith("_REFRESH")) return [];
+  const stem = refreshName.slice(0, -"_REFRESH".length);
+  return stem ? [`${stem}_SECRET`, stem] : [];
 }
 
 /** Public client id for a client-secret item: the argument wins, then the stored username. */
@@ -214,10 +258,30 @@ export function clientIdRequiredHint(provider: Provider): string {
   );
 }
 
+/** A one-call approval is spent by any origin answer; the model must not expect it to come back. */
+const APPROVAL_SPENT = "A one-call approval is spent by this answer; if the retry returns a pending grant, tell the user to approve it.";
+
 export function mintFailedHint(provider: Provider): string {
   return (
-    `${provider.displayName} token mint failed at ${provider.tokenHost}${provider.tokenPath}. Retry uses the same ` +
-    "approval. Check the client id and that the secret is the current one."
+    `${provider.displayName} token mint failed at ${provider.tokenHost}${provider.tokenPath}. ` +
+    `Check the client id and that the secret is the current one, then retry. ${APPROVAL_SPENT}`
+  );
+}
+
+export function refreshFailedHint(provider: Provider): string {
+  return (
+    `${provider.displayName} refused the refresh at ${provider.tokenHost}${provider.tokenPath}. ` +
+    "invalid_grant means the refresh token was revoked or expired: reconnect the account in the Botpasses console. " +
+    `invalid_client means the stored client secret or client id is wrong. ${APPROVAL_SPENT}`
+  );
+}
+
+/** Why a confidential provider's refresh cannot go out without the app's client secret item. */
+export function clientSecretRequiredHint(provider: Provider, refreshName: string, wanted: string[], environment: string): string {
+  return (
+    `${provider.displayName} refuses a refresh_token exchange without the app's client secret (invalid_client). ` +
+    `Store it as ${wanted.join(" or ")} in the ${environment} environment with ${provider.tokenHost} in its allowed hosts, ` +
+    `then retry with ${refreshName}. The agent needs no approval on the client secret item.`
   );
 }
 
@@ -225,13 +289,13 @@ export function emptyOriginHint(status: number): string | undefined {
   if (status === 410) {
     return (
       "Upstream returned 410 with an empty body. This is the origin status, not a Botpasses consume error. " +
-      "Retry uses the same approval. Do not ask for a new 8-digit code."
+      `Retry the call once. ${APPROVAL_SPENT}`
     );
   }
   if (status === 401) {
     return (
       "Upstream 401: missing or invalid access token. A client secret is not a user access token. " +
-      "Retry uses the same approval."
+      `Fix the request before retrying. ${APPROVAL_SPENT}`
     );
   }
   return undefined;

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AuditAction, AuditRecord, GrantRecord, GrantScope, GrantStatus, SecretMeta } from "./types.ts";
+import type { AuditAction, AuditRecord, GrantRecord, LocalGrantScope, GrantStatus, SecretMeta } from "./types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS vault_meta (
@@ -47,13 +47,13 @@ CREATE INDEX IF NOT EXISTS grants_lookup
 CREATE INDEX IF NOT EXISTS audit_created ON audit (created_at);
 `;
 
-/** Local items carry the same connector metadata as hosted items (3.8). */
-export type LocalItemMeta = SecretMeta & { allowedHosts: string[]; inject: string };
+/** Local items carry the same connector metadata as hosted items (3.8): hosts, mode, username. */
+export type LocalItemMeta = SecretMeta & { allowedHosts: string[]; inject: string; username: string | null };
 
 export const LOCAL_DEFAULT_INJECT = "bearer";
 
 /** Bumped when `migrateLocalSchema` gains a step; stored in `vault_meta.local_schema`. */
-export const LOCAL_SCHEMA_VERSION = "2";
+export const LOCAL_SCHEMA_VERSION = "3";
 
 export function dbPath(home: string): string {
   return join(home, "vault.sqlite");
@@ -61,7 +61,8 @@ export function dbPath(home: string): string {
 
 /**
  * Expand-only migration on open, like `aad_version` in vault.ts. Version 2 adds the connector
- * columns to `secrets`; the column check makes a half-applied run safe to repeat.
+ * columns to `secrets`; version 3 adds `username` (HTTP Basic user, OAuth client id, AWS access
+ * key id). The column check makes a half-applied run safe to repeat.
  */
 function migrateLocalSchema(db: DatabaseSync): void {
   if (getMeta(db, "local_schema") === LOCAL_SCHEMA_VERSION) return;
@@ -74,6 +75,9 @@ function migrateLocalSchema(db: DatabaseSync): void {
   if (!columns.has("inject")) {
     db.exec(`ALTER TABLE secrets ADD COLUMN inject TEXT NOT NULL DEFAULT '${LOCAL_DEFAULT_INJECT}'`);
   }
+  if (!columns.has("username")) {
+    db.exec("ALTER TABLE secrets ADD COLUMN username TEXT");
+  }
   setMeta(db, "local_schema", LOCAL_SCHEMA_VERSION);
 }
 
@@ -81,14 +85,13 @@ export function openDb(home: string): DatabaseSync {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(dbPath(home));
   db.exec("PRAGMA journal_mode = WAL;");
+  // A second writer (`vault serve` next to `vault set`) waits up to 5 s for the lock instead of
+  // failing at once with "database is locked" (the default busy_timeout is 0).
+  db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   migrateLocalSchema(db);
   return db;
-}
-
-export function nowIso(date = new Date()): string {
-  return date.toISOString();
 }
 
 type SecretRow = {
@@ -99,9 +102,13 @@ type SecretRow = {
   last4: string;
   allowed_hosts_json: string;
   inject: string;
+  username: string | null;
   created_at: string;
   updated_at: string;
 };
+
+type MetaRow = Pick<SecretRow, "name" | "last4" | "allowed_hosts_json" | "inject" | "username" | "created_at" | "updated_at">;
+const META_COLUMNS = "name, last4, allowed_hosts_json, inject, username, created_at, updated_at";
 
 function parseHostsJson(json: unknown): string[] {
   if (typeof json !== "string") return [];
@@ -152,8 +159,9 @@ export function setMeta(db: DatabaseSync, key: string, value: string): void {
 }
 
 /**
- * Insert or re-encrypt a secret. `allowedHosts` and `inject` replace the stored values when
- * given and are kept otherwise, so a plain `vault set NAME` rotation does not drop the hosts.
+ * Insert or re-encrypt a secret. `allowedHosts`, `inject`, and `username` replace the stored
+ * values when given and are kept otherwise, so a plain `vault set NAME` rotation does not drop
+ * the hosts. `username: null` clears it.
  */
 export function upsertSecret(
   db: DatabaseSync,
@@ -166,17 +174,19 @@ export function upsertSecret(
     at: string;
     allowedHosts?: string[];
     inject?: string;
+    username?: string | null;
   },
 ): LocalItemMeta {
   const existing = db
-    .prepare("SELECT created_at, allowed_hosts_json, inject FROM secrets WHERE name = ?")
-    .get(row.name) as Pick<SecretRow, "created_at" | "allowed_hosts_json" | "inject"> | undefined;
+    .prepare("SELECT created_at, allowed_hosts_json, inject, username FROM secrets WHERE name = ?")
+    .get(row.name) as Pick<SecretRow, "created_at" | "allowed_hosts_json" | "inject" | "username"> | undefined;
   const createdAt = existing?.created_at ?? row.at;
   const allowedHosts = row.allowedHosts ?? parseHostsJson(existing?.allowed_hosts_json);
   const inject = row.inject ?? existing?.inject ?? LOCAL_DEFAULT_INJECT;
+  const username = row.username !== undefined ? row.username : existing?.username ?? null;
   db.prepare(
-    `INSERT INTO secrets (name, iv, ciphertext, tag, last4, allowed_hosts_json, inject, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO secrets (name, iv, ciphertext, tag, last4, allowed_hosts_json, inject, username, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET
        iv = excluded.iv,
        ciphertext = excluded.ciphertext,
@@ -184,42 +194,39 @@ export function upsertSecret(
        last4 = excluded.last4,
        allowed_hosts_json = excluded.allowed_hosts_json,
        inject = excluded.inject,
+       username = excluded.username,
        updated_at = excluded.updated_at`,
-  ).run(row.name, row.iv, row.ciphertext, row.tag, row.last4, JSON.stringify(allowedHosts), inject, createdAt, row.at);
+  ).run(row.name, row.iv, row.ciphertext, row.tag, row.last4, JSON.stringify(allowedHosts), inject, username, createdAt, row.at);
   return {
     name: row.name,
     last4: row.last4,
     allowedHosts,
     inject,
+    username,
     createdAt,
     updatedAt: row.at,
   };
 }
 
-function mapMeta(r: Pick<SecretRow, "name" | "last4" | "allowed_hosts_json" | "inject" | "created_at" | "updated_at">): LocalItemMeta {
+function mapMeta(r: MetaRow): LocalItemMeta {
   return {
     name: r.name,
     last4: r.last4,
     allowedHosts: parseHostsJson(r.allowed_hosts_json),
     inject: r.inject,
+    username: r.username ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
 }
 
 export function listSecretMeta(db: DatabaseSync): LocalItemMeta[] {
-  const rows = db
-    .prepare(
-      "SELECT name, last4, allowed_hosts_json, inject, created_at, updated_at FROM secrets ORDER BY name",
-    )
-    .all() as Pick<SecretRow, "name" | "last4" | "allowed_hosts_json" | "inject" | "created_at" | "updated_at">[];
+  const rows = db.prepare(`SELECT ${META_COLUMNS} FROM secrets ORDER BY name`).all() as MetaRow[];
   return rows.map(mapMeta);
 }
 
 export function getSecretMeta(db: DatabaseSync, name: string): LocalItemMeta | undefined {
-  const row = db
-    .prepare("SELECT name, last4, allowed_hosts_json, inject, created_at, updated_at FROM secrets WHERE name = ?")
-    .get(name) as Pick<SecretRow, "name" | "last4" | "allowed_hosts_json" | "inject" | "created_at" | "updated_at"> | undefined;
+  const row = db.prepare(`SELECT ${META_COLUMNS} FROM secrets WHERE name = ?`).get(name) as MetaRow | undefined;
   return row ? mapMeta(row) : undefined;
 }
 
@@ -236,12 +243,13 @@ export type SecretEnvelopeRow = {
   last4: string;
   allowedHosts: string[];
   inject: string;
+  username: string | null;
 };
 
 export function getSecretEnvelope(db: DatabaseSync, name: string): SecretEnvelopeRow | undefined {
   const row = db
-    .prepare("SELECT iv, ciphertext, tag, last4, allowed_hosts_json, inject FROM secrets WHERE name = ?")
-    .get(name) as Pick<SecretRow, "iv" | "ciphertext" | "tag" | "last4" | "allowed_hosts_json" | "inject"> | undefined;
+    .prepare("SELECT iv, ciphertext, tag, last4, allowed_hosts_json, inject, username FROM secrets WHERE name = ?")
+    .get(name) as Pick<SecretRow, "iv" | "ciphertext" | "tag" | "last4" | "allowed_hosts_json" | "inject" | "username"> | undefined;
   if (!row) return undefined;
   return {
     iv: row.iv,
@@ -250,6 +258,7 @@ export function getSecretEnvelope(db: DatabaseSync, name: string): SecretEnvelop
     last4: row.last4,
     allowedHosts: parseHostsJson(row.allowed_hosts_json),
     inject: row.inject,
+    username: row.username ?? null,
   };
 }
 
@@ -303,7 +312,7 @@ function mapGrant(row: GrantRow): GrantRecord {
     secretName: row.secret_name,
     agentId: row.agent_id,
     toolId: row.tool_id,
-    scope: row.scope as GrantScope,
+    scope: row.scope as LocalGrantScope,
     status: row.status as GrantStatus,
     expiresAt: row.expires_at,
     createdAt: row.created_at,

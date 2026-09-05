@@ -22,6 +22,9 @@ env:
 
 jobs:
   dump:
+    # DATABASE_URL_DIRECT, BACKUP_KEY, and the R2_* values are environment secrets of `backup`
+    # (deployment branch rule: dev only). Jobs outside this environment cannot read them.
+    environment: backup
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -80,6 +83,7 @@ jobs:
     # Download the object just written and decrypt it with the real key. A wrong key, a
     # truncated upload, or a bad envelope header fails the job (and the nightly run).
     needs: dump
+    environment: backup
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

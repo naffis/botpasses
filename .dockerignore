@@ -5,11 +5,11 @@ site/dist
 .git
 .github
 *.md
+!CHANGELOG.md
 docs
-processes
+!docs/security/threat-model.md
 test
 coverage
-.loadout
 .cursor
 .claude
 .mcp.json

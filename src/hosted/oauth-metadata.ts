@@ -1,5 +1,23 @@
 /** RFC 8414 / RFC 9728 documents MCP clients parse. One builder, many URLs. */
 
+/**
+ * What this authorization server accepts. `createOauthProvider` pins oidc-provider to
+ * these same lists, so the discovery document and the engine cannot drift apart.
+ */
+export const OAUTH_SCOPES: readonly string[] = ["openid", "mcp"];
+export const OAUTH_RESPONSE_TYPES: readonly string[] = ["code"];
+/** oidc-provider registers query, fragment, and form_post for the `code` response type. */
+export const OAUTH_RESPONSE_MODES: readonly string[] = ["query", "fragment", "form_post"];
+export const OAUTH_GRANT_TYPES: readonly string[] = [
+  "authorization_code",
+  "refresh_token",
+  "urn:ietf:params:oauth:grant-type:device_code",
+];
+/** Public clients only: DCR and CIMD clients never hold a client_secret. */
+export const OAUTH_TOKEN_ENDPOINT_AUTH_METHODS: readonly string[] = ["none"];
+export const OAUTH_CODE_CHALLENGE_METHODS: readonly string[] = ["S256"];
+export const OAUTH_ID_TOKEN_SIGNING_ALGS: readonly string[] = ["RS256"];
+
 export type AuthorizationServerMetadata = {
   issuer: string;
   authorization_endpoint: string;
@@ -54,18 +72,14 @@ export function authorizationServerMetadata(publicUrl: string): AuthorizationSer
     registration_endpoint: `${origin}/oauth/register`,
     device_authorization_endpoint: `${origin}/oauth/device/auth`,
     revocation_endpoint: `${origin}/oauth/revoke`,
-    scopes_supported: ["openid", "mcp"],
-    response_types_supported: ["code"],
-    response_modes_supported: ["query"],
-    grant_types_supported: [
-      "authorization_code",
-      "refresh_token",
-      "urn:ietf:params:oauth:grant-type:device_code",
-    ],
-    token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
-    code_challenge_methods_supported: ["S256"],
+    scopes_supported: [...OAUTH_SCOPES],
+    response_types_supported: [...OAUTH_RESPONSE_TYPES],
+    response_modes_supported: [...OAUTH_RESPONSE_MODES],
+    grant_types_supported: [...OAUTH_GRANT_TYPES],
+    token_endpoint_auth_methods_supported: [...OAUTH_TOKEN_ENDPOINT_AUTH_METHODS],
+    code_challenge_methods_supported: [...OAUTH_CODE_CHALLENGE_METHODS],
     subject_types_supported: ["public"],
-    id_token_signing_alg_values_supported: ["RS256"],
+    id_token_signing_alg_values_supported: [...OAUTH_ID_TOKEN_SIGNING_ALGS],
     authorization_response_iss_parameter_supported: true,
     client_id_metadata_document_supported: true,
     resource,
@@ -78,7 +92,7 @@ export function protectedResourceMetadata(publicUrl: string): ProtectedResourceM
   return {
     resource: mcpResource(origin),
     authorization_servers: [origin],
-    scopes_supported: ["openid", "mcp"],
+    scopes_supported: [...OAUTH_SCOPES],
     bearer_methods_supported: ["header"],
   };
 }

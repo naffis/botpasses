@@ -6,11 +6,39 @@ import type { GrantPolicy, ItemKind, VaultEnvName } from "../hosted-types.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import { corsHeaders, corsPath, corsPublicUrl } from "./http-cors.ts";
 import { mcpWwwAuthenticate } from "./oauth-metadata.ts";
-import { captureException, logVaultEvent } from "./observe.ts";
+import { captureException, logVaultEvent, redactMessage } from "./observe.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { isPublicSitePath } from "./static-site.ts";
 
 export const BODY_CAP = 128 * 1024;
+
+/**
+ * One request id per request. The router binds the inbound (or minted) id before routing so
+ * the access log line, the `x-request-id` header, the 500 body, and the Sentry event all carry
+ * the same value. A response nobody bound (a test calling `sendError` directly) mints one.
+ */
+const requestIds = new WeakMap<ServerResponse, string>();
+
+export function bindRequestId(res: ServerResponse, requestId: string): void {
+  requestIds.set(res, requestId);
+}
+
+function requestIdOf(res: ServerResponse): string {
+  const bound = requestIds.get(res);
+  if (bound) return bound;
+  const minted = randomUUID();
+  requestIds.set(res, minted);
+  return minted;
+}
+
+/** `decodeURIComponent` for one path segment; a malformed escape is the caller's 400, not a 500. */
+export function decodePathSegment(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new HttpError(400, "Malformed path");
+  }
+}
 
 export function isLoopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
@@ -75,10 +103,10 @@ export function sendError(res: ServerResponse, err: unknown, path = ""): void {
     res.end(JSON.stringify({ error: err.message, ...err.extra }));
     return;
   }
-  const requestId = randomUUID();
-  const message = err instanceof Error ? err.message : String(err);
-  logVaultEvent("request_error", { requestId, path: routePath, message: message.slice(0, 500) });
-  void captureException(err);
+  const requestId = requestIdOf(res);
+  const message = redactMessage(err instanceof Error ? err.message : String(err));
+  logVaultEvent("request_error", { request_id: requestId, path: routePath, message });
+  void captureException(err, { requestId, path: routePath });
   res.writeHead(500, {
     "content-type": "application/json; charset=utf-8",
     "x-request-id": requestId,
@@ -100,10 +128,27 @@ async function readRaw(req: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** JSON object body. Malformed JSON is a 400 that does not echo the bytes back. */
+function contentTypeOf(req: IncomingMessage): string {
+  const raw = req.headers["content-type"];
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function isJsonType(type: string): boolean {
+  return (type.split(";")[0] ?? "").trim() === "application/json";
+}
+
+/**
+ * JSON object body. A body must be declared `application/json`; a form or text type is 415 so a
+ * cross-site HTML form (which can only send form or text types) never reaches a JSON handler,
+ * whatever the CSRF check says. A bodiless request with no type reads as `{}`. Malformed JSON is
+ * a 400 that does not echo the bytes back.
+ */
 export async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const type = contentTypeOf(req);
+  if (type && !isJsonType(type)) throw new HttpError(415, "Content-Type must be application/json");
   const raw = await readRaw(req);
   if (raw.length === 0) return {};
+  if (!type) throw new HttpError(415, "Content-Type must be application/json");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.toString("utf8"));
@@ -115,9 +160,12 @@ export async function readJson(req: IncomingMessage): Promise<Record<string, unk
   return parsed as Record<string, unknown>;
 }
 
-/** JSON or `application/x-www-form-urlencoded` (HTML forms). Form values are strings. */
+/**
+ * JSON or `application/x-www-form-urlencoded` (HTML forms). Form values are strings. Only routes
+ * that render a real form use this; everything else goes through `readJson` and its type check.
+ */
 export async function readJsonOrForm(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const type = typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "";
+  const type = contentTypeOf(req);
   if (!type.includes("application/x-www-form-urlencoded")) return readJson(req);
   const raw = await readRaw(req);
   const out: Record<string, unknown> = {};
@@ -188,7 +236,6 @@ export function robotsTxt(plane: "staging" | "production"): string {
     "Disallow: /approve",
     "Disallow: /runtime",
     "Disallow: /oauth",
-    "Disallow: /agentpass",
     "",
   ].join("\n");
 }

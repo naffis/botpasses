@@ -37,7 +37,19 @@ export type SweepCounts = {
   oidcPayloads: number;
   /** Unaccepted invites more than seven days past `expires_at`. */
   orgInvites: number;
+  /** Revoked, consumed, or expired grants settled more than 30 days ago. */
+  grants: number;
 };
+
+/** An item still bound to the legacy `orgId` AAD (or unrecorded), with the org that owns it. */
+export type LegacyAadItem = { item: ItemRecord; orgId: string };
+/** Keyset position in the `(org_id, item id)` order of `listItemsWithLegacyAad`: the last row of the previous page. */
+export type LegacyAadCursor = { orgId: string; itemId: string };
+/** One page of rebind candidates: at most `limit` rows, strictly after `after` when set. */
+export type LegacyAadPage = { limit: number; after?: LegacyAadCursor };
+
+/** Rate limit buckets: `grant` and `need` share the hourly org budget; `approve_code` has its own. */
+export type RateHitKind = "grant" | "need" | "approve_code";
 
 /**
  * Identity columns added after `UserRecord` froze (see `HOSTED_SCHEMA_IDENTITY_ALTER2_*`).
@@ -94,13 +106,16 @@ export type VaultStore = {
   /**
    * Delete rows nothing can read again: expired OTP challenges, sessions, approval
    * challenges, and oidc payloads; cancelled/expired needs older than 24 h; rate_hits
-   * windows older than 2 h. Runs at boot and hourly.
+   * windows older than 2 h; revoked, consumed, or expired grants settled more than 30 days
+   * ago (the audit rows they produced stay). Runs at boot and hourly.
    */
   sweepExpired(nowIso: string): Promise<SweepCounts>;
 
   insertOrg(row: OrgRecord): Promise<void>;
   getOrg(id: string): Promise<OrgRecord | undefined>;
   listOrgs(): Promise<OrgRecord[]>;
+  /** Orgs whose `created_by` is this user, oldest first. */
+  listOrgsCreatedBy(userId: string): Promise<OrgRecord[]>;
   updateOrgWrappedDek(
     id: string,
     patch: Pick<OrgRecord, "wrappedDekIv" | "wrappedDekCiphertext" | "wrappedDekTag">,
@@ -132,6 +147,7 @@ export type VaultStore = {
   getFolderByName(environmentId: string, name: string): Promise<FolderRecord | undefined>;
 
   insertItem(row: ItemRecord): Promise<void>;
+  /** Writes a bound envelope (`aad_version` becomes current). */
   updateItemEnvelope(
     id: string,
     patch: Pick<ItemRecord, "iv" | "ciphertext" | "tag" | "last4" | "updatedAt">,
@@ -143,6 +159,36 @@ export type VaultStore = {
       "name" | "kind" | "environmentId" | "username" | "inject" | "allowedHostsJson" | "updatedAt"
     >,
   ): Promise<void>;
+  /**
+   * Envelope and metadata in one statement, so a re-encryption under new `allowed_hosts_json`
+   * or `inject` never lands without the columns it is bound to (or the other way round).
+   */
+  updateItemEnvelopeAndMeta(
+    id: string,
+    patch: Pick<
+      ItemRecord,
+      | "iv"
+      | "ciphertext"
+      | "tag"
+      | "last4"
+      | "name"
+      | "kind"
+      | "environmentId"
+      | "username"
+      | "inject"
+      | "allowedHostsJson"
+      | "updatedAt"
+    >,
+  ): Promise<void>;
+  /**
+   * Items whose `aad_version` is below the current binding, with their org, ordered by
+   * `(org_id, id)`. Boot rebind input, read one page at a time: `limit` bounds the rows held in
+   * memory and `after` (the last row of the previous page) keeps a row that stays legacy (an
+   * unreadable envelope) from being returned again.
+   */
+  listItemsWithLegacyAad(page: LegacyAadPage): Promise<LegacyAadItem[]>;
+  /** Marks an envelope verified under the current binding without rewriting it. */
+  setItemAadVersion(id: string, version: number): Promise<void>;
   deleteItem(id: string): Promise<void>;
   getItem(id: string): Promise<ItemRecord | undefined>;
   getItemByName(environmentId: string, name: string): Promise<ItemRecord | undefined>;
@@ -156,8 +202,8 @@ export type VaultStore = {
   findClientByOauthId(oauthClientId: string): Promise<ClientRecord | undefined>;
   updateClientHashedSecret(id: string, hashedSecret: string, tokenLast4: string): Promise<void>;
   updateClientEnvironment(id: string, environment: VaultEnvName): Promise<void>;
-  incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
-  countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number>;
+  incrementRateHit(orgId: string, kind: RateHitKind, windowStart: string): Promise<number>;
+  countRateHits(orgId: string, kind: RateHitKind, windowStart: string): Promise<number>;
 
   insertPolicy(row: PolicyRecord): Promise<void>;
   deletePolicy(id: string): Promise<void>;
@@ -174,6 +220,8 @@ export type VaultStore = {
   getGrant(id: string): Promise<HostedGrantRecord | undefined>;
   listGrants(orgId: string): Promise<HostedGrantRecord[]>;
   listPendingGrants(orgId: string): Promise<HostedGrantRecord[]>;
+  /** Every grant for one (client, item) pair, newest first; uses `grants_client_item_status`. */
+  listGrantsForPair(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord[]>;
   /** Writes every grant column except `calls_used`, which only `recordGrantCall` moves. */
   updateGrant(row: HostedGrantRecord): Promise<void>;
   consumeGrant(id: string, consumedAt: string): Promise<boolean>;
@@ -215,31 +263,6 @@ export type VaultStore = {
   refreshNeedExpires(id: string, expiresAt: string): Promise<void>;
   persistFulfill(input: PersistFulfillInput): Promise<void>;
 
-  insertAgentPass(row: {
-    id: string;
-    orgId: string;
-    status: string;
-    holderCnf: string | null;
-    scopeJson: string;
-    taskId: string | null;
-    createdAt: string;
-    consumedAt: string | null;
-  }): Promise<void>;
-  getAgentPass(id: string): Promise<
-    | {
-        id: string;
-        orgId: string;
-        status: string;
-        holderCnf: string | null;
-        scopeJson: string;
-        taskId: string | null;
-        createdAt: string;
-        consumedAt: string | null;
-      }
-    | undefined
-  >;
-  updateAgentPassStatus(id: string, status: string): Promise<void>;
-  consumeAgentPass(id: string, consumedAt: string): Promise<boolean>;
   insertUser(row: UserRecord): Promise<void>;
   getUser(id: string): Promise<UserRow | undefined>;
   getUserByEmail(email: string): Promise<UserRow | undefined>;
@@ -248,17 +271,44 @@ export type VaultStore = {
   insertEmailOtp(row: EmailOtpRecord): Promise<void>;
   latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined>;
   updateEmailOtp(row: EmailOtpRecord): Promise<void>;
+  /**
+   * Atomically spends one verify attempt on a challenge that is still live (not expired and
+   * under `maxAttempts`). Returns the attempt count after the claim, or undefined when the
+   * challenge is missing, expired, or exhausted, so concurrent guesses cannot share a slot.
+   */
+  claimOtpAttempt(id: string, nowIso: string, maxAttempts: number): Promise<number | undefined>;
   countEmailOtpSince(email: string, sinceIso: string): Promise<number>;
   insertBackupCode(userId: string, codeScrypt: string): Promise<void>;
   listBackupCodes(userId: string): Promise<{ codeScrypt: string; usedAt: string | null }[]>;
-  markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void>;
+  /** True when this call consumed the code; false when it was already used (single use under concurrency). */
+  markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<boolean>;
   insertSession(row: OperatorSessionRow): Promise<void>;
   getSession(idHash: string): Promise<OperatorSessionRow | undefined>;
   deleteSession(idHash: string): Promise<void>;
   deleteOtherSessions(userId: string, keepHash: string): Promise<void>;
+  /**
+   * Sessions acting in `orgId`: the session's `active_org_id` when the user is still a member
+   * of it, otherwise the user's first membership (the `listMembershipsForUser` order).
+   */
   listOperatorSessions(orgId: string): Promise<OperatorSessionRow[]>;
   touchSession(idHash: string, lastSeenAt: string, expiresAt: string): Promise<void>;
   updateUserSecurity(userId: string, patch: UserSecurityState): Promise<void>;
+  /**
+   * Atomically charges one authenticator attempt: increments `totp_failures` (restarting at 1
+   * when a lock has expired, which also clears it). Returns the count after the charge, or
+   * undefined while the user is locked or unknown.
+   */
+  claimTotpAttempt(userId: string, nowIso: string): Promise<number | undefined>;
+  /** Replay guard: records `step` only when it is newer than the last accepted one. True when accepted. */
+  consumeTotpStep(userId: string, step: number): Promise<boolean>;
+  /**
+   * Clears the pending authenticator secret only while it is still the one wrapped under
+   * `pendingIv`. True when this call cleared it, so two concurrent confirms of one
+   * enrollment cannot both succeed.
+   */
+  consumePendingTotp(userId: string, pendingIv: string): Promise<boolean>;
+  lockTotp(userId: string, untilIso: string): Promise<void>;
+  resetTotpFailures(userId: string): Promise<void>;
   /** Users with a confirmed or pending authenticator secret (for KEK rotation re-wraps). */
   listUsersWithTotp(): Promise<UserRow[]>;
   deleteUnusedBackupCodes(userId: string): Promise<void>;
@@ -276,23 +326,15 @@ export type VaultStore = {
   getAccessEventByJti(jtiHash: string): Promise<AccessEventRecord | undefined>;
   revokeAccessEventsForClient(clientId: string, at: string): Promise<void>;
   revokeAccessEvent(jtiHash: string, at: string): Promise<void>;
+  /**
+   * Marks every unrevoked ledger row issued under an OAuth grant. Returns the rows it changed
+   * so the caller can audit each one.
+   */
+  revokeAccessEventsForGrant(grantId: string, at: string): Promise<AccessEventRecord[]>;
   /** `at` null clears the revocation (re-consent through OAuth reactivates the same row). */
   setClientRevoked(id: string, at: string | null): Promise<void>;
   touchClientLastSeen(id: string, at: string): Promise<void>;
   setClientLastTokenAt(id: string, at: string): Promise<void>;
-
-  listAgentPasses(orgId: string): Promise<
-    {
-      id: string;
-      orgId: string;
-      status: string;
-      holderCnf: string | null;
-      scopeJson: string;
-      taskId: string | null;
-      createdAt: string;
-      consumedAt: string | null;
-    }[]
-  >;
 
   /** Tenant-scoped OAuth client lookup: the DCR id is shared across orgs, the pair is unique. */
   findClientByOrgAndOauthId(orgId: string, oauthClientId: string): Promise<ClientRecord | undefined>;
@@ -303,9 +345,25 @@ export type VaultStore = {
   deleteOidcPayloadsByGrantId(kind: string, grantId: string): Promise<void>;
   /**
    * Deletes rows of `kind` whose payload clientId is one of `clientIds` and whose
-   * accountId is `accountId` (or absent). Rows bound to another account survive.
+   * accountId is `accountId` (or absent). Rows bound to another account survive. With
+   * `onlyWithoutGrant`, rows that carry a grant id are left alone: those belong to a Grant
+   * and are swept with it (by org), never by account, since one account can hold grants for
+   * the same client id in several orgs.
    */
-  deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void>;
+  deleteOidcPayloadsForClient(
+    kind: string,
+    clientIds: string[],
+    accountId: string | null,
+    onlyWithoutGrant?: boolean,
+  ): Promise<void>;
+  /** Rows of `kind` whose payload clientId is one of `clientIds` (used to find an org's grants at revoke). */
+  listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]>;
+  /**
+   * Atomically stamps `consumed` (epoch seconds) into the payload JSON of a row that has not been
+   * consumed yet. Returns false when the row is missing or already consumed, so two concurrent
+   * exchanges of one code cannot both succeed.
+   */
+  consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean>;
   /** Removes rows whose expires_at is at or before `nowIso`. Returns the count. */
   purgeExpiredOidcPayloads(nowIso: string): Promise<number>;
 

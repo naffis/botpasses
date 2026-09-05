@@ -1,8 +1,17 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { deployPlaneRaw } from "../brand.ts";
+import { tokensEqual } from "../crypto.ts";
 import type { ClientKind, MemberRole, VaultEnvName } from "../hosted-types.ts";
+import { sha256Hex } from "../ids.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { HttpError } from "./errors.ts";
+import { requestClientIp } from "./identity-limiter.ts";
+import { logAuthEvent, logVaultEvent } from "./observe.ts";
+
+/** Short, stable fingerprint of the bootstrap token for log correlation; never the token. */
+function hashBootstrap(token: string): string {
+  return sha256Hex(token).slice(0, 12);
+}
 
 export type OperatorPrincipal = {
   channel: "operator";
@@ -48,13 +57,6 @@ export function readBearer(req: IncomingMessage): string | undefined {
   return auth.slice("Bearer ".length).trim();
 }
 
-/** Constant-time compare of token strings (hashes first so lengths may differ). */
-export function tokensEqual(a: string, b: string): boolean {
-  const left = createHash("sha256").update(a).digest();
-  const right = createHash("sha256").update(b).digest();
-  return timingSafeEqual(left, right);
-}
-
 export async function resolveMachineToken(
   req: IncomingMessage,
   kernel: HostedKernel,
@@ -84,15 +86,37 @@ export async function resolveMachineToken(
   return undefined;
 }
 
+/** True when `VAULT_BOOTSTRAP_TOKEN` is honoured: 32+ chars, and on a plane only with `VAULT_BOOTSTRAP_ALLOW_PLANE=1`. */
+export function bootstrapTokenEnabled(env: NodeJS.ProcessEnv): boolean {
+  const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
+  if (bootstrap.length < 32) return false;
+  const plane = deployPlaneRaw(env) !== undefined;
+  return !plane || env.VAULT_BOOTSTRAP_ALLOW_PLANE === "1";
+}
+
 export function hostedAuthResolver(
   env: NodeJS.ProcessEnv,
   fallback: AuthResolver,
 ): AuthResolver {
   const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
+  const enabled = bootstrapTokenEnabled(env);
+  if (enabled) {
+    // Boot-time warning: a static break-glass credential is live. Every use is logged below.
+    logVaultEvent("bootstrap_token_enabled", {
+      token_hash: hashBootstrap(bootstrap),
+      plane: env.VAULT_DEPLOY_PLANE ?? "local",
+    });
+  }
   return async (req, kernel) => {
     const token = readBearer(req);
-    if (bootstrap.length >= 32 && token && tokensEqual(token, bootstrap)) {
+    if (enabled && token && tokensEqual(token, bootstrap)) {
       const op = await kernel.ensureBootstrapOperator();
+      logAuthEvent("bootstrap_used", {
+        token_hash: hashBootstrap(bootstrap),
+        ip: requestClientIp(req),
+        method: req.method ?? "GET",
+        path: (req.url ?? "/").split("?")[0] ?? "/",
+      });
       return { channel: "operator", userId: op.userId, orgId: op.orgId, role: op.role };
     }
     const machine = await resolveMachineToken(req, kernel);

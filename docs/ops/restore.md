@@ -6,7 +6,7 @@ Nightly `backup-prod.yml` only runs from GitHub's default branch. Trunk is `dev`
 
 `pg_dump` comes from the PGDG `postgresql-client-16` package to match the Neon project's major (`PG_MAJOR` in the workflow). Bump it with the Neon upgrade.
 
-GitHub Actions secret names: `DATABASE_URL_DIRECT`, `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. These are not Fly secrets.
+GitHub Actions secret names: `DATABASE_URL_DIRECT`, `BACKUP_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. They are environment secrets of the `backup` environment (deployment branch `dev` only), not repository secrets and not Fly secrets; both jobs of the workflow declare `environment: backup`. Setup: [default-branch.md](default-branch.md).
 
 ## Decrypt a dump
 
@@ -16,7 +16,7 @@ node --experimental-strip-types --disable-warning=ExperimentalWarning \
   scripts/hosted-backup.ts decrypt botpasses-<stamp>.dump.enc vault.dump
 ```
 
-Wrong key fails closed (GCM auth).
+Wrong key fails closed (GCM auth). The envelope is `BPBK`, one version byte (currently 1), then the AES-256-GCM nonce, tag, and ciphertext; the header is authenticated with the body. `decrypt` refuses a file without the magic (`bad magic`), a version it does not know (`unsupported backup envelope version`), or any edited byte, so a truncated download or an object from another tool never yields a partial dump.
 
 ## Restore into a scratch database
 

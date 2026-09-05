@@ -60,7 +60,21 @@ export const PROVIDERS: readonly Provider[] = [
     tokenAuth: "post_body",
     grantTypes: ["authorization_code", "refresh_token"],
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    // Google refuses an authorize request without `scope`. `openid email` names the account; the
+    // rest are the narrowest scopes for each API host above (Gmail read, Sheets read, Drive
+    // limited to files the app opened or created).
     scopesParam: "scope",
+    scopesRequired: true,
+    defaultScopes: [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      "https://www.googleapis.com/auth/drive.file",
+    ],
+    // A refresh token comes only with offline access, and after the first consent only when the
+    // user is asked again; a re-connect must be able to rotate the stored refresh token.
+    authorizeParams: { access_type: "offline", prompt: "consent" },
     pkce: true,
     redactKeys: OAUTH_TOKEN_KEYS,
     docsUrl: "https://developers.google.com/identity/protocols/oauth2/web-server",
@@ -74,7 +88,12 @@ export const PROVIDERS: readonly Provider[] = [
     tokenAuth: "basic",
     grantTypes: ["authorization_code", "refresh_token"],
     authorizeUrl: "https://slack.com/oauth/v2/authorize",
-    scopesParam: "scope",
+    // A user token (xoxp) is requested with `user_scope`; `scope` asks for a bot token instead.
+    // Slack joins scopes with commas and refuses an authorize request that names none.
+    scopesParam: "user_scope",
+    scopesDelimiter: ",",
+    scopesRequired: true,
+    defaultScopes: ["users:read", "channels:read", "chat:write"],
     pkce: false,
     redactKeys: OAUTH_TOKEN_KEYS,
     docsUrl: "https://api.slack.com/authentication/oauth-v2",

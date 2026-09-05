@@ -8,6 +8,7 @@
  * link, and approval email in `kernel-grant-approval.ts`. Both are re-exported from here.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { nowIso } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   publicGrantScope,
@@ -113,8 +114,13 @@ export type InboxGrantCard = {
   allowed_hosts: string[];
 };
 
-function nowIso(d: Date): string {
-  return d.toISOString();
+/** Inbox and email copy: the agent's reason is cut to what a card can show (same cap as needs). */
+const TASK_DESCRIPTION_MAX = 500;
+
+function truncateTask(raw: string | undefined): string | undefined {
+  const t = raw?.trim();
+  if (!t) return undefined;
+  return t.length > TASK_DESCRIPTION_MAX ? t.slice(0, TASK_DESCRIPTION_MAX) : t;
 }
 
 export type RequestGrantInput = {
@@ -139,7 +145,8 @@ export type RequestGrantResult = { grant: HostedGrantRecord; code?: string; noti
  * `operatorEmail` (must be a member) or to every member; it is sent for a new grant or when the
  * previous magic link expired, never on every retry.
  */
-export async function requestGrant(host: GrantHost, input: RequestGrantInput): Promise<RequestGrantResult> {
+export async function requestGrant(host: GrantHost, raw: RequestGrantInput): Promise<RequestGrantResult> {
+  const input: RequestGrantInput = { ...raw, taskDescription: truncateTask(raw.taskDescription) };
   if (!(await host.limiter.allow(input.orgId, host.now().getTime(), "grant"))) {
     throw new HttpError(429, "request_grant rate limit");
   }
@@ -188,7 +195,7 @@ export async function requestGrant(host: GrantHost, input: RequestGrantInput): P
     return { grant };
   }
   const code = await rotateCodeChallenge(host, grant.id, now);
-  const magic = await ensureMagicChallenge(host, grant.id, now);
+  const magic = await ensureMagicChallenge(host, grant.orgId, grant.id, now);
   let notifyFailed = false;
   if (!open || magic.fresh) {
     notifyFailed = !(await notify(host, input.orgId, recipients, client, item, magic.token));
@@ -234,8 +241,7 @@ async function openGrantFor(
   clientId: string,
   itemId: string,
 ): Promise<HostedGrantRecord | undefined> {
-  const grants = await settleExpired(host, await host.store.listGrants(orgId));
-  const pair = grants.filter((g) => g.clientId === clientId && g.itemId === itemId);
+  const pair = await settleExpired(host, await host.store.listGrantsForPair(orgId, clientId, itemId));
   return pair.find((g) => g.status === "active") ?? pair.find((g) => g.status === "pending");
 }
 
@@ -286,13 +292,18 @@ export async function approveGrant(host: GrantHost, input: ApproveGrantInput): P
   if (!item) throw new HttpError(404, "Unknown item");
   const now = host.now();
   const at = nowIso(now);
+  const client = await host.store.getClient(grant.clientId);
+  const trusted = client?.kind === "trusted";
   const scope = resolveApprovalScope({
     scope: input.scope,
-    requested: grant.requestedScope,
+    // A trusted client's plain approve does not inherit the requested call: nothing could enforce
+    // it on resolve, so the approval is unrestricted rather than refused (an explicit scope still is).
+    requested: trusted ? null : grant.requestedScope,
     item,
     policy: input.policy,
     now,
   });
+  if (trusted) refuseUnenforceableScope(scope);
   const next: HostedGrantRecord = {
     ...grant,
     ...scope,
@@ -302,6 +313,7 @@ export async function approveGrant(host: GrantHost, input: ApproveGrantInput): P
   };
   await host.store.updateGrant(next);
   if (input.policy === "item_standing" || input.policy === "folder_standing") {
+    await dropStalePolicy(host, input.orgId, grant, input.policy);
     await host.store.insertPolicy({
       id: `pol_${randomUUID()}`,
       orgId: input.orgId,
@@ -320,8 +332,48 @@ export async function approveGrant(host: GrantHost, input: ApproveGrantInput): P
 }
 
 /**
+ * A trusted (`avt_`) client resolves the plaintext through `/runtime/resolve`, where there is no
+ * call to check `methods`, `path_prefixes`, or `hosts` against. Writing those limits would show
+ * the operator a restriction nothing enforces, so an approval that names them is refused;
+ * `max_calls` and `ttl_seconds` are counted on resolve and stay allowed.
+ */
+function refuseUnenforceableScope(scope: { methods: string[] | null; pathPrefixes: string[] | null; hosts: string[] | null }): void {
+  if (scope.methods === null && scope.pathPrefixes === null && scope.hosts === null) return;
+  throw new HttpError(
+    400,
+    "Method, path, and host limits cannot be enforced for a trusted runtime client, which resolves the value directly. Approve with scope {} or with max_calls and ttl_seconds only.",
+    { status: "scope_unenforceable", client_kind: "trusted" },
+  );
+}
+
+/**
+ * A standing policy row for this (client, item) or (client, folder, environment) may already
+ * exist: expired or spent but never read since, or left by an approval that raced. The unique
+ * indexes would reject the insert, so the stale row is removed first; the new approval's scope
+ * and expiry replace it.
+ */
+async function dropStalePolicy(
+  host: GrantHost,
+  orgId: string,
+  grant: HostedGrantRecord,
+  policy: "item_standing" | "folder_standing",
+): Promise<void> {
+  const stale =
+    policy === "item_standing"
+      ? grant.itemId
+        ? await host.store.findItemPolicy(orgId, grant.clientId, grant.itemId)
+        : undefined
+      : await host.store.findFolderPolicy(orgId, grant.clientId, grant.folderId, grant.environmentId);
+  if (stale) await host.store.deletePolicy(stale.id);
+}
+
+const APPROVE_CODE_LIMIT_MESSAGE = "approve-by-code rate limit: 20 attempts per org per 15 minutes";
+
+/**
  * Finds the pending challenge whose code matches. A wrong code charges one attempt against the
  * most recently requested pending grant only, so typos cannot lock out every open approval.
+ * The org may try 20 codes per 15 minutes across every session (429 after that); attempts
+ * carry over when the agent re-requests and the code rotates.
  */
 export async function approveByCode(
   host: GrantHost,
@@ -330,6 +382,9 @@ export async function approveByCode(
   role: MemberRole,
   code: string,
 ): Promise<HostedGrantRecord> {
+  if (!(await host.limiter.allow(orgId, host.now().getTime(), "approve_code"))) {
+    throw new HttpError(429, APPROVE_CODE_LIMIT_MESSAGE);
+  }
   const pending = await host.store.listPendingGrants(orgId);
   const now = host.now();
   const candidates: { grant: HostedGrantRecord; ch: ApprovalChallengeRecord }[] = [];
@@ -374,12 +429,18 @@ export async function approveMagic(
   return approveGrant(host, { orgId, grantId: grant.id, policy: "prompt", role, actor });
 }
 
-/** Drops every policy that would re-grant this grant's (client, item) or (client, folder) pair. */
+/**
+ * Drops the policies that would re-grant this grant's (client, item) pair: the item policy for
+ * the pair always, and the (client, folder, environment) policy only when this grant was made
+ * by it (`policy === "folder_standing"`). Revoking a prompt or item grant leaves a folder-wide
+ * approval for other items in place; revoking a grant the folder policy activated ends that
+ * approval for every item it covers, which is the blast radius the operator chose at approve.
+ */
 async function dropPoliciesFor(host: GrantHost, grant: HostedGrantRecord): Promise<void> {
   const policies = await host.store.listPoliciesForClient(grant.orgId, grant.clientId);
   for (const p of policies) {
     if (grant.itemId && p.itemId === grant.itemId) await host.store.deletePolicy(p.id);
-    if (p.kind === "folder_standing" && p.environmentId === grant.environmentId) {
+    if (grant.policy === "folder_standing" && p.kind === "folder_standing" && p.environmentId === grant.environmentId) {
       if (p.folderId === grant.folderId) await host.store.deletePolicy(p.id);
     }
   }
@@ -396,13 +457,8 @@ export async function revokeGrant(
   if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
   const next = { ...grant, status: "revoked" as const };
   await host.store.updateGrant(next);
-  const siblings = (await host.store.listGrants(orgId)).filter(
-    (g) =>
-      g.id !== grant.id &&
-      g.clientId === grant.clientId &&
-      g.itemId === grant.itemId &&
-      (g.status === "active" || g.status === "pending"),
-  );
+  const pair = grant.itemId ? await host.store.listGrantsForPair(orgId, grant.clientId, grant.itemId) : [];
+  const siblings = pair.filter((g) => g.id !== grant.id && (g.status === "active" || g.status === "pending"));
   for (const g of siblings) {
     await host.store.updateGrant({ ...g, status: "revoked" });
   }
@@ -459,9 +515,9 @@ export async function consumeActiveGrant(
   itemId: string,
   call?: ConnectorCall,
 ): Promise<HostedGrantRecord> {
-  const grants = await settleExpired(host, await host.store.listGrants(orgId));
+  const pair = await settleExpired(host, await host.store.listGrantsForPair(orgId, clientId, itemId));
   const at = host.now();
-  const match = grants.find((g) => g.clientId === clientId && g.itemId === itemId && g.status === "active");
+  const match = pair.find((g) => g.status === "active");
   if (!match) throw new InjectDeniedError();
   if (call) {
     const reason = scopeDenialReason(match, call);
@@ -497,6 +553,12 @@ export async function consumeActiveGrant(
   return { ...match, callsUsed: used, status: "consumed", consumedAt: nowIso(at) };
 }
 
+/** A standing policy that can still activate a grant: neither expired nor spent (`max_calls`). */
+export function policyIsLive(policy: PolicyRecord, now: Date): boolean {
+  const spent = policy.maxCalls !== null && policy.callsUsed >= policy.maxCalls;
+  return !isPast(policy.expiresAt, now) && !spent;
+}
+
 /**
  * The standing policy that would activate a grant for this item, if one is still live. Expired
  * or spent policies are deleted on read so they never re-grant.
@@ -510,8 +572,7 @@ export async function standingFor(
   const now = host.now();
   const live = async (p: PolicyRecord | undefined): Promise<PolicyRecord | undefined> => {
     if (!p) return undefined;
-    const spent = p.maxCalls !== null && p.callsUsed >= p.maxCalls;
-    if (!isPast(p.expiresAt, now) && !spent) return p;
+    if (policyIsLive(p, now)) return p;
     await host.store.deletePolicy(p.id);
     return undefined;
   };

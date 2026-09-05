@@ -5,10 +5,12 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { requireOperator, type OperatorPrincipal, type Principal } from "./auth.ts";
+import { CSRF_COOKIE_JS } from "./auth-js.ts";
 import { authDocument, escapeAttr, escapeHtml } from "./auth-shell.ts";
 import { HttpError, isHttpError } from "./errors.ts";
 import { json, readJson, sendHtml } from "./http-util.ts";
 import { needsTotpVerify } from "./identity.ts";
+import { requestClientIp } from "./identity-limiter.ts";
 import { asMemberRole, type InvitePreview } from "./kernel-members.ts";
 import type { HostedKernel } from "./kernel.ts";
 
@@ -55,6 +57,7 @@ export async function handleMemberRoutes(
       actorRole: op.role,
       email: String(body.email ?? ""),
       role: asMemberRole(body.role ?? "operator"),
+      ip: requestClientIp(req),
     });
     json(res, 200, out);
     return true;
@@ -181,10 +184,7 @@ const ACCEPT_JS = `(() => {
   const form = document.getElementById("accept-form");
   if (!form) return;
   const token = new URLSearchParams(location.search).get("token") || "";
-  const csrf = () => {
-    const m = document.cookie.match(/(?:^|; )(?:__Host-bp_csrf|bp_csrf)=([^;]+)/);
-    return m && m[1] ? decodeURIComponent(m[1]) : "";
-  };
+  ${CSRF_COOKIE_JS}
   const flash = document.getElementById("flash");
   const say = (msg, ok) => { if (flash) { flash.textContent = msg; flash.className = ok ? "flash is-ok" : "flash is-err"; } };
   form.addEventListener("submit", async (e) => {

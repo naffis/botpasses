@@ -4,12 +4,13 @@ import { test } from "node:test";
 import { STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { hostedBootError, HOSTED_CONFIG_EXIT } from "../src/hosted/boot.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer, KEEPALIVE_MS } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
 import { assertAllowedHostname, isBlockedIp } from "../src/hosted/ssrf.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
-import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
+import { CANARY, TEST_SESSION_SECRET, cleanup, hostedBootEnv, tempHome, testOidcPrivateJwk } from "./helpers.ts";
 
 const HMAC = Buffer.from("aa".repeat(32), "hex");
 
@@ -67,6 +68,7 @@ async function setup() {
   let lastAuth = "";
   let lastUrl = "";
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,
@@ -661,6 +663,18 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     }) ?? "",
     /VAULT_BOOTSTRAP_TOKEN/,
   );
+  // I2: a well-formed token on a plane is refused unless the deployer opts in for the break-glass window.
+  const planeBootstrap = {
+    VAULT_MODE: "hosted",
+    DATABASE_URL: "postgres://x",
+    VAULT_KEK: "aa".repeat(32),
+    VAULT_BOOTSTRAP_TOKEN: "b".repeat(40),
+    VAULT_PUBLIC_URL: STAGING_ORIGIN,
+    VAULT_DEPLOY_PLANE: "staging",
+  };
+  assert.match(hostedBootError(planeBootstrap) ?? "", /VAULT_BOOTSTRAP_ALLOW_PLANE=1/);
+  assert.doesNotMatch(hostedBootError({ ...planeBootstrap, VAULT_BOOTSTRAP_ALLOW_PLANE: "1" }) ?? "", /BOOTSTRAP/);
+  assert.doesNotMatch(hostedBootError({ ...planeBootstrap, VAULT_DEPLOY_PLANE: undefined }) ?? "", /BOOTSTRAP/);
   assert.match(
     hostedBootError({
       VAULT_MODE: "hosted",
@@ -683,21 +697,9 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
   );
 });
 
-function bootEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    VAULT_MODE: "hosted",
-    DATABASE_URL: "postgres://x",
-    VAULT_PUBLIC_URL: STAGING_ORIGIN,
-    VAULT_DEPLOY_PLANE: "staging",
-    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
-    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
-    ...extra,
-  };
-}
-
 test("AC-02 REQUIRE_KMS refuses raw-only on a production plane", () => {
   const err = hostedBootError(
-    bootEnv({
+    hostedBootEnv({
       VAULT_DEPLOY_PLANE: "production",
       VAULT_PUBLIC_URL: "https://botpasses.com",
       VAULT_KEK: "aa".repeat(32),
@@ -710,7 +712,7 @@ test("AC-02 REQUIRE_KMS refuses raw-only on a production plane", () => {
 test("AC-02b raw-only on a plane boots when REQUIRE_KMS is unset", () => {
   assert.equal(
     hostedBootError(
-      bootEnv({
+      hostedBootEnv({
         VAULT_DEPLOY_PLANE: "production",
         VAULT_PUBLIC_URL: "https://botpasses.com",
         VAULT_KEK: "aa".repeat(32),
@@ -723,7 +725,7 @@ test("AC-02b raw-only on a plane boots when REQUIRE_KMS is unset", () => {
 test("AC-02c both wrapped and raw prefer wrapped and do not fail boot", () => {
   assert.equal(
     hostedBootError(
-      bootEnv({
+      hostedBootEnv({
         VAULT_KEK: "aa".repeat(32),
         VAULT_KEK_WRAPPED: "d3JhcA==",
         VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
@@ -737,7 +739,7 @@ test("AC-02c both wrapped and raw prefer wrapped and do not fail boot", () => {
 test("AC-12 test auth mode is refused on a deploy plane", () => {
   assert.match(
     hostedBootError(
-      bootEnv({
+      hostedBootEnv({
         VAULT_KEK: "aa".repeat(32),
         VAULT_AUTH_MODE: "test",
         VAULT_DEPLOY_PLANE: "production",
@@ -916,50 +918,59 @@ test("missing Resend still returns a code and audits notify_failed", async () =>
   cleanup(home);
 });
 
-test("prompt grant reactivates when origin fetch fails", async () => {
+test("a prompt grant comes back only when the send never left the process (DNS, connect, TLS); any other failure or origin answer spends it", async () => {
   const ctx = await setup();
-  try {
-    const asked = await ctx.kernel.requestGrant({
-      orgId: ctx.orgId,
-      clientId: ctx.model.id,
-      itemName: "STRIPE_KEY",
-      environment: "staging",
-    });
-    await ctx.kernel.approveGrant({
-      orgId: ctx.orgId,
-      grantId: asked.grant.id,
-      policy: "prompt",
-      role: "owner",
-      actor: "user_owner",
-    });
-    const http = createHostedServer({
-      kernel: ctx.kernel,
-      host: "127.0.0.1",
-      port: 0,
-      fetchImpl: async () => {
-        throw new Error("timeout");
-      },
-      resolveAddresses: async () => ["8.8.8.8"],
-    });
+  const approvePrompt = async () => {
+    const asked = await ctx.kernel.requestGrant({ orgId: ctx.orgId, clientId: ctx.model.id, itemName: "STRIPE_KEY", environment: "staging" });
+    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: asked.grant.id, policy: "prompt", role: "owner", actor: "user_owner" });
+    return asked.grant.id;
+  };
+  const callWith = async (fetchImpl: typeof fetch) => {
+    const http = createHostedServer({ authResolver: testAuthResolver, kernel: ctx.kernel, host: "127.0.0.1", port: 0, fetchImpl, resolveAddresses: async () => ["8.8.8.8"] });
     const addr = await http.listen();
-    const res = await fetch(`http://${addr.host}:${addr.port}/mcp`, {
-      method: "POST",
-      headers: ctx.modelH,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: "http_request",
-          arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" },
-        },
-      }),
+    try {
+      const res = await fetch(`http://${addr.host}:${addr.port}/mcp`, {
+        method: "POST",
+        headers: ctx.modelH,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "http_request", arguments: { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" } },
+        }),
+      });
+      const body = (await res.json()) as { result?: { content?: { text?: string }[] } };
+      assert.ok(!JSON.stringify(body).includes(CANARY));
+      return JSON.parse(body.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+    } finally {
+      await http.close();
+    }
+  };
+  const statusOf = async (id: string) => (await ctx.kernel.store.getGrant(id))?.status;
+  try {
+    for (const code of ["ENOTFOUND", "ECONNREFUSED", "DEPTH_ZERO_SELF_SIGNED_CERT"]) {
+      const id = await approvePrompt();
+      const out = await callWith(async () => {
+        throw Object.assign(new Error(`fetch failed (${code})`), { code });
+      });
+      assert.equal(await statusOf(id), "active", `${code}: the credential never left, so the approval is handed back`);
+      assert.match(String(out.error), /Origin request failed/);
+      await ctx.kernel.revokeGrant(ctx.orgId, "user_owner", id);
+    }
+    const unknown = await approvePrompt();
+    await callWith(async () => {
+      throw new Error("socket hang up");
     });
-    const body = await res.json();
-    assert.ok(!JSON.stringify(body).includes(CANARY));
-    const grant = await ctx.kernel.store.getGrant(asked.grant.id);
-    assert.equal(grant?.status, "active");
-    await http.close();
+    assert.equal(await statusOf(unknown), "consumed", "an unclassified transport failure counts as sent");
+    const answered = await approvePrompt();
+    const out = await callWith(async () => new Response("boom", { status: 503 }));
+    assert.equal(out.origin_status, 503);
+    assert.equal(await statusOf(answered), "consumed", "any origin status spends a one-call approval");
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
+    assert.equal(audit.filter((a) => a.action === "inject_failed").length, 3, "only origins unreachable before the handshake are audited inject_failed");
+    // R3-6: the audit row follows the grant. A failure that counts as sent (the approval was spent)
+    // is `inject`, not `inject_failed`: the unclassified transport failure plus the 503.
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "STRIPE_KEY").length, 2);
   } finally {
     await ctx.http.close();
     await ctx.store.close();
@@ -1255,6 +1266,7 @@ test("MCP CORS reflects foreign Origin; operator /api still 403 (AC-10)", async 
     assert.equal(note.status, 202);
     assert.equal(note.headers.get("access-control-allow-origin"), "https://grok.x.ai");
     const prod = createHostedServer({
+    authResolver: testAuthResolver,
       kernel: ctx.kernel,
       host: "127.0.0.1",
       port: 0,
@@ -1422,16 +1434,32 @@ test("client rotate invalidates the old secret (AC-15)", async () => {
   }
 });
 
-test("AgentPass stays dark when VAULT_AGENTPASS is unset", async () => {
+test("O10 the AgentPass surface is gone: /agentpass/* is 404 even with VAULT_AGENTPASS=1 and the inbox has no agentpass list", async () => {
   const prev = process.env.VAULT_AGENTPASS;
-  delete process.env.VAULT_AGENTPASS;
+  process.env.VAULT_AGENTPASS = "1";
   const ctx = await setup();
   try {
-    const res = await fetch(`${ctx.base}/agentpass/configuration`);
-    assert.notEqual(res.status, 200);
+    for (const path of ["/agentpass/configuration", "/agentpass/jwks"]) {
+      const res = await fetch(`${ctx.base}${path}`);
+      assert.equal(res.status, 404, path);
+    }
+    const created = await fetch(`${ctx.base}/agentpass/requests`, {
+      method: "POST",
+      headers: ctx.op,
+      body: JSON.stringify({ holder_cnf: "cnf-1", scope: ["read"] }),
+    });
+    assert.equal(created.status, 404);
+    const validate = await fetch(`${ctx.base}/agentpass/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "ap_x", holder_proof: { cnf: "cnf-1" } }),
+    });
+    assert.equal(validate.status, 404);
     const inbox = await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op });
-    const body = (await inbox.json()) as { agentpass?: unknown[] };
-    assert.deepEqual(body.agentpass, []);
+    assert.equal(inbox.status, 200);
+    const body = (await inbox.json()) as Record<string, unknown>;
+    assert.ok(!("agentpass" in body), "inbox no longer carries an agentpass list");
+    assert.ok(Array.isArray(body.grants) && Array.isArray(body.needs));
   } finally {
     if (prev === undefined) delete process.env.VAULT_AGENTPASS;
     else process.env.VAULT_AGENTPASS = prev;

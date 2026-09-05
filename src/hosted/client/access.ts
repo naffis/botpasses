@@ -217,8 +217,19 @@ export function setAgentsTab(tab: AgentsTab): void {
   }
 }
 
+type ActivityFilter = { agent: string; credential: string };
+
+/** Pure: a new filter starts at the first page; a refresh with the same filter keeps the operator's place. */
+export function pageAfterFilter(current: ActivityFilter, next: ActivityFilter, page: number): number {
+  return current.agent === next.agent && current.credential === next.credential ? page : 0;
+}
+
 export async function loadAccess(route?: Route): Promise<void> {
-  if (route) state.filter = { agent: route.agent, credential: route.credential };
+  if (route) {
+    const next = { agent: route.agent, credential: route.credential };
+    state.page = pageAfterFilter(state.filter, next, state.page);
+    state.filter = next;
+  }
   setHidden("access-error", true);
   try {
     const snap = await api("/api/access");
@@ -230,7 +241,6 @@ export async function loadAccess(route?: Route): Promise<void> {
     state.clients = arr(snap.body.clients, isClient);
     state.grants = arr(snap.body.grants, isAccessGrant);
     state.sessions = arr(snap.body.sessions, isSession);
-    state.page = 0;
     try {
       const audit = await api(`/api/audit${qs({ client_id: state.filter.agent, item_name: state.filter.credential })}`);
       state.audit = audit.ok ? arr(audit.body.audit, isAudit) : [];

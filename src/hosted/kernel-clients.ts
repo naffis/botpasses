@@ -4,8 +4,8 @@
  * sessions, and the Access snapshot. Functions take a `ClientHost` with the kernel's store,
  * clock, and helpers, like `kernel-grants.ts`. `HostedKernel` delegates here.
  */
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { last4 } from "../ids.ts";
+import { randomBytes, randomUUID } from "node:crypto";
+import { last4, nowIso, sha256Hex } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import {
   emptyClientFields,
@@ -19,6 +19,7 @@ import {
 import type { VaultStore } from "../store/types.ts";
 import { clientUsage, grantUsage, sessionUsage } from "./access-usage.ts";
 import { HttpError } from "./errors.ts";
+import { logAuthEvent } from "./observe.ts";
 import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
 import type { PlanLimitKind } from "./plan-limits.ts";
 
@@ -56,17 +57,14 @@ export type EnsureModelClientInput = {
   name: string;
   environment: VaultEnvName;
   clerkOauthUserId: string;
+  /**
+   * True only when an operator has just consented again (authorization code or device code
+   * issuance). A refresh, or anything else, must never bring a revoked client back.
+   */
+  reactivateRevoked?: boolean;
 };
 
 export type SessionActor = { userId: string; role: MemberRole; sessionHash: string };
-
-function nowIso(d: Date): string {
-  return d.toISOString();
-}
-
-export function hashSecret(raw: string): string {
-  return createHash("sha256").update(raw).digest("hex");
-}
 
 export async function recordAccessEvent(host: ClientHost, input: Omit<AccessEventRecord, "id" | "revokedAt">): Promise<void> {
   await host.store.insertAccessEvent({
@@ -84,7 +82,7 @@ async function recordMachineIssue(host: ClientHost, row: ClientRecord, plaintext
     clientId: row.id,
     actorUserId: null,
     kind: "machine",
-    jtiHash: hashSecret(plaintext),
+    jtiHash: sha256Hex(plaintext),
     issuedAt: at,
     expiresAt: null,
   });
@@ -98,9 +96,10 @@ export async function rotateClient(
   clientId: string,
 ): Promise<{ token: string; client_id: string }> {
   const client = await host.clientInOrg(orgId, clientId);
+  if (client.revokedAt) throw new HttpError(409, "Client is revoked");
   const prefix = client.kind === "trusted" ? "avt_" : "avm_";
   const plaintext = `${prefix}${randomBytes(24).toString("hex")}`;
-  await host.store.updateClientHashedSecret(client.id, hashSecret(plaintext), last4(plaintext));
+  await host.store.updateClientHashedSecret(client.id, sha256Hex(plaintext), last4(plaintext));
   await host.audit(orgId, "client_rotate", actor, null, client.id);
   return { token: plaintext, client_id: client.id };
 }
@@ -117,7 +116,7 @@ export async function createTrustedClient(
     orgId: input.orgId,
     kind: "trusted",
     name: input.name,
-    hashedSecret: hashSecret(plaintext),
+    hashedSecret: sha256Hex(plaintext),
     clerkOauthUserId: null,
     environment: input.environment,
     ...emptyClientFields(),
@@ -140,7 +139,7 @@ export async function createModelClient(
     orgId: input.orgId,
     kind: "model",
     name: input.name,
-    hashedSecret: plaintext ? hashSecret(plaintext) : null,
+    hashedSecret: plaintext ? sha256Hex(plaintext) : null,
     clerkOauthUserId: input.clerkOauthUserId ?? null,
     environment: input.environment,
     ...emptyClientFields(),
@@ -152,7 +151,11 @@ export async function createModelClient(
   return { client: row, plaintext };
 }
 
-/** Reuses the live model client for this OAuth id. Revoked clients are never resurrected. */
+/**
+ * Reuses the live model client for this OAuth id. A revoked row is reactivated only for a
+ * fresh consent (`reactivateRevoked`); any other caller gets 409 so a refresh token held by
+ * another member of the org cannot undo an owner's revoke.
+ */
 export async function ensureModelClient(host: ClientHost, input: EnsureModelClientInput): Promise<ClientRecord> {
   const clients = await host.store.listClients(input.orgId);
   const matches = clients.filter(
@@ -166,6 +169,7 @@ export async function ensureModelClient(host: ClientHost, input: EnsureModelClie
   // rather than duplicated. Its refresh tokens were destroyed at revoke; new ones are issued now.
   const revoked = matches[0];
   if (revoked) {
+    if (input.reactivateRevoked !== true) throw new HttpError(409, "Client is revoked");
     await host.store.setClientRevoked(revoked.id, null);
     await host.audit(input.orgId, "client_reactivated", "oauth", null, revoked.id);
     const fresh = await host.store.getClient(revoked.id);
@@ -194,7 +198,7 @@ export async function setClientEnvironment(
 }
 
 export async function lookupTrustedToken(host: ClientHost, token: string): Promise<ClientRecord | undefined> {
-  return host.store.findClientByHashedSecret(hashSecret(token));
+  return host.store.findClientByHashedSecret(sha256Hex(token));
 }
 
 export async function revokeClient(host: ClientHost, orgId: string, actor: string, clientId: string): Promise<void> {
@@ -209,7 +213,13 @@ export async function revokeClient(host: ClientHost, orgId: string, actor: strin
       await host.store.updateGrant({ ...g, status: "revoked" });
     }
   }
-  await destroyOidcPayloadsForClient(host.store, client);
+  // Every consent this org's members gave for the client id dies with it, not only the
+  // first consenter's: a surviving member refresh token would otherwise re-issue access.
+  const members = await host.store.listMembers(orgId);
+  await destroyOidcPayloadsForClient(host.store, client, {
+    orgId,
+    memberUserIds: members.map((m) => m.userId),
+  });
   await host.audit(orgId, "client_revoked", actor, null, clientId);
 }
 
@@ -230,6 +240,12 @@ export async function revokeSession(host: ClientHost, orgId: string, actor: Sess
     throw new HttpError(403, "Only owners may revoke another member's session");
   }
   await host.store.deleteSession(match.idHash);
+  logAuthEvent("session_revoked", {
+    org_id: orgId,
+    actor_user_id: actor.userId,
+    user_id: match.userId,
+    session_id: match.idHash.slice(0, SESSION_ID_MIN_CHARS),
+  });
 }
 
 export async function listAccess(host: ClientHost, orgId: string, currentSessionHash?: string) {

@@ -6,14 +6,15 @@ import { PRODUCT_NAME } from "./brand.ts";
  * `createElement` and `textContent`, so a hostile credential name or agent id renders as text.
  * Still a small single page by design; the hosted console is the full product.
  */
-export function operatorHtml(): string {
+export function operatorHtml(nonce = ""): string {
+  const nonceAttr = nonce ? ` nonce="${nonce}"` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${PRODUCT_NAME} local console</title>
-  <style>
+  <style${nonceAttr}>
     :root { color-scheme: dark; --bg:#111; --fg:#eee; --muted:#9aa; --line:#333; --ok:#8fd19e; --warn:#e6c07b; }
     html, body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ui-sans-serif, system-ui, sans-serif; }
     main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
@@ -48,9 +49,9 @@ export function operatorHtml(): string {
     </div>
     <p id="flash" role="status"></p>
 
-    <h2>Loopback token</h2>
+    <h2>Operator token</h2>
     <form id="token-form" novalidate>
-      <label for="loopback-token">Bearer printed by vault serve</label>
+      <label for="loopback-token">Operator bearer printed by vault serve (the model bearer does not open this console)</label>
       <input id="loopback-token" name="token" type="password" autocomplete="off" />
       <p><button type="submit">Save token</button></p>
     </form>
@@ -77,6 +78,10 @@ export function operatorHtml(): string {
             <option value="basic">HTTP Basic</option>
             <option value="header:X-API-Key">Header X-API-Key</option>
           </select>
+        </div>
+        <div>
+          <label for="username">Username (HTTP Basic user; optional)</label>
+          <input id="username" name="username" placeholder="svc" autocomplete="off" />
         </div>
       </div>
       <p><button class="primary" type="submit">Store encrypted</button></p>
@@ -128,7 +133,7 @@ export function operatorHtml(): string {
       <tbody id="audit"></tbody>
     </table>
   </main>
-  <script>
+  <script${nonceAttr}>
     const flash = (msg, ok) => {
       const el = document.getElementById("flash");
       el.textContent = msg;
@@ -200,13 +205,15 @@ export function operatorHtml(): string {
       const value = document.getElementById("value").value;
       const hosts = document.getElementById("hosts").value.split(",").map((h) => h.trim()).filter(Boolean);
       const inject = document.getElementById("inject").value;
+      const username = document.getElementById("username").value.trim();
       if (!name || !value) { flash("Name and value are required", false); return; }
+      if (inject === "basic" && !username) { flash("HTTP Basic needs a username", false); return; }
       document.getElementById("value").value = "";
       try {
         const res = await j("/api/items", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, value, allowed_hosts: hosts, inject }),
+          body: JSON.stringify({ name, value, allowed_hosts: hosts, inject, ...(username ? { username } : {}) }),
         });
         flash("Stored " + res.item.name + " ending " + res.item.last4 + " (value not shown again)", true);
         await refresh();
@@ -248,7 +255,7 @@ export function operatorHtml(): string {
     document.getElementById("token-form").addEventListener("submit", (e) => {
       e.preventDefault();
       const next = document.getElementById("loopback-token").value.trim();
-      if (!next) { flash("Paste the loopback token printed by vault serve", false); return; }
+      if (!next) { flash("Paste the operator bearer printed by vault serve", false); return; }
       sessionStorage.setItem(TOKEN_KEY, next);
       document.getElementById("loopback-token").value = "";
       flash("Token saved", true);
@@ -257,7 +264,7 @@ export function operatorHtml(): string {
     if (sessionStorage.getItem(TOKEN_KEY)) {
       refresh().catch((err) => flash(err.message, false));
     } else {
-      flash("Paste the loopback token printed by vault serve", false);
+      flash("Paste the operator bearer printed by vault serve", false);
     }
   </script>
 </body>

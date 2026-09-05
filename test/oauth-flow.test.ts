@@ -1,10 +1,28 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { decodeJwt } from "jose";
+import { decodeJwt, decodeProtectedHeader, SignJWT, importJWK } from "jose";
+import { oidcKid } from "../src/hosted/access-jwt.ts";
 import { endOidcSession } from "../src/hosted/oauth-as.ts";
+import { OAUTH_RESPONSE_MODES } from "../src/hosted/oauth-metadata.ts";
 import { CANARY } from "./helpers.ts";
-import { AUDIENCE, ISSUER, Jar, itemNames, pkce, startOauthServer } from "./oauth-helpers.ts";
+import { AUDIENCE, ISSUER, Jar, eventually, itemNames, pkce, startOauthServer, testOidcPreviousJwk, type OauthServer } from "./oauth-helpers.ts";
+
+/** Registers a client and runs the full code flow for a signed-in operator. */
+async function connect(srv: OauthServer, who: { jar: Jar }, clientId: string, redirect = REDIRECT) {
+  const { verifier, challenge } = pkce();
+  const leg = await srv.authorizeWithConsent({ jar: who.jar, clientId, redirectUri: redirect, challenge });
+  const issued = await srv.token({
+    grant_type: "authorization_code",
+    code: leg.code,
+    redirect_uri: redirect,
+    client_id: clientId,
+    code_verifier: verifier,
+    resource: AUDIENCE,
+  });
+  assert.equal(issued.status, 200, JSON.stringify(issued.body));
+  return { access: String(issued.body.access_token), refresh: String(issued.body.refresh_token) };
+}
 
 const REDIRECT = "http://127.0.0.1:9999/cb";
 
@@ -367,6 +385,217 @@ test("S12 endOidcSession destroys the OP session so the next authorize needs a f
     const details = await srv.store.listOidcPayloads("Interaction");
     const latest = details.map((d) => JSON.parse(d.payload) as { prompt?: { name?: string }; session?: unknown }).at(-1);
     assert.equal(latest?.prompt?.name, "login");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("O1 an owner's revoke stays revoked: another member's refresh for the same client id is refused and never reactivates the row", async () => {
+  const srv = await startOauthServer({ secure: true, deployPlane: "staging" });
+  try {
+    const owner = await srv.signInReady("owner@example.com");
+    const member = await srv.signInReady("member@example.com");
+    await srv.joinOrg(member, owner.orgId);
+    await srv.kernel.createItem({
+      orgId: owner.orgId,
+      actor: owner.userId,
+      environment: "staging",
+      kind: "secret",
+      name: "TEAM_KEY",
+      value: CANARY,
+      allowedHosts: ["api.example.com"],
+      inject: "bearer",
+    });
+    const client = await srv.registerClient({ client_name: "Cursor", redirect_uris: [REDIRECT] });
+    const ownerTokens = await connect(srv, owner, client.client_id);
+    const memberTokens = await connect(srv, member, client.client_id);
+    // O2: both consents were bound to the org the session acted in, and the claim says so.
+    assert.equal(decodeJwt(memberTokens.access).org_id, owner.orgId);
+    assert.equal(decodeJwt(ownerTokens.access).org_id, owner.orgId);
+    assert.deepEqual(itemNames(await (await srv.mcp(memberTokens.access, "tools/call", { name: "list_items", arguments: {} })).json()), ["TEAM_KEY"]);
+    const rows = (await srv.store.listClients(owner.orgId)).filter((c) => c.oauthClientId === client.client_id);
+    assert.equal(rows.length, 1, "one vault client per (org, client id) however many members consent");
+    const vaultClient = rows[0];
+    assert.ok(vaultClient);
+
+    await srv.kernel.revokeClient(owner.orgId, owner.userId, vaultClient.id);
+
+    for (const [label, tokens] of [
+      ["owner", ownerTokens],
+      ["member", memberTokens],
+    ] as const) {
+      assert.equal((await srv.mcp(tokens.access, "tools/list")).status, 401, `${label} access token`);
+      const refreshed = await srv.token({ grant_type: "refresh_token", refresh_token: tokens.refresh, client_id: client.client_id });
+      assert.equal(refreshed.status, 400, `${label} refresh: ${JSON.stringify(refreshed.body)}`);
+      assert.equal(refreshed.body.error, "invalid_grant");
+    }
+    const after = await srv.store.getClient(vaultClient.id);
+    assert.ok(after?.revokedAt, "client stays revoked after the member's refresh attempt");
+    assert.ok(!(await srv.store.listAudit(owner.orgId, 100)).some((a) => a.action === "client_reactivated"));
+
+    // A fresh consent by an org member brings the same row back.
+    const again = await connect(srv, member, client.client_id);
+    assert.equal((await srv.mcp(again.access, "tools/list")).status, 200);
+    assert.equal((await srv.store.getClient(vaultClient.id))?.revokedAt, null);
+    assert.equal((await srv.store.listClients(owner.orgId)).filter((c) => c.oauthClientId === client.client_id).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("O5 /oauth/revoke denylists a JWT access token and, for a refresh token, every sibling issued under its grant", async () => {
+  const srv = await startOauthServer({ secure: true, deployPlane: "staging" });
+  try {
+    const op = await srv.signInReady("revoke@example.com");
+    const client = await srv.registerClient({ client_name: "Revoker", redirect_uris: [REDIRECT] });
+    const first = await connect(srv, op, client.client_id);
+    assert.equal((await srv.mcp(first.access, "tools/list")).status, 200);
+
+    const revokeJwt = await srv.go("/oauth/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: first.access, token_type_hint: "access_token", client_id: client.client_id }),
+    });
+    assert.equal(revokeJwt.status, 200, await revokeJwt.text());
+    assert.equal((await srv.mcp(first.access, "tools/list")).status, 401, "revoked JWT is refused at /mcp");
+    const audit = await srv.store.listAudit(op.orgId, 50);
+    assert.ok(audit.some((a) => a.action === "token_revoked"));
+    assert.ok(!JSON.stringify(audit).includes("eyJ"));
+
+    // A JWT presented by a different client is ignored (still 200, nothing revoked).
+    const other = await srv.registerClient({ client_name: "Other", redirect_uris: [REDIRECT] });
+    const second = await srv.token({ grant_type: "refresh_token", refresh_token: first.refresh, client_id: client.client_id });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    const access2 = String(second.body.access_token);
+    const refresh2 = String(second.body.refresh_token);
+    const foreign = await srv.go("/oauth/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: access2, client_id: other.client_id }),
+    });
+    assert.equal(foreign.status, 200);
+    assert.equal((await srv.mcp(access2, "tools/list")).status, 200, "another client cannot revoke this token");
+
+    // Revoking the refresh token kills the grant: the live access token issued under it dies too.
+    const revokeRefresh = await srv.go("/oauth/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: refresh2, token_type_hint: "refresh_token", client_id: client.client_id }),
+    });
+    assert.equal(revokeRefresh.status, 200, await revokeRefresh.text());
+    assert.equal((await srv.mcp(access2, "tools/list")).status, 401, "sibling access token denylisted by grant");
+    const replay = await srv.token({ grant_type: "refresh_token", refresh_token: refresh2, client_id: client.client_id });
+    assert.equal(replay.status, 400);
+    const events = (await srv.store.listAccessEvents(op.orgId, 50)).filter((e) => e.kind.startsWith("oauth_"));
+    assert.ok(events.length >= 4, "access and refresh rows for both issuances");
+    assert.ok(events.every((e) => e.revokedAt), "every ledger row for this grant is marked");
+    assert.ok(events.every((e) => e.grantId), "ledger rows carry the grant id");
+
+    // Refresh reuse detection revokes the grant as well; its access token dies with it.
+    const third = await connect(srv, op, client.client_id);
+    const rotated = await srv.token({ grant_type: "refresh_token", refresh_token: third.refresh, client_id: client.client_id });
+    assert.equal(rotated.status, 200);
+    const access4 = String(rotated.body.access_token);
+    assert.equal((await srv.mcp(access4, "tools/list")).status, 200);
+    const reuse = await srv.token({ grant_type: "refresh_token", refresh_token: third.refresh, client_id: client.client_id });
+    assert.equal(reuse.status, 400);
+    assert.ok(await eventually(async () => (await srv.mcp(access4, "tools/list")).status === 401), "access token issued after a replayed refresh is refused");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("O6/O12 the engine is pinned to what discovery advertises: public clients, code only, no DPoP", async () => {
+  const srv = await startOauthServer({ secure: true, deployPlane: "staging" });
+  try {
+    const meta = (await (await srv.go("/.well-known/oauth-authorization-server")).json()) as Record<string, unknown>;
+    assert.deepEqual(meta.token_endpoint_auth_methods_supported, ["none"]);
+    assert.deepEqual(meta.response_types_supported, ["code"]);
+    assert.deepEqual(meta.response_modes_supported, OAUTH_RESPONSE_MODES);
+
+    const secretClient = await srv.go("/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Secret", redirect_uris: [REDIRECT], token_endpoint_auth_method: "client_secret_basic" }),
+    });
+    const secretBody = await secretClient.text();
+    assert.equal(secretClient.status, 400, secretBody);
+    assert.equal((JSON.parse(secretBody) as { error: string }).error, "invalid_client_metadata");
+    const hybrid = await srv.go("/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Hybrid", redirect_uris: [REDIRECT], token_endpoint_auth_method: "none", response_types: ["code id_token"], grant_types: ["authorization_code", "implicit"] }),
+    });
+    const hybridBody = await hybrid.text();
+    assert.equal(hybrid.status, 400, hybridBody);
+    assert.equal((JSON.parse(hybridBody) as { error: string }).error, "invalid_client_metadata");
+
+    const op = await srv.signInReady("pinned@example.com");
+    const client = await srv.registerClient({ client_name: "Pinned", redirect_uris: [REDIRECT] });
+    for (const mode of OAUTH_RESPONSE_MODES) {
+      const params = new URLSearchParams({
+        client_id: client.client_id,
+        redirect_uri: REDIRECT,
+        response_type: "code",
+        response_mode: mode,
+        scope: "openid mcp",
+        code_challenge: pkce().challenge,
+        code_challenge_method: "S256",
+        resource: AUDIENCE,
+      });
+      const authorize = await srv.go(`/oauth/authorize?${params}`, { jar: op.jar });
+      assert.equal(authorize.status, 303, `response_mode=${mode}: ${await authorize.text()}`);
+      assert.match(authorize.headers.get("location") ?? "", /^\/consent\?uid=/);
+    }
+
+    // DPoP is off: a proof header is ignored instead of being validated and rejected.
+    const { verifier, challenge } = pkce();
+    const leg = await srv.authorizeWithConsent({ jar: op.jar, clientId: client.client_id, redirectUri: REDIRECT, challenge });
+    const issued = await srv.go("/oauth/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", dpop: "not-a-proof" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: leg.code,
+        redirect_uri: REDIRECT,
+        client_id: client.client_id,
+        code_verifier: verifier,
+        resource: AUDIENCE,
+      }),
+    });
+    const body = (await issued.json()) as { token_type?: string; access_token?: string; error?: string };
+    assert.equal(issued.status, 200, JSON.stringify(body));
+    assert.equal(body.token_type, "Bearer");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("O13 key rotation: JWKS publishes current and previous keys, new tokens carry the current kid, old signatures still verify", async () => {
+  const previous = testOidcPreviousJwk();
+  const srv = await startOauthServer({ secure: true, deployPlane: "staging", previousJwk: previous });
+  try {
+    const jwks = (await (await srv.go("/oauth/jwks")).json()) as { keys: { kid: string; d?: string }[] };
+    assert.deepEqual(jwks.keys.map((k) => k.kid), [oidcKid(srv.jwk), oidcKid(previous)]);
+    assert.ok(jwks.keys.every((k) => k.d === undefined), "private material never published");
+
+    const op = await srv.signInReady("rotate@example.com");
+    const client = await srv.registerClient({ client_name: "Rotator", redirect_uris: [REDIRECT] });
+    const tokens = await connect(srv, op, client.client_id);
+    assert.equal(decodeProtectedHeader(tokens.access).kid, oidcKid(srv.jwk), "signed with the current key");
+    assert.equal((await srv.mcp(tokens.access, "tools/list")).status, 200);
+
+    // A token minted under the previous key (before the rotation) is still good until it expires.
+    const claims = decodeJwt(tokens.access);
+    const old = await new SignJWT({ client_id: claims.client_id, scope: "mcp", org_id: claims.org_id })
+      .setProtectedHeader({ alg: "RS256", kid: oidcKid(previous) })
+      .setIssuer(ISSUER)
+      .setAudience(AUDIENCE)
+      .setSubject(String(claims.sub))
+      .setJti("jti-before-rotation")
+      .setExpirationTime("5m")
+      .sign(await importJWK({ ...previous }, "RS256"));
+    assert.equal((await srv.mcp(old, "tools/list")).status, 200);
   } finally {
     await srv.close();
   }

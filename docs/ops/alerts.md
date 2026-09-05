@@ -10,11 +10,16 @@ The hosted process writes one JSON object per line to stderr; Fly ships it to `f
 | `hosted_boot_failed`, `uncaught_exception`, `unhandled_rejection` | The process exited 1 and Fly is restarting it. | Page if repeated. |
 | `shutdown_forced` | A deploy or restart could not drain within the 25 s deadline plus margin. | Investigate held connections. |
 | `sweep_failed` | Hourly expiry sweep threw. Tables grow until it succeeds. | Ticket. |
+| `aad_rebind_unreadable` | At boot an item envelope opened under neither the item-bound AAD nor the legacy `orgId` AAD. The row is left in place at `aad_version` 0 and the org cannot inject it. | Ticket. The item needs to be re-entered by its operator; `aad_rebind` carries the counts. |
+| `aad_rebind_failed` | The post-listen item AAD rebind threw (for example the pool dropped). The process keeps serving; rows not yet rebound fail closed at inject and the pass resumes on the next boot. | Ticket; restart the Machine once the database is healthy. |
+| `kek_previous_loaded` | The process booted with `VAULT_KEK_PREVIOUS` set: a KEK rotation is in progress. | Expected during a rotation; see [kek-rotation.md](kek-rotation.md). Ticket if it persists after the rotation was closed out. |
 | `sentry_send_failed` | Sentry envelope POST failed or timed out. | Ticket if sustained. |
 | `auth_otp_locked`, `auth_totp_locked`, repeated `auth_otp_failed` / `auth_totp_failed` for one `email_hash` | Brute force against an operator account. | Review; rate limits already apply. |
+| `sentry_dsn_missing` | A plane booted without `SENTRY_DSN`; `captureException` only logs. | Set the secret. Ticket. |
+| `request_error_after_headers`, `static_stream_failed` | A handler or a site file stream failed after the status line went out; the response was cut. | Ticket if repeated; the `request_id` names the request. |
 | `schema_bootstrap` | `PostgresStore.migrate()` created the schema from `schema.ts` because `schema_migrations` did not exist. Expected only for dev and test databases. | On a plane this means the release_command did not run: check `fly releases` and `DATABASE_URL_DIRECT`. |
 
-Requests are logged as `event: "request"` with `method`, `path`, `status`, `ms`, `request_id`. A 5xx rate or p95 `ms` alert can be built from these.
+Requests are logged as `event: "request"` with `method`, `path`, `status`, `ms`, `request_id`. A 5xx rate or p95 `ms` alert can be built from these. The same `request_id` (the `Fly-Request-Id` the Fly proxy set, so it matches the Fly log line; a UUID off Fly; an inbound `x-request-id` is client-chosen and never reused) is on the `request_error` line, the `x-request-id` response header, the 500 body, and the Sentry event's `request_id` tag, so one value finds everything about a failed request.
 
 ### Fly
 

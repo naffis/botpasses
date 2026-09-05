@@ -2,7 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { hostedDeployPlane, originForPlane, publicOriginError } from "../brand.ts";
+import { DEPLOY_PLANE_REQUIRED, deployPlaneRaw, originForPlane, publicOriginError } from "../brand.ts";
 import type { SweepCounts } from "../store/types.ts";
 
 export const HOSTED_CONFIG_EXIT = 78;
@@ -214,6 +214,23 @@ export function parseOidcPrivateJwk(raw: string | undefined): OidcPrivateJwk | u
   }
 }
 
+export const HOSTED_MODE_REQUIRED =
+  "The hosted process requires VAULT_MODE=hosted; without it no hosted boot guard runs. Set it, or run `vault serve` for the local plane.";
+
+/**
+ * The hosted entry point (`startHosted`, `npm run hosted`) must never run as a local process:
+ * every guard in `hostedBootError` is keyed on `VAULT_MODE=hosted`, so an unset mode would skip
+ * the plane check, accept an empty session secret, and honour a bootstrap token without its flag.
+ */
+export function hostedModeError(env: NodeJS.ProcessEnv): string | undefined {
+  return env.VAULT_MODE === "hosted" ? undefined : HOSTED_MODE_REQUIRED;
+}
+
+/**
+ * Config problems of a hosted boot, or undefined when the env boots. A process not in hosted
+ * mode has nothing to check here (`cmdServe` runs the local plane then); the hosted entry point
+ * refuses that case first through `assertHostedBoot`.
+ */
 export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.VAULT_MODE !== "hosted") return undefined;
   if (!env.DATABASE_URL) {
@@ -222,16 +239,27 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (env.VAULT_HOME) {
     return "VAULT_MODE=hosted refuses VAULT_HOME; do not open sqlite on the Machine.";
   }
+  // Header principals exist for the test suite only; the hosted process never installs them,
+  // so the flag is refused whether or not a plane is named.
+  if (env.VAULT_AUTH_MODE === "test") {
+    return "VAULT_AUTH_MODE=test is refused in hosted mode; there are no test principals on a hosted process.";
+  }
+  const plane = deployPlaneRaw(env);
+  if (!plane) return DEPLOY_PLANE_REQUIRED;
   const kekErr = hostedKekBootError(env);
   if (kekErr) return kekErr;
   if (env.RESEND_API_KEY && !env.VAULT_EMAIL_FROM?.trim()) {
     return "VAULT_MODE=hosted with RESEND_API_KEY requires VAULT_EMAIL_FROM.";
   }
+  const approvalErr = approvalHmacError(env.VAULT_APPROVAL_HMAC);
+  if (approvalErr) return approvalErr;
   const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
   if (bootstrap.length > 0 && bootstrap.length < 32) {
     return "VAULT_BOOTSTRAP_TOKEN must be at least 32 characters when set.";
   }
-  const plane = hostedDeployPlane(env);
+  if (bootstrap.length > 0 && env.VAULT_BOOTSTRAP_ALLOW_PLANE !== "1") {
+    return "VAULT_BOOTSTRAP_TOKEN is refused on staging and production unless VAULT_BOOTSTRAP_ALLOW_PLANE=1 (break-glass only; unset both when done).";
+  }
   const pub = env.VAULT_PUBLIC_URL?.trim() ?? "";
   if (!pub) {
     return `VAULT_MODE=hosted requires VAULT_PUBLIC_URL=${originForPlane(plane)}.`;
@@ -245,6 +273,11 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (!parseOidcPrivateJwk(env.VAULT_OIDC_PRIVATE_JWK)) {
     return "VAULT_MODE=hosted requires VAULT_OIDC_PRIVATE_JWK as a private RS256 JWK.";
   }
+  // Checked here, before the KEK is unwrapped and Postgres is opened, so a bad value is exit 78
+  // with nothing sensitive in memory rather than exit 1 from the middle of the boot.
+  if (env.VAULT_OIDC_PREVIOUS_JWK?.trim() && !parseOidcPrivateJwk(env.VAULT_OIDC_PREVIOUS_JWK)) {
+    return "VAULT_OIDC_PREVIOUS_JWK is set but is not a private RS256 JWK.";
+  }
   const siteRoot = env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist");
   if (!existsSync(resolve(siteRoot, "index.html"))) {
     return "VAULT_MODE=hosted requires site/dist/index.html (build the Astro site).";
@@ -252,18 +285,52 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   return undefined;
 }
 
-export function deployPlaneRaw(env: NodeJS.ProcessEnv): "staging" | "production" | undefined {
-  if (env.VAULT_DEPLOY_PLANE === "staging" || env.VAULT_DEPLOY_PLANE === "production") {
-    return env.VAULT_DEPLOY_PLANE;
+const APPROVAL_HMAC_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * `VAULT_APPROVAL_HMAC` signs approval magic links. `Buffer.from(x, "hex")` silently yields an
+ * empty or truncated key for anything that is not clean hex, so the shape is checked at boot.
+ */
+export function approvalHmacError(raw: string | undefined): string | undefined {
+  const value = raw?.trim() ?? "";
+  if (!value) return undefined;
+  if (!APPROVAL_HMAC_RE.test(value)) {
+    return "VAULT_APPROVAL_HMAC must be 64 lowercase hex characters (32 bytes) when set.";
+  }
+  return undefined;
+}
+
+/**
+ * `VAULT_KEK_PREVIOUS` / `VAULT_KEK_PREVIOUS_WRAPPED` (the KEK a rotation is leaving) follow the
+ * same rules as the current KEK: one form at a time, raw refused under `VAULT_KEK_REQUIRE_KMS=1`,
+ * the wrapped form only on a plane with `VAULT_KMS_KEY_ID`, and a raw value must parse.
+ */
+export function previousKekBootError(env: NodeJS.ProcessEnv): string | undefined {
+  const plane = deployPlaneRaw(env);
+  const raw = env.VAULT_KEK_PREVIOUS?.trim() ?? "";
+  const wrapped = env.VAULT_KEK_PREVIOUS_WRAPPED?.trim() ?? "";
+  if (!raw && !wrapped) return undefined;
+  if (raw && wrapped) return "Set VAULT_KEK_PREVIOUS or VAULT_KEK_PREVIOUS_WRAPPED, not both.";
+  if (wrapped) {
+    if (!plane || !env.VAULT_KMS_KEY_ID?.trim()) {
+      return "VAULT_KEK_PREVIOUS_WRAPPED requires VAULT_DEPLOY_PLANE and VAULT_KMS_KEY_ID.";
+    }
+    if (!env.FLY_APP_NAME?.trim()) return "VAULT_KEK_PREVIOUS_WRAPPED requires FLY_APP_NAME.";
+    return undefined;
+  }
+  if (plane && env.VAULT_KEK_REQUIRE_KMS === "1") {
+    return "VAULT_KEK_REQUIRE_KMS=1 refuses raw VAULT_KEK_PREVIOUS; use VAULT_KEK_PREVIOUS_WRAPPED.";
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(raw) && Buffer.from(raw, "base64").length !== 32) {
+    return "VAULT_KEK_PREVIOUS must be a 32-byte key (64 hex chars or base64).";
   }
   return undefined;
 }
 
 export function hostedKekBootError(env: NodeJS.ProcessEnv): string | undefined {
   const plane = deployPlaneRaw(env);
-  if (env.VAULT_AUTH_MODE === "test" && plane) {
-    return "VAULT_AUTH_MODE=test is refused when VAULT_DEPLOY_PLANE is staging or production.";
-  }
+  const previousErr = previousKekBootError(env);
+  if (previousErr) return previousErr;
   const wrapped = Boolean(env.VAULT_KEK_WRAPPED?.trim() && env.VAULT_KMS_KEY_ID?.trim());
   const raw = Boolean(env.VAULT_KEK?.trim());
   const requireKms = env.VAULT_KEK_REQUIRE_KMS === "1";
@@ -282,8 +349,9 @@ export function hostedKekBootError(env: NodeJS.ProcessEnv): string | undefined {
   return undefined;
 }
 
+/** The hosted entry point's gate: refuses a missing `VAULT_MODE=hosted`, then every config problem. */
 export function assertHostedBoot(env: NodeJS.ProcessEnv = process.env): void {
-  const err = hostedBootError(env);
+  const err = hostedModeError(env) ?? hostedBootError(env);
   if (err) {
     const wrapped = new Error(err);
     (wrapped as Error & { exitCode: number }).exitCode = HOSTED_CONFIG_EXIT;

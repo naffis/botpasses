@@ -4,37 +4,20 @@
  * without following it. Uses a self-signed certificate generated per run with openssl.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
 import { test } from "node:test";
-import { describeOriginFailure, fetchPinned } from "../src/hosted/connector.ts";
+import { describeOriginFailure, fetchPinned, type OriginResponse } from "../src/hosted/connector.ts";
 import { isHttpError } from "../src/hosted/errors.ts";
 import { cleanup, tempHome } from "./helpers.ts";
-
-const HOST = "api.pinned.test";
-
-function selfSigned(dir: string): { key: Buffer; cert: Buffer } {
-  const key = join(dir, "key.pem");
-  const cert = join(dir, "cert.pem");
-  execFileSync(
-    "openssl",
-    [
-      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-      "-keyout", key, "-out", cert,
-      "-subj", `/CN=${HOST}`,
-      "-addext", `subjectAltName=DNS:${HOST}`,
-    ],
-    { stdio: "ignore" },
-  );
-  return { key: readFileSync(key), cert: readFileSync(cert) };
-}
+import { PINNED_HOST as HOST, selfSigned } from "./helpers/self-signed.ts";
 
 type Seen = { host?: string; servername?: string; path?: string; method?: string; body: string };
 
-async function tlsServer(dir: string, behaviour: "echo" | "redirect" | "hang"): Promise<{ server: Server; port: number; cert: Buffer; seen: Seen }> {
+/** `echo` answers 200 with JSON; a number answers that status with an empty body. */
+type Behaviour = "echo" | "redirect" | "hang" | number;
+
+async function tlsServer(dir: string, behaviour: Behaviour): Promise<{ server: Server; port: number; cert: Buffer; seen: Seen }> {
   const { key, cert } = selfSigned(dir);
   const seen: Seen = { body: "" };
   const server = createServer(
@@ -55,6 +38,11 @@ async function tlsServer(dir: string, behaviour: "echo" | "redirect" | "hang"): 
       });
       req.on("end", () => {
         if (behaviour === "hang") return;
+        if (typeof behaviour === "number") {
+          res.writeHead(behaviour, { "x-request-id": `req_${behaviour}` });
+          res.end();
+          return;
+        }
         if (behaviour === "redirect") {
           res.writeHead(302, { location: `https://${HOST}/elsewhere`, "content-type": "text/plain" });
           res.end("moved");
@@ -88,9 +76,9 @@ test("fetchPinned dials the pinned IP with the hostname as SNI and Host, and ver
       port,
     });
     assert.equal(res.status, 200);
-    assert.equal(res.headers.get("link"), '<https://api.pinned.test/v1/thing?page=2>; rel="next"', "origin headers are forwarded");
-    assert.equal(res.headers.get("x-ratelimit-remaining"), "9");
-    const body = (await res.json()) as { host: string; auth: string };
+    assert.equal(res.headers.link, '<https://api.pinned.test/v1/thing?page=2>; rel="next"', "origin headers are forwarded");
+    assert.equal(res.headers["x-ratelimit-remaining"], "9");
+    const body = JSON.parse(res.body.toString("utf8")) as { host: string; auth: string };
     assert.equal(body.host, HOST, "Host header is the hostname, not the IP");
     assert.equal(body.auth, "Bearer not-a-real-token");
     assert.equal(seen.servername, HOST, "SNI is the hostname");
@@ -131,12 +119,71 @@ test("fetchPinned returns a 3xx as-is and never follows Location", async () => {
       port,
     });
     assert.equal(res.status, 302);
-    assert.equal(await res.text(), "moved");
+    assert.equal(res.body.toString("utf8"), "moved");
     assert.equal(seen.path, "/old", "only the original path was requested");
   } finally {
     server.close();
     cleanup(dir);
   }
+});
+
+/**
+ * R3-1 regression. `fetchPinned` used to build a WHATWG `Response` inside the parser's `end`
+ * callback; a 204/205/304 (a body is forbidden) or a status outside 200-599 threw there, which is
+ * an uncaught exception that ends the hosted process, and the call never settled. Under the bug
+ * this test does not fail an assertion: the runner dies or the call hangs.
+ */
+test("fetchPinned settles a 204, 205, and 304 with an empty body, and a status no client may carry as a 502 bad_status", async () => {
+  const dial = async (behaviour: number, method: string): Promise<{ ok?: OriginResponse; err?: unknown; seen: Seen }> => {
+    const dir = tempHome();
+    const { server, port, cert, seen } = await tlsServer(dir, behaviour);
+    try {
+      const outcome: { ok?: OriginResponse; err?: unknown } = await fetchPinned(`https://${HOST}/v1/thing/1`, {
+        method,
+        headers: { authorization: "Bearer not-a-real-token" },
+        signal: new AbortController().signal,
+        addresses: ["127.0.0.1"],
+        ca: cert,
+        port,
+      }).then(
+        (ok) => ({ ok }),
+        (err: unknown) => ({ err }),
+      );
+      return { ...outcome, seen };
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      cleanup(dir);
+    }
+  };
+  let uncaught = 0;
+  const guard = () => {
+    uncaught += 1;
+  };
+  process.on("uncaughtException", guard);
+  try {
+    for (const [status, method] of [[204, "DELETE"], [205, "POST"], [304, "GET"]] as const) {
+      const { ok, err, seen } = await dial(status, method);
+      assert.equal(err, undefined, `${status} settled without an error`);
+      assert.ok(ok);
+      assert.equal(ok.status, status);
+      assert.equal(ok.body.length, 0);
+      assert.equal(ok.headers["x-request-id"], `req_${status}`, "headers of a bodiless answer are still forwarded");
+      assert.equal(seen.method, method);
+    }
+    const bad = await dial(999, "GET");
+    assert.equal(bad.ok, undefined);
+    assert.ok(isHttpError(bad.err), "an impossible status is an HttpError, not an exception in the parser");
+    assert.equal(bad.err.status, 502);
+    assert.equal(bad.err.extra.status, "bad_status");
+    assert.equal(bad.err.extra.origin_status, 999);
+    assert.match(bad.err.message, /invalid HTTP status \(999\)/);
+    assert.ok(!bad.err.message.includes("not-a-real-token"));
+    assert.equal((bad.err as { credentialSent?: boolean }).credentialSent, true, "the origin answered, so a one-call approval stays spent");
+  } finally {
+    process.off("uncaughtException", guard);
+  }
+  assert.equal(uncaught, 0, "nothing escaped the parser callbacks");
 });
 
 test("fetchPinned aborts a hung origin and reports a timeout without the request", async () => {

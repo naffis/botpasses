@@ -8,11 +8,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { moduleToScript, renderBundleModule, topLevelNames } from "../scripts/build-client.ts";
+import { pageAfterFilter } from "../src/hosted/client/access.ts";
 import { describeActivity, pageOf } from "../src/hosted/client/activity.ts";
 import { filterItems } from "../src/hosted/client/credentials.ts";
 import { agentsHash, itemHash, parseRoute, routeHash } from "../src/hosted/client/routes.ts";
-import { countdown, escapeHtml, html, raw, relativeTime, timeHtml } from "../src/hosted/client/shared.ts";
-import { COLLECT_JS, CONSOLE_JS, hostedAsset } from "../src/hosted/hosted-assets.ts";
+import { CSRF_COOKIE_JS } from "../src/hosted/auth-js.ts";
+import { countdown, csrfFromCookie, escapeHtml, html, raw, relativeTime, timeHtml } from "../src/hosted/client/shared.ts";
+import { AUTH_JS, COLLECT_JS, CONSOLE_JS, hostedAsset } from "../src/hosted/hosted-assets.ts";
 import { normalizeItemNameInput, splitHosts, storeRequestBody } from "../src/hosted/store-form-fields.ts";
 
 test("committed client bundle matches a fresh build (run scripts/build-client.ts when this fails)", () => {
@@ -27,7 +29,6 @@ test("bundles are plain JS with no leftover module syntax and parse cleanly", ()
     assert.doesNotMatch(js, /<reference/);
     assert.doesNotThrow(() => new Script(js));
   }
-  assert.match(COLLECT_JS, /loadNeed\(\);/);
   assert.equal(hostedAsset("/assets/console.js")?.body, CONSOLE_JS);
   assert.equal(hostedAsset("/assets/mark.svg")?.type, "image/svg+xml");
   assert.match(hostedAsset("/assets/mark.svg")?.body ?? "", /<svg/);
@@ -40,6 +41,24 @@ test("moduleToScript strips types, imports, references, and export keywords", ()
   assert.doesNotMatch(out, /import|export|reference|: string|: number/);
   assert.match(out, /function f\(x\s*\)\s*\{ return x; \}/);
   assert.deepEqual(topLevelNames(out), ["f", "k"]);
+});
+
+test("R1-7: the CSRF cookie readers prefer __Host-bp_csrf over a plain bp_csrf a subdomain could plant", () => {
+  const cases: [string, string][] = [
+    ["bp_csrf=planted; __Host-bp_csrf=real%3D", "real="],
+    ["__Host-bp_csrf=real; bp_csrf=planted", "real"],
+    ["bp_csrf=plain", "plain"],
+    ["__Host-bp_csrf=only", "only"],
+    ["xbp_csrf=no; other=1", ""],
+    ["", ""],
+  ];
+  // The console and collect bundles read through the pure helper.
+  for (const [cookie, want] of cases) assert.equal(csrfFromCookie(cookie), want, cookie);
+  // The auth pages and the invite page inline the same reader as plain JS.
+  const readCsrf = (cookie: string): unknown =>
+    new Script(`${CSRF_COOKIE_JS}\ncsrf()`).runInNewContext({ document: { cookie } });
+  for (const [cookie, want] of cases) assert.equal(readCsrf(cookie), want, cookie);
+  assert.ok(AUTH_JS.startsWith(CSRF_COOKIE_JS), "auth.js starts with the shared reader");
 });
 
 test("html tag escapes interpolations and keeps nested html and arrays raw", () => {
@@ -60,6 +79,18 @@ test("relative time, countdown, and time elements", () => {
   assert.equal(relativeTime("2026-09-04T12:09:00Z", now), "in 9 mins");
   assert.equal(relativeTime("2026-09-02T12:00:00Z", now), "2 days ago");
   assert.equal(relativeTime("not a date", now), "");
+  // A count that rounds up to the next unit reads in that unit, never "60 mins" or "24 hours".
+  assert.equal(relativeTime("2026-09-04T11:00:24Z", now), "1 hour ago");
+  assert.equal(relativeTime("2026-09-03T12:24:00Z", now), "1 day ago");
+  assert.equal(relativeTime("2026-08-05T21:00:00Z", now), "1 month ago");
+  assert.equal(relativeTime("2026-09-04T12:59:36Z", now), "in 1 hour");
+  assert.equal(relativeTime("2026-09-04T11:01:00Z", now), "59 mins ago");
+  assert.equal(relativeTime("2026-09-04T11:59:00Z", now), "1 min ago");
+  // The activity page survives a refresh with the same filter and resets when the filter changes.
+  const filter = { agent: "cli_1", credential: "" };
+  assert.equal(pageAfterFilter(filter, { agent: "cli_1", credential: "" }, 3), 3);
+  assert.equal(pageAfterFilter(filter, { agent: "cli_2", credential: "" }, 3), 0);
+  assert.equal(pageAfterFilter(filter, { agent: "cli_1", credential: "X" }, 3), 0);
   assert.equal(countdown("2026-09-04T12:09:30Z", now), "9:30 left");
   assert.equal(countdown("2026-09-04T12:00:20Z", now), "20s left");
   assert.equal(countdown("2026-09-04T11:00:00Z", now), "expired");

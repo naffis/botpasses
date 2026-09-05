@@ -111,18 +111,36 @@ export async function startProviderUserOauth(host: ConnectHost, input: StartConn
  * Exchanges the callback code with the client-secret item and stores the refresh token as
  * `<ITEM>_REFRESH` (`inject: refresh`, allowed on the provider's API and token hosts).
  */
+/** Why a connect callback failed, as the console query string carries it (`connect_error` + `reason`). */
+export type ConnectErrorReason = "state_expired" | "provider_denied" | "exchange_failed" | "no_refresh_token";
+
+/** The reason code on a connect failure, or `exchange_failed` for anything without one. */
+export function connectErrorReason(err: unknown): ConnectErrorReason {
+  const reason = err instanceof HttpError ? err.extra.reason : undefined;
+  if (reason === "state_expired" || reason === "provider_denied" || reason === "exchange_failed" || reason === "no_refresh_token") {
+    return reason;
+  }
+  return "exchange_failed";
+}
+
 export async function finishProviderUserOauth(host: ConnectHost, input: FinishConnectInput): Promise<FinishConnectResult> {
-  const opened = host.openState(input.state);
+  let opened: ProviderOauthState;
+  try {
+    opened = host.openState(input.state);
+  } catch (err) {
+    // Malformed, forged, or expired: the operator restarts the connect either way.
+    throw new HttpError(err instanceof HttpError ? err.status : 400, "OAuth state is invalid or expired", { reason: "state_expired" });
+  }
   if (input.providerId !== undefined && opened.providerId !== input.providerId) {
-    throw new HttpError(400, "OAuth state is for another provider", { provider: opened.providerId });
+    throw new HttpError(400, "OAuth state is for another provider", { provider: opened.providerId, reason: "state_expired" });
   }
   const provider = connectProvider(opened.providerId);
-  if (opened.orgId !== input.orgId) throw new HttpError(403, "OAuth state is not for this org");
+  if (opened.orgId !== input.orgId) throw new HttpError(403, "OAuth state is not for this org", { reason: "state_expired" });
   // The account that started the connect must finish it: a state sealed for one operator
   // cannot bind a different operator's provider account to the item.
-  if (opened.userId !== input.userId) throw new HttpError(403, "OAuth state is not for this account");
+  if (opened.userId !== input.userId) throw new HttpError(403, "OAuth state is not for this account", { reason: "state_expired" });
   const item = await host.store.getItem(opened.itemId);
-  if (!item) throw new HttpError(404, "Unknown item");
+  if (!item) throw new HttpError(404, "Unknown item", { reason: "exchange_failed" });
   const decrypted = await host.decryptItem(input.orgId, item.id);
   const exchange = await exchangeAuthorizationCode(
     provider,
@@ -139,11 +157,12 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
     throw new HttpError(
       exchange.origin.status >= 400 ? exchange.origin.status : 502,
       `${provider.displayName} code exchange failed`,
+      { reason: "exchange_failed" },
     );
   }
   const refresh = exchange.minted.refreshToken;
   if (!refresh) {
-    throw new HttpError(502, `${provider.displayName} did not return a refresh token`);
+    throw new HttpError(502, `${provider.displayName} did not return a refresh token`, { reason: "no_refresh_token" });
   }
   const name = refreshItemName(opened.itemName);
   const envName = opened.environment === "production" ? "production" : "staging";

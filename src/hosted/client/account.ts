@@ -143,8 +143,10 @@ function showBackupCodes(codes: string[]): void {
   text(byId("backup-live"), `${codes.length} new backup codes are shown. Copy or download them now.`);
   const copy = byId<HTMLButtonElement>("backup-copy");
   const download = byId<HTMLButtonElement>("backup-download");
-  copy?.addEventListener("click", () => copyText(codes.join("\n"), "Backup codes copied"), { once: true });
-  download?.addEventListener("click", () => downloadText("botpasses-backup-codes.txt", `${codes.join("\n")}\n`), { once: true });
+  // Assigned, not added: the buttons work on every click, and a regenerate replaces the handler
+  // instead of stacking a listener that still copies the previous codes.
+  if (copy) copy.onclick = () => copyText(codes.join("\n"), "Backup codes copied");
+  if (download) download.onclick = () => downloadText("botpasses-backup-codes.txt", `${codes.join("\n")}\n`);
   openDialog("backup-dialog");
 }
 
@@ -179,10 +181,10 @@ export function bindAccount(): void {
   byId("account-signout")?.addEventListener("click", () => void signOut());
   byId("sign-out")?.addEventListener("click", () => void signOut());
   byId("account-regen")?.addEventListener("click", () => {
-    askForCode("Enter your current authenticator code to replace every backup code.", regenerate);
+    askForCode("Enter your current authenticator code, or one of your backup codes, to replace every backup code.", regenerate);
   });
   byId("account-reenroll")?.addEventListener("click", () => {
-    askForCode("Enter your current authenticator code. You will then scan a new QR code.", reenroll);
+    askForCode("Enter your current authenticator code, or one of your backup codes. You will then scan a new QR code.", reenroll);
   });
   byId("backup-dialog")?.addEventListener("close", () => {
     flash("Backup codes are no longer shown. Regenerate them if you did not save them.", true);

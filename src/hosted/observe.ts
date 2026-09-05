@@ -5,8 +5,9 @@
  * `value`, `password`, `code`, `token`, `secret`, `authorization`, and `cookie` are dropped
  * before anything is written, so a careless caller cannot log a credential.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { sha256Hex } from "../ids.ts";
 
 const DROPPED_FIELDS = new Set(["value", "password", "code", "token", "secret", "authorization", "cookie"]);
 
@@ -70,11 +71,19 @@ export function logRequest(fields: RequestLogFields): void {
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
-/** Reuse a well-formed inbound `x-request-id` (Fly sets one), otherwise mint a UUID. */
-export function requestIdFrom(headers: Record<string, string | string[] | undefined>): string {
-  const raw = headers["x-request-id"];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (value && REQUEST_ID_RE.test(value)) return value;
+/**
+ * The request id every log line, the `x-request-id` response header, the 500 body, and the
+ * Sentry event share. On Fly (`trustFlyHeader`) it is the well-formed `Fly-Request-Id` the Fly
+ * proxy set, so a Fly log line and ours match; otherwise a UUID is minted. An inbound
+ * `x-request-id` is never reused: it is client-chosen, and a chosen id could be made to collide
+ * with, or be mistaken for, another request's in the logs.
+ */
+export function requestIdFrom(headers: Record<string, string | string[] | undefined>, trustFlyHeader: boolean): string {
+  if (trustFlyHeader) {
+    const raw = headers["fly-request-id"];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (value && REQUEST_ID_RE.test(value)) return value;
+  }
   return randomUUID();
 }
 
@@ -88,7 +97,8 @@ export type AuthEventKind =
   | "totp_locked"
   | "backup_code_used"
   | "session_revoked"
-  | "signed_out";
+  | "signed_out"
+  | "bootstrap_used";
 
 /**
  * Authentication events, one line each, for alerting on brute force and lockouts. Emails
@@ -98,7 +108,7 @@ export function logAuthEvent(kind: AuthEventKind, fields: Record<string, unknown
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(fields)) {
     if (key === "email" && typeof val === "string") {
-      out.email_hash = createHash("sha256").update(val.trim().toLowerCase()).digest("hex").slice(0, 12);
+      out.email_hash = sha256Hex(val.trim().toLowerCase()).slice(0, 12);
       continue;
     }
     out[key] = val;

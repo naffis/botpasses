@@ -9,8 +9,6 @@ export default tseslint.config(
       "site/**",
       "coverage/**",
       "docs/**",
-      "processes/**",
-      ".loadout/**",
       ".cursor/**",
       ".claude/**",
       "bin/**",

@@ -66,17 +66,24 @@ export function wrongTotpCode(secretBase32: string, atMs: number): string {
   throw new Error("unreachable");
 }
 
+/** Toggle to make the harness mailer fail, as Resend would on an outage. */
+export type Mailer = { fail: boolean };
+
 type ServerParts = {
   home: string;
   store: VaultStore;
   emails: { to: string; html: string }[];
   clock: Clock;
   kek: Buffer;
+  /** `true` issues `__Host-` Secure cookies and honours them only on `x-forwarded-proto: https`. */
+  secure: boolean;
+  mailer: Mailer;
 };
 
 async function startServer(parts: ServerParts): Promise<IdentityCtx> {
   const now = (): Date => new Date(parts.clock.now);
   const sendEmail = async (to: string, _s: string, html: string): Promise<void> => {
+    if (parts.mailer.fail) throw new Error("mailer down");
     parts.emails.push({ to, html });
   };
   const kernel = new HostedKernel({
@@ -100,7 +107,7 @@ async function startServer(parts: ServerParts): Promise<IdentityCtx> {
     kernel,
     sessionSecret: TEST_SESSION_SECRET,
     jwk,
-    secureCookies: false,
+    secureCookies: parts.secure,
   });
   const http = createHostedServer({
     kernel,
@@ -109,11 +116,11 @@ async function startServer(parts: ServerParts): Promise<IdentityCtx> {
     publicUrl: "http://127.0.0.1:8788",
     identity,
     oidcProvider,
-    secureCookies: false,
+    secureCookies: parts.secure,
     authResolver: identityAuthResolver({
       identity,
       kernel,
-      secureCookies: false,
+      secureCookies: parts.secure,
       oidcJwk: jwk,
       issuer: "http://127.0.0.1:8788",
     }),
@@ -140,7 +147,9 @@ async function startServer(parts: ServerParts): Promise<IdentityCtx> {
   };
 }
 
-export async function identityServer(opts: { clock?: Clock; kek?: Buffer } = {}): Promise<IdentityCtx> {
+export async function identityServer(
+  opts: { clock?: Clock; kek?: Buffer; secure?: boolean; mailer?: Mailer } = {},
+): Promise<IdentityCtx> {
   const home = tempHome();
   return startServer({
     home,
@@ -148,6 +157,8 @@ export async function identityServer(opts: { clock?: Clock; kek?: Buffer } = {})
     emails: [],
     clock: opts.clock ?? { now: Date.now() },
     kek: opts.kek ?? parseMasterKey(generateMasterKey()),
+    secure: opts.secure ?? false,
+    mailer: opts.mailer ?? { fail: false },
   });
 }
 

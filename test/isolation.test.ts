@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { dbPath } from "../src/db.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { handleHostedMcpRpc, listHostedMcpTools } from "../src/hosted/mcp.ts";
-import { callMcpTool, handleMcpRpc, listMcpTools } from "../src/mcp.ts";
+import { callMcpTool, handleMcpRpc, listMcpTools, newMcpSession } from "../src/mcp.ts";
 import { transcriptContainsSecret } from "../src/redact.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { CANARY, ChatTranscript, cleanup, makeVault, tempHome } from "./helpers.ts";
@@ -26,18 +27,15 @@ test("mocked LLM/agent conversation never contains the stored secret after store
     const listSecrets = await callMcpTool(vault, "list_secrets", {});
     chat.add("agent", { tool: "list_secrets", result: listSecrets });
 
-    const requested = await callMcpTool(vault, "request_grant", {
-      secret_name: "STRIPE_KEY",
-      agent_id: "invoicer",
-      tool_id: "stripe",
-      scope: "once",
-    });
+    const session = newMcpSession();
+    session.agentId = "invoicer";
+    const requested = await callMcpTool(vault, "request_grant", { item_name: "STRIPE_KEY", scope: "once" }, { session });
     chat.add("agent", { tool: "request_grant", result: requested });
 
     const grant = vault.approveGrant({
       secretName: "STRIPE_KEY",
       agentId: "invoicer",
-      toolId: "stripe",
+      toolId: "http_request",
       scope: "once",
     });
     chat.add(
@@ -45,8 +43,9 @@ test("mocked LLM/agent conversation never contains the stored secret after store
       `Approved grant ${grant.id} secret=${grant.secretName} tool=${grant.toolId} agent=${grant.agentId} scope=${grant.scope}. Value not shown.`,
     );
 
-    const listedGrants = await callMcpTool(vault, "list_grants", { agent_id: "invoicer" });
+    const listedGrants = await callMcpTool(vault, "list_grants", {}, { session });
     chat.add("agent", { tool: "list_grants", result: listedGrants });
+    vault.approveGrant({ secretName: "STRIPE_KEY", agentId: "invoicer", toolId: "stripe", scope: "once" });
 
     const tools = await handleMcpRpc(vault, { jsonrpc: "2.0", id: 2, method: "tools/list" });
     chat.add("agent", { tool: "tools/list", result: tools });
@@ -166,6 +165,7 @@ test("hosted MCP REST email audit never contain the stored canary", async () => 
   });
   const { client: model } = await kernel.createModelClient({ orgId, name: "grok", environment: "staging" });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,
@@ -248,6 +248,7 @@ test("hosted find then operator fulfill never leaks canary into MCP collect HTML
     environment: "staging",
   });
   const http = createHostedServer({
+    authResolver: testAuthResolver,
     kernel,
     host: "127.0.0.1",
     port: 0,

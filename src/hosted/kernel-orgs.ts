@@ -1,7 +1,8 @@
 /**
- * Org lifecycle for the hosted kernel: provisioning (org, owner, vault, environments, wrapped
- * DEK), the bootstrap operator, the org an operator session acts in, delete, and KEK rotation.
- * The KEK stays inside `HostedKernel`; the host exposes `wrapDek`/`unwrapDek` closures over it.
+ * Org lifecycle for the hosted kernel: provisioning (org, vault, environments, wrapped DEK,
+ * owner), the bootstrap operator, the org an operator session acts in, delete, and KEK rotation.
+ * The KEK stays inside `HostedKernel`; the host exposes `wrapDek`/`unwrapDek` closures over it,
+ * plus `unwrapDekPrevious` while a rotation is in progress.
  */
 import { randomUUID } from "node:crypto";
 import type { Envelope } from "../crypto.ts";
@@ -22,6 +23,8 @@ export type OrgHost = {
   now: () => Date;
   wrapDek: (dek: Buffer, orgId: string) => Envelope;
   unwrapDek: (envelope: Envelope, orgId: string) => Buffer;
+  /** Unwrap under the KEK a rotation is leaving. Set only while `VAULT_KEK_PREVIOUS` is configured. */
+  unwrapDekPrevious?: (envelope: Envelope, orgId: string) => Buffer;
 };
 
 export type Membership = { orgId: string; role: MemberRole };
@@ -32,6 +35,11 @@ export async function requireMember(host: OrgHost, orgId: string, userId: string
   return m.role;
 }
 
+/**
+ * Creates the org, its vault and environments, then the owner membership last, so an org that
+ * exists without members is a provisioning that stopped before its final step and can be
+ * reclaimed by `created_by` (see `ensureVaultOrgForUser`).
+ */
 export async function provisionOrg(host: OrgHost, orgId: string, name: string, userId: string): Promise<void> {
   const wrapped = host.wrapDek(generateDek(), orgId);
   const at = host.now().toISOString();
@@ -42,13 +50,14 @@ export async function provisionOrg(host: OrgHost, orgId: string, name: string, u
     wrappedDekCiphertext: wrapped.ciphertext,
     wrappedDekTag: wrapped.tag,
     createdAt: at,
+    createdBy: userId,
   });
-  await host.store.insertMember({ orgId, userId, role: "owner", joinedAt: at });
   const vaultId = `vlt_${randomUUID()}`;
   await host.store.insertVault({ id: vaultId, orgId, name: "default" });
   for (const environment of ["staging", "production"] as const) {
     await host.store.insertEnvironment({ id: `env_${randomUUID()}`, vaultId, name: environment });
   }
+  await host.store.insertMember({ orgId, userId, role: "owner", joinedAt: at });
 }
 
 export async function createOrg(host: OrgHost, name: string, userId: string): Promise<{ orgId: string }> {
@@ -72,8 +81,12 @@ export async function ensureBootstrapOperator(host: OrgHost): Promise<{ orgId: s
 
 /**
  * The org an operator session acts in. `preferredOrgId` (the session's `active_org_id` from the
- * switcher) wins when the user is still a member of it; otherwise the first membership, and a
- * fresh personal org for a user with none.
+ * switcher) wins when the user is still a member of it; otherwise the first membership.
+ *
+ * A user with no memberships gets an org they created that has no members (a provisioning
+ * that stopped before the owner insert, or a concurrent first sign-in), and otherwise a fresh
+ * personal org under a random id. Membership is the only way back into an org that has
+ * members: an owner who was removed from the org they created does not regain it.
  */
 export async function ensureVaultOrgForUser(host: OrgHost, userId: string, preferredOrgId?: string | null): Promise<Membership> {
   const existing = await host.store.listMembershipsForUser(userId);
@@ -82,23 +95,27 @@ export async function ensureVaultOrgForUser(host: OrgHost, userId: string, prefe
     if (preferred) return { orgId: preferred.orgId, role: preferred.role };
   }
   if (existing[0]) return { orgId: existing[0].orgId, role: existing[0].role };
-  const orgId = `org_${userId.replace(/^usr_/, "")}`;
-  try {
-    await provisionOrg(host, orgId, "workspace", userId);
-  } catch (err) {
-    if (!(err instanceof StoreConflictError) && !isUniqueViolation(err)) {
-      const again = await host.store.listMembershipsForUser(userId);
-      if (again[0]) return { orgId: again[0].orgId, role: again[0].role };
-      throw err;
+  const reclaimed = await reclaimEmptyCreatedOrg(host, userId);
+  if (reclaimed) return reclaimed;
+  // A random id cannot collide, and `provisionOrg` ends with the owner membership.
+  const orgId = `org_${randomUUID()}`;
+  await provisionOrg(host, orgId, "workspace", userId);
+  return { orgId, role: "owner" };
+}
+
+/** Re-adds the creator as owner of an org they made that has no members at all. */
+async function reclaimEmptyCreatedOrg(host: OrgHost, userId: string): Promise<Membership | undefined> {
+  for (const org of await host.store.listOrgsCreatedBy(userId)) {
+    if ((await host.store.listMembers(org.id)).length > 0) continue;
+    try {
+      await host.store.insertMember({ orgId: org.id, userId, role: "owner", joinedAt: host.now().toISOString() });
+    } catch (err) {
+      if (!(err instanceof StoreConflictError) && !isUniqueViolation(err)) throw err;
     }
-    if (!(await host.store.getMember(orgId, userId))) {
-      await host.store.insertMember({ orgId, userId, role: "owner" });
-    }
+    const member = await host.store.getMember(org.id, userId);
+    if (member) return { orgId: org.id, role: member.role };
   }
-  const again = await host.store.listMembershipsForUser(userId);
-  if (again[0]) return { orgId: again[0].orgId, role: again[0].role };
-  const role = await requireMember(host, orgId, userId);
-  return { orgId, role };
+  return undefined;
 }
 
 export async function deleteOrg(host: OrgHost, orgId: string, actor: string, role: MemberRole, confirmName: string): Promise<void> {
@@ -113,10 +130,38 @@ export async function deleteOrg(host: OrgHost, orgId: string, actor: string, rol
   await host.store.deleteOrg(orgId);
 }
 
+/**
+ * Unwraps the org DEK under the current KEK. During a rotation (`unwrapDekPrevious` set) a DEK
+ * still wrapped under the previous KEK opens and is re-wrapped under the current KEK in place,
+ * audited as `dek_rewrapped`, so traffic finishes the rotation without a maintenance window.
+ */
 export async function dekForOrg(host: OrgHost, orgId: string): Promise<Buffer> {
   const org = await host.store.getOrg(orgId);
   if (!org) throw new HttpError(404, "Unknown org");
-  return host.unwrapDek({ iv: org.wrappedDekIv, ciphertext: org.wrappedDekCiphertext, tag: org.wrappedDekTag }, orgId);
+  const envelope = { iv: org.wrappedDekIv, ciphertext: org.wrappedDekCiphertext, tag: org.wrappedDekTag };
+  try {
+    return host.unwrapDek(envelope, orgId);
+  } catch (err) {
+    if (!host.unwrapDekPrevious) throw err;
+  }
+  const dek = host.unwrapDekPrevious(envelope, orgId);
+  const next = host.wrapDek(dek, orgId);
+  await host.store.updateOrgWrappedDek(orgId, {
+    wrappedDekIv: next.iv,
+    wrappedDekCiphertext: next.ciphertext,
+    wrappedDekTag: next.tag,
+  });
+  await host.store.insertAudit({
+    id: `aud_${randomUUID()}`,
+    orgId,
+    action: "dek_rewrapped",
+    actor: "system",
+    itemName: null,
+    clientId: null,
+    at: host.now().toISOString(),
+  });
+  logVaultEvent("dek_rewrapped", { orgId });
+  return dek;
 }
 
 /** Re-wraps every org DEK (and the identity DEK) from `oldKek` to `newKek`; already-rotated rows are skipped. */

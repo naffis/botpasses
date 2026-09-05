@@ -12,7 +12,7 @@ import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { testAuthResolver, type AuthResolver, type Principal } from "../src/hosted/auth.ts";
 import { createHostedServer, type HostedHttpOpts } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
-import { OperatorIdentity, signCsrf } from "../src/hosted/operator-identity.ts";
+import { OperatorIdentity, hashToken, signCsrf } from "../src/hosted/operator-identity.ts";
 import { openHostedSqlite, type SqliteHostedStore } from "../src/store/sqlite-hosted.ts";
 import type { VaultStore } from "../src/store/types.ts";
 import { CANARY, TEST_SESSION_SECRET, cleanup, tempHome } from "./helpers.ts";
@@ -139,6 +139,44 @@ test("malformed JSON is 400 Invalid JSON and does not echo the body (S13)", asyn
   }
 });
 
+test("a JSON route refuses a body that is not application/json with 415; a bodiless POST still reads as {} (B7)", async () => {
+  const ctx = await setup();
+  try {
+    const noType = Object.fromEntries(Object.entries(ctx.op).filter(([name]) => name !== "content-type"));
+    const body = JSON.stringify({ name: "X", value: CANARY, environment: "staging", allowed_hosts: ["api.stripe.com"] });
+    for (const type of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "application/jsonx"]) {
+      const res = await fetch(`${ctx.base}/api/items`, { method: "POST", headers: { ...noType, "content-type": type }, body });
+      assert.equal(res.status, 415, type);
+      const text = await res.text();
+      assert.match(text, /Content-Type must be application\/json/);
+      assert.doesNotMatch(text, new RegExp(CANARY));
+    }
+    assert.equal((await ctx.store.listItems(ctx.orgId)).some((i) => i.name === "X"), false, "nothing stored");
+    // fetch labels a string body text/plain when no type is given: refused the same way.
+    const untyped = await fetch(`${ctx.base}/api/items`, { method: "POST", headers: noType, body });
+    assert.equal(untyped.status, 415);
+    // A charset parameter is fine.
+    const charset = await fetch(`${ctx.base}/api/items`, {
+      method: "POST",
+      headers: { ...noType, "content-type": "application/json; charset=utf-8" },
+      body,
+    });
+    assert.equal(charset.status, 200, await charset.text());
+    // No body and no type (logout, revoke): the handler sees {}.
+    const empty = await fetch(`${ctx.base}/api/clients/${ctx.model.id}/revoke`, { method: "POST", headers: noType });
+    assert.equal(empty.status, 200, await empty.text());
+    // The MCP endpoint is a JSON route too.
+    const mcp = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { "x-test-channel": "model", "x-test-client": ctx.model.id, "content-type": "text/plain" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    assert.equal(mcp.status, 415);
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("HEAD /console behaves like GET (D9)", async () => {
   const ctx = await setup();
   try {
@@ -190,30 +228,39 @@ test("cookie-authenticated POST /mcp requires a valid CSRF token and a same-orig
   try {
     const rpc = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_items", arguments: {} } });
     const cookieUser = { "x-cookie-user": "user_owner", "content-type": "application/json" };
-    const csrf = signCsrf(TEST_SESSION_SECRET, "raw-token-value");
+    // The CSRF token is signed for the session cookie it travels with (I7).
+    const sessionToken = "session-raw-token";
+    const csrf = signCsrf(TEST_SESSION_SECRET, "raw-token-value", hashToken(sessionToken));
+    const jar = `bp_session=${sessionToken}; bp_csrf=${csrf}`;
     const noCsrf = await fetch(`${ctx.base}/mcp`, { method: "POST", headers: { ...cookieUser, origin: "http://127.0.0.1:8788" }, body: rpc });
     assert.equal(noCsrf.status, 403);
     const badCsrf = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: `bp_csrf=${csrf}`, "x-csrf-token": "wrong.sig" },
+      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: jar, "x-csrf-token": "wrong.sig" },
       body: rpc,
     });
     assert.equal(badCsrf.status, 403);
+    const otherSession = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: `bp_session=another-session; bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      body: rpc,
+    });
+    assert.equal(otherSession.status, 403, "a token minted for one session does not verify with another session cookie");
     const crossOrigin = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, origin: "https://evil.example", cookie: `bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      headers: { ...cookieUser, origin: "https://evil.example", cookie: jar, "x-csrf-token": csrf },
       body: rpc,
     });
     assert.equal(crossOrigin.status, 403);
     const noOrigin = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, cookie: `bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      headers: { ...cookieUser, cookie: jar, "x-csrf-token": csrf },
       body: rpc,
     });
     assert.equal(noOrigin.status, 403);
     const ok = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: `bp_csrf=${csrf}`, "x-csrf-token": csrf },
+      headers: { ...cookieUser, origin: "http://127.0.0.1:8788", cookie: jar, "x-csrf-token": csrf },
       body: rpc,
     });
     assert.equal(ok.status, 200);

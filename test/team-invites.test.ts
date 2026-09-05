@@ -7,7 +7,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { CSRF_COOKIE_JS } from "../src/hosted/auth-js.ts";
 import { inviteEmail } from "../src/hosted/email.ts";
+import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { INVITE_TTL_MS } from "../src/hosted/kernel-members.ts";
@@ -18,7 +20,7 @@ import { api, identityServer, signUpAndEnroll } from "./identity-harness.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function setup(limits?: { credentials: number; agents: number; members: number; calls: number }) {
+async function setup(limits?: { credentials: number; agents: number; members: number; calls: number; orgs: number }) {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "team.sqlite"));
   const emails: { to: string; subject: string; html: string }[] = [];
@@ -54,7 +56,7 @@ async function setup(limits?: { credentials: number; agents: number; members: nu
       createdAt: "2026-01-01T00:00:00.000Z",
     });
   }
-  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0 });
+  const http = createHostedServer({ kernel, host: "127.0.0.1", port: 0, authResolver: testAuthResolver });
   const addr = await http.listen();
   const base = `http://${addr.host}:${addr.port}`;
   const headers = (user: string, org = orgId) => ({
@@ -162,7 +164,7 @@ test("invite email template escapes every field", () => {
 });
 
 test("accept: page states, email mismatch 403, matching email joins, reuse 410, expiry 410", async () => {
-  const ctx = await setup({ credentials: 25, agents: 10, members: 10, calls: 5000 });
+  const ctx = await setup({ credentials: 25, agents: 10, members: 10, calls: 5000, orgs: 10 });
   try {
     const owner = ctx.headers("user_owner");
     const res = await invite(ctx.base, owner, "new@example.com", "owner");
@@ -186,7 +188,9 @@ test("accept: page states, email mismatch 403, matching email joins, reuse 410, 
     assert.match(await mismatchPage.text(), /signed in as <strong>other@example.com<\/strong>, but this invite is for <strong>new@example.com/);
 
     const matchPage = await fetch(`${ctx.base}${pagePath}`, { headers: ctx.headers("user_new", ctx.personalOrgId) });
-    assert.match(await matchPage.text(), /data-testid="accept-form"/);
+    const matchHtml = await matchPage.text();
+    assert.match(matchHtml, /data-testid="accept-form"/);
+    assert.ok(matchHtml.includes(CSRF_COOKIE_JS), "the accept script reads the CSRF cookie through the shared reader (R1-7)");
 
     const missing = await fetch(`${ctx.base}/accept-invite?token=nope`);
     assert.equal(missing.status, 404);
@@ -291,7 +295,7 @@ test("roles and removal: owner-only, the last owner cannot be demoted or removed
 });
 
 test("members plan limit counts seats and pending invites", async () => {
-  const ctx = await setup({ credentials: 25, agents: 10, members: 3, calls: 5000 });
+  const ctx = await setup({ credentials: 25, agents: 10, members: 3, calls: 5000, orgs: 10 });
   try {
     const owner = ctx.headers("user_owner");
     assert.equal((await invite(ctx.base, owner, "new@example.com")).status, 200, "third seat");
@@ -316,6 +320,8 @@ test("org switcher: store pins the session org, kernel prefers it while membersh
       mfaAt: "2026-09-04T00:00:00.000Z",
     });
     assert.equal((await store.getSession("sess_a"))?.activeOrgId, null);
+    // Memberships list oldest first by `joined_at`; join the second org later than the personal one.
+    ctx.clock.now += 60_000;
     await kernel.addMember(ctx.orgId, "user_new", "operator");
     await store.setSessionActiveOrg("sess_a", ctx.orgId);
     assert.equal((await store.getSession("sess_a"))?.activeOrgId, ctx.orgId);
