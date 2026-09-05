@@ -33,15 +33,9 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
-      # `-a` names the app explicitly so a token scoped to that app cannot deploy elsewhere
-      # and a wrong toml can never point this workflow at production.
-      - run: flyctl deploy --remote-only -c fly.staging.toml -a botpasses-staging
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      # After a failed rolling update flyctl 0.4 can leave the Machine stopped and still
-      # exit 0 ("reached stopped state" / "now in a good state"). Start it and wait until
-      # /ready answers on the Fly hostname before calling the deploy green.
-      - name: Start a stopped Machine and wait for /ready
+      # A leftover stopped Machine makes flyctl "update" it and then wait 5 minutes for
+      # HTTP checks that never run. Start it first so deploy rolls a running VM.
+      - name: Start a stopped Machine
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -63,6 +57,16 @@ jobs:
                   print(f"starting {mid} (was {state})", flush=True)
                   subprocess.check_call(["flyctl", "machine", "start", mid, "-a", "botpasses-staging"])
           PY
+      # `-a` names the app explicitly so a token scoped to that app cannot deploy elsewhere
+      # and a wrong toml can never point this workflow at production.
+      - run: flyctl deploy --remote-only -c fly.staging.toml -a botpasses-staging
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Wait until /ready answers
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
           for i in $(seq 1 30); do
             if curl -fsS -m 5 https://botpasses-staging.fly.dev/ready; then
               echo
@@ -71,6 +75,11 @@ jobs:
             fi
             sleep 2
           done
-          echo "::error::botpasses-staging.fly.dev/ready did not become 200 after start"
+          echo "::error::botpasses-staging.fly.dev/ready did not become 200"
           flyctl machine list -a botpasses-staging
           exit 1
+      - name: Fly logs on failure
+        if: failure()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: timeout 20 flyctl logs -a botpasses-staging || true
