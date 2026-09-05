@@ -356,6 +356,15 @@ export class HostedKernel {
     return needs.getNeed(this.#needHost(), id);
   }
 
+  /** The inbox row behind a `user_connect_required` result; repeats reuse the pending row. */
+  async ensureConnectNeed(input: needs.ConnectNeedInput) {
+    return needs.ensureConnectNeed(this.#needHost(), input);
+  }
+
+  async denyNeed(input: { orgId: string; actor: string; needId: string }) {
+    return needs.denyNeed(this.#needHost(), input);
+  }
+
   async listInboxNeeds(orgId: string) {
     return needs.listInboxNeeds(this.#needHost(), orgId);
   }
@@ -563,6 +572,12 @@ export class HostedKernel {
       decryptItem: (orgId, itemId) => this.decryptItem(orgId, itemId),
       createItem: (input) => this.createItem(input),
       updateItem: (input) => this.updateItem(input),
+      getPendingConnectNeed: async (orgId, needId) => {
+        const need = await this.store.getNeed(needId);
+        if (!need || need.orgId !== orgId || need.kind !== "connect" || need.status !== "pending") return undefined;
+        return need;
+      },
+      fulfillConnectNeed: (input) => needs.fulfillConnectNeed(this.#needHost(), input),
       audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),
     };
   }

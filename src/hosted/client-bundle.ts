@@ -748,6 +748,9 @@ function qs(params                                    )         {
  *   #inbox
  *   #credentials                       (aliases: #vault, empty)
  *   #credentials/item/<id>             detail drawer open
+ *   #credentials/item/<id>?connect=<provider>&agent=<clientId>&need=<needId>
+ *                                      connect dialog for the item, prefilled for that agent (the
+ *                                      link an agent's user_connect_required result carries)
  *   #agents                            (aliases: #access, #connect)
  *   #agents/<agents|approvals|sessions|activity>?agent=<id>&credential=<NAME>
  *   #account
@@ -784,6 +787,8 @@ function parseRoute(hash        )        {
     itemId: "",
     agent: query.get("agent") ?? "",
     credential: query.get("credential") ?? "",
+    connect: query.get("connect") ?? "",
+    need: query.get("need") ?? "",
     breakglass: false,
     query,
   };
@@ -820,6 +825,14 @@ function agentsHash(tab           , filter                                      
 
 function itemHash(itemId         )         {
   return itemId ? \`#credentials/item/\${encodeURIComponent(itemId)}\` : "#credentials";
+}
+
+/** The connect deep link for an item: the same shape \`connect_url\` carries to the agent. */
+function connectHash(itemId        , connect                                                     )         {
+  const p = new URLSearchParams({ connect: connect.provider });
+  if (connect.agent) p.set("agent", connect.agent);
+  if (connect.need) p.set("need", connect.need);
+  return \`\${itemHash(itemId)}?\${p.toString()}\`;
 }
 
 function routeHash(route       )         {
@@ -881,6 +894,12 @@ function describeActivity(row               , names               )         {
       return cred ? \`\${who} asked for \${cred} to be stored\` : \`\${who} asked for a credential to be stored\`;
     case "need_fulfilled":
       return cred ? \`Stored \${cred} for \${agent || "an agent"}\` : "Stored a requested credential";
+    case "need_denied":
+      return cred ? \`Denied \${who}'s request for \${cred}\` : \`Denied \${who}'s request\`;
+    case "connect_requested":
+      return cred ? \`\${who} asked for an account to be connected as \${cred}\` : \`\${who} asked for an account to be connected\`;
+    case "provider_connected":
+      return cred ? \`Connected an account as \${cred}\` : "Connected an account";
     case "token_issued":
       return agent ? \`Token issued to \${agent}\` : "Token issued";
     case "client_rotate":
@@ -1061,7 +1080,28 @@ function describeScope(scope                                , now         = Date
   return parts.join(" · ");
 }
 
+/** "<Agent> needs a <Provider> account for <ITEM>": Connect opens the item's connect dialog with the agent and need carried along. */
+function connectNeedCard(n           )           {
+  const client = n.client_name || "An agent";
+  const providerName = providerById(n.provider ?? "")?.displayName ?? "provider";
+  const item = n.source_item_name || n.suggested_name.replace(/_REFRESH$/, "") || "this credential";
+  const detail = [n.host, n.task_description].filter(Boolean).join(" · ");
+  const link = n.source_item_id && n.provider ? connectHash(n.source_item_id, { provider: n.provider, agent: n.client_id, need: n.id }) : "";
+  return html\`<article class="inbox-item" data-testid="inbox-connect-need">
+    <div class="inbox-copy">
+      <h2 class="inbox-title">\${client} needs a \${providerName} account for \${item}</h2>
+      <p>\${detail}</p>
+      <p class="inbox-meta">\${n.created_at ? html\`Asked \${timeHtml(n.created_at)} · \` : ""}\${n.expires_at ? html\`Request expires \${timeHtml(n.expires_at)} · \` : ""}The refresh token is stored as \${n.suggested_name}; the agent never sees it.</p>
+    </div>
+    <div class="inbox-actions">
+      \${link ? html\`<a class="btn btn-primary" href="\${link}" data-testid="inbox-connect">Connect \${providerName}</a>\` : html\`<span class="hint">The credential this request was for is gone.</span>\`}
+      <button type="button" class="btn-ghost" data-deny-need="\${n.id}" data-deny-label="\${client}|\${providerName}" data-testid="inbox-need-deny">Deny</button>
+    </div>
+  </article>\`;
+}
+
 function needCard(n           )           {
+  if (n.kind === "connect") return connectNeedCard(n);
   const detail = [n.host, n.task_description].filter(Boolean).join(" · ");
   return html\`<article class="inbox-item" data-testid="inbox-need">
     <div class="inbox-copy">
@@ -1232,6 +1272,21 @@ async function deny(id        , button                   )                      
   });
 }
 
+async function denyNeed(id        , button                   )                        {
+  return busy(button, async () => {
+    try {
+      const r = await api(\`/api/need-items/\${encodeURIComponent(id)}/deny\`, { method: "POST", body: "{}" });
+      if (!r.ok) return { ok: false, message: errorMessage(r, "Deny failed") };
+    } catch (err) {
+      return { ok: false, message: loadErrorText(err, "Deny failed") };
+    }
+    flash("Denied. The agent is told nothing was connected.", true);
+    await loadInbox({ force: true });
+    listeners.onChanged();
+    return { ok: true, message: "" };
+  });
+}
+
 /** \`force\` re-renders even while a limits form is open (after an approve or deny). */
 async function loadInbox(opts                      = {})                {
   const el = byId("inbox");
@@ -1287,6 +1342,9 @@ function bindInbox(on                )       {
     else if (t.dataset.deny) {
       const [client, name] = (t.dataset.denyLabel ?? "|").split("|");
       void requestDeny(t.dataset.deny, client ?? "the agent", name ?? "this credential", t);
+    } else if (t.dataset.denyNeed) {
+      const [client, provider] = (t.dataset.denyLabel ?? "|").split("|");
+      void denyNeedHandler(t.dataset.denyNeed, client ?? "the agent", provider ?? "the provider", t);
     }
   });
   el?.addEventListener("submit", (e) => {
@@ -1330,6 +1388,16 @@ function onDeny(fn                                                              
 
 async function requestDeny(id        , client        , name        , button                   )                {
   await denyHandler(id, client, name, button);
+}
+
+/** Deny on a connect card; the console wires the confirm dialog like \`onDeny\`. */
+let denyNeedHandler                                                                                             = async (id, _client, _provider, button) => {
+  const result = await denyNeed(id, button);
+  if (!result.ok) flash(result.message, false);
+};
+
+function onDenyNeed(fn                                                                                                   )       {
+  denyNeedHandler = (id, client, provider, button) => fn(id, client, provider, () => denyNeed(id, button));
 }
 
 // ---- src/hosted/client/credentials.ts ----
@@ -2351,9 +2419,28 @@ async function loadForRoute(route       )                {
 }
 
 /**
- * The credentials panel, and the drawer when the route names an item. A row click opens the
- * drawer at once from the loaded list; a deep link on a fresh page waits for the list first.
- * An id no loaded item has (deleted, or from another org) says so and returns to the list.
+ * What a \`#credentials/item/<id>\` route opens once the item is loaded: the connect dialog when
+ * the query names a provider (\`?connect=\`, the link an agent's user_connect_required result
+ * carries, or an inbox Connect button), else the detail drawer. False when no loaded item has the id.
+ */
+async function openItemRoute(route       )                   {
+  if (!route.connect) return openDrawer(route.itemId);
+  const item = findItem(route.itemId);
+  if (!item) return false;
+  const provider = connectProviderFor(item);
+  if (!provider || provider.id !== route.connect) {
+    flash(\`\${item.name} has no \${providerById(route.connect)?.displayName ?? route.connect} connect.\`, false);
+    return true;
+  }
+  await openConnect(item, provider, { agentId: route.agent, needId: route.need });
+  return true;
+}
+
+/**
+ * The credentials panel, and the drawer (or connect dialog) when the route names an item. A
+ * row click opens the drawer at once from the loaded list; a deep link on a fresh page waits
+ * for the list first. An id no loaded item has (deleted, or from another org) says so and
+ * returns to the list.
  */
 async function loadCredentials(route       )                {
   if (!route.itemId) {
@@ -2361,12 +2448,12 @@ async function loadCredentials(route       )                {
     return;
   }
   if (findItem(route.itemId)) {
-    void openDrawer(route.itemId);
+    void openItemRoute(route);
     await loadItems();
     return;
   }
   const loaded = await loadItems();
-  if (!loaded || (await openDrawer(route.itemId))) return;
+  if (!loaded || (await openItemRoute(route))) return;
   flash("That credential was not found. It may have been deleted.", false);
   navigate("#credentials");
 }
@@ -2583,7 +2670,26 @@ function bindRotate()       {
 
 /* ---------- provider user connect (items whose hosts belong to a registry provider) ---------- */
 
-function openConnect(item         , provider          )       {
+/** The agent's display name: from the loaded Agents snapshot, else one fetch, else a generic label. */
+async function agentLabel(id        )                  {
+  const known = clientName(id);
+  if (known !== id) return known;
+  try {
+    const r = await api("/api/access");
+    const found = arr(r.body.clients, isJson).find((c) => c.id === id);
+    if (found && typeof found.name === "string" && found.name) return found.name;
+  } catch {
+    // Fall through: the label is cosmetic; the id still rides on the request.
+  }
+  return "this agent";
+}
+
+/**
+ * Opens the connect dialog for an item. With \`agentId\` (an inbox card or a \`?connect=\` deep link)
+ * the "also allow" checkbox is shown checked, so the connect also grants that agent the refresh
+ * item; \`needId\` lets the callback close the inbox card.
+ */
+async function openConnect(item         , provider          , opts                                        = {})                {
   const form = byId                 ("connect-provider");
   if (!form) return;
   setFormNotice("connect-error", "", true);
@@ -2591,10 +2697,16 @@ function openConnect(item         , provider          )       {
   setField(form, "item_name", item.name);
   setField(form, "environment", item.environment || "staging");
   setField(form, "client_id", item.username ?? "");
+  setField(form, "agent_client_id", opts.agentId ?? "");
+  setField(form, "need_id", opts.needId ?? "");
   text(byId("connect-title"), \`Connect \${provider.displayName} account\`);
   text(byId("connect-provider-name"), provider.displayName);
   text(byId("connect-client-id-label"), \`\${provider.displayName} Client ID\`);
   text(byId("connect-submit"), \`Open \${provider.displayName}\`);
+  const allow = byId                  ("connect-allow-agent");
+  if (allow) allow.checked = Boolean(opts.agentId);
+  setHidden("connect-agent-row", !opts.agentId);
+  if (opts.agentId) text(byId("connect-agent-label"), \`Also allow \${await agentLabel(opts.agentId)} to use the connected account\`);
   openDialog("connect-dialog");
   byId                  ("connect-client-id")?.focus();
 }
@@ -2606,11 +2718,20 @@ function bindConnect()       {
     setFormNotice("connect-error", "", true);
     const read = (n        )         => (form.elements.namedItem(n)                           )?.value ?? "";
     const name = providerById(read("provider_id"))?.displayName ?? "provider";
+    const allowAgent = byId                  ("connect-allow-agent")?.checked === true;
+    const agentId = allowAgent ? read("agent_client_id") : "";
+    const needId = read("need_id");
     void busy(form, async () => {
       try {
         const r = await api(\`/api/integrations/\${encodeURIComponent(read("provider_id"))}/start\`, {
           method: "POST",
-          body: JSON.stringify({ item_name: read("item_name"), environment: read("environment"), client_id: read("client_id") }),
+          body: JSON.stringify({
+            item_name: read("item_name"),
+            environment: read("environment"),
+            client_id: read("client_id"),
+            ...(agentId ? { agent_client_id: agentId } : {}),
+            ...(needId ? { need_id: needId } : {}),
+          }),
         });
         const url = r.body.authorize_url;
         if (!r.ok || typeof url !== "string") {
@@ -2623,13 +2744,18 @@ function bindConnect()       {
       }
     });
   });
+  // Closing a dialog a \`?connect=\` deep link opened returns to the list, so a reload does not reopen it.
+  byId                   ("connect-dialog")?.addEventListener("close", () => {
+    if (parseRoute(location.hash).connect) navigate("#credentials");
+  });
   // The callback lands on \`#vault?connected=<provider>\` or \`#vault?connect_error=<provider>\`.
   const q = parseRoute(location.hash).query;
   const connected = q.get("connected");
   const failed = q.get("connect_error");
   if (connected) {
     const name = providerById(connected)?.displayName ?? "Account";
-    flash(\`\${name} account connected. The refresh token is stored; the model never sees it.\`, true);
+    const forAgent = q.get("agent") ? " The agent can retry its call now." : "";
+    flash(\`\${name} account connected. The refresh token is stored; the model never sees it.\${forAgent}\`, true);
   }
   if (failed) {
     const name = providerById(failed)?.displayName ?? "The provider";
@@ -2739,6 +2865,14 @@ document.addEventListener("DOMContentLoaded", () => {
       run,
     });
   });
+  onDenyNeed(async (_id, client, provider, run) => {
+    openConfirm({
+      title: \`Deny \${client}'s request to connect a \${provider} account?\`,
+      body: "No account is connected and the agent keeps only the app credential. It can ask again later.",
+      button: "Deny request",
+      run,
+    });
+  });
   const revokeGrant = (id        , client        , name        )       =>
     openConfirm({
       title: \`Revoke \${client}'s approval for \${name}?\`,
@@ -2750,7 +2884,7 @@ document.addEventListener("DOMContentLoaded", () => {
     {
       onEdit: (item) => openStore(item),
       onRotate: openRotate,
-      onConnect: openConnect,
+      onConnect: (item, provider) => void openConnect(item, provider),
       onDelete: (item) =>
         openConfirm({
           title: \`Delete \${item.name}?\`,
@@ -3562,6 +3696,15 @@ async function loadNeed()                {
       return;
     }
     const need = r.body;
+    if (need.kind === "connect") {
+      // A connect need has nothing to type in: the operator connects the account from the inbox card.
+      render(
+        details,
+        html\`<div class="banner">\${str(need.client_name, "An agent")} needs a connected account, not a typed secret</div>
+        <p>Open the <a href="/console#inbox">Botpasses inbox</a> and use Connect on its card. Never paste a token here.</p>\`,
+      );
+      return;
+    }
     const pending = need.status === "pending";
     const heading = pending ? \`\${str(need.client_name, "An agent")} needs a credential\` : "This request is no longer pending";
     const task = str(need.task_description);

@@ -4,6 +4,9 @@
  *   #inbox
  *   #credentials                       (aliases: #vault, empty)
  *   #credentials/item/<id>             detail drawer open
+ *   #credentials/item/<id>?connect=<provider>&agent=<clientId>&need=<needId>
+ *                                      connect dialog for the item, prefilled for that agent (the
+ *                                      link an agent's user_connect_required result carries)
  *   #agents                            (aliases: #access, #connect)
  *   #agents/<agents|approvals|sessions|activity>?agent=<id>&credential=<NAME>
  *   #account
@@ -21,6 +24,10 @@ export type Route = {
   itemId: string;
   agent: string;
   credential: string;
+  /** Provider id when the route opens the connect dialog for `itemId`; empty otherwise. */
+  connect: string;
+  /** The inbox connect need the dialog answers; empty when none. */
+  need: string;
   breakglass: boolean;
   query: URLSearchParams;
 };
@@ -53,6 +60,8 @@ export function parseRoute(hash: string): Route {
     itemId: "",
     agent: query.get("agent") ?? "",
     credential: query.get("credential") ?? "",
+    connect: query.get("connect") ?? "",
+    need: query.get("need") ?? "",
     breakglass: false,
     query,
   };
@@ -89,6 +98,14 @@ export function agentsHash(tab: AgentsTab, filter: { agent?: string; credential?
 
 export function itemHash(itemId?: string): string {
   return itemId ? `#credentials/item/${encodeURIComponent(itemId)}` : "#credentials";
+}
+
+/** The connect deep link for an item: the same shape `connect_url` carries to the agent. */
+export function connectHash(itemId: string, connect: { provider: string; agent?: string; need?: string }): string {
+  const p = new URLSearchParams({ connect: connect.provider });
+  if (connect.agent) p.set("agent", connect.agent);
+  if (connect.need) p.set("need", connect.need);
+  return `${itemHash(itemId)}?${p.toString()}`;
 }
 
 export function routeHash(route: Route): string {

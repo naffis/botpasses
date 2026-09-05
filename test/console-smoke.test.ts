@@ -3,8 +3,10 @@
  * credential, issues a token, requests a grant over MCP, approves from the Inbox, revokes from
  * Agents, and signs out; it also checks Cancel closes dialogs and the Actions column is visible
  * at 1280 and 390 px. The second completes a real OAuth consent (DCR, /authorize, Allow, code on
- * the redirect URI, token exchange) and re-enrolls the authenticator from the console. Both skip
- * with a reason when the preinstalled Chromium is absent.
+ * the redirect URI, token exchange) and re-enrolls the authenticator from the console. The third
+ * drives an agent's user_connect_required handoff: the Inbox card with its Connect button, the
+ * connect dialog it opens (agent checkbox checked, Client ID prefilled), the same dialog from the
+ * connect_url deep link, and Deny. All skip with a reason when the preinstalled Chromium is absent.
  */
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
@@ -408,6 +410,102 @@ test("console smoke: OAuth consent in Chromium lands on the redirect URI with a 
   } finally {
     await browser.close();
     await target.close();
+    await server.close();
+  }
+});
+
+/** The JSON a tools/call answered with. */
+function toolJson(rpc: Record<string, unknown>): Record<string, unknown> {
+  const result = rpc.result as { content?: { text?: string }[] } | undefined;
+  return JSON.parse(result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+}
+
+async function expectConnectDialogForAgent(page: PwPage, clientId: string): Promise<void> {
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5_000 });
+  assert.equal(await page.locator("#connect-client-id").inputValue(), clientId, "the Client ID comes from the item's username");
+  assert.equal(await page.locator("#connect-agent-row:not([hidden])").count(), 1, "the agent row is shown");
+  assert.equal(await page.evaluate<boolean>("document.getElementById('connect-allow-agent').checked"), true, "allow the agent is checked by default");
+  await page.waitForFunction("() => /Also allow cursor to use the connected account/.test(document.getElementById('connect-agent-label')?.textContent || '')");
+  assert.equal(((await page.locator("#connect-title").textContent()) ?? "").trim(), "Connect Spotify account");
+}
+
+test("console smoke: user_connect_required lands in the Inbox; Connect and the deep link open the dialog prefilled for the agent; Deny settles it", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS * 2 }, async () => {
+  const server = await bootConsoleServer();
+  const browser = await launchChromium();
+  const errors: string[] = [];
+  const clientId = "97540628b46c43059710d66714d75870";
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    page.on("pageerror", (e) => errors.push(e.message));
+    await signUpInBrowser(page, server, `connect-${Date.now()}@example.com`);
+
+    // Store the app credential: Kind "Client ID and secret" shows the Client ID field.
+    await page.waitForSelector("[data-testid=items-empty]:not([hidden])");
+    await page.click("[data-testid=open-store]");
+    await page.waitForSelector("#store-dialog[open]");
+    await page.fill("#store-name", "spotify secret");
+    await page.selectOption("#store-kind", "client_secret");
+    await page.waitForSelector("#store-username:not([hidden])");
+    await page.fill("#store-username-input", clientId);
+    await page.fill("#store-value", "spotify_client_secret_smoke_1234");
+    await page.fill("#store-hosts", "api.spotify.com, accounts.spotify.com");
+    await page.click("#store-submit");
+    await page.waitForSelector("tr[data-item]");
+    await page.waitForSelector("#store-dialog:not([open])", { state: "attached" });
+    await page.waitForSelector("[data-testid=item-connect]");
+
+    // An agent gets a token, is approved on the client secret, and calls a user-only path.
+    await page.click("[data-testid=nav-agents]");
+    await page.fill("#issue-name", "cursor");
+    await page.click("[data-testid=issue-token]");
+    await page.waitForSelector("#token-dialog[open]");
+    const token = ((await page.locator("#token-value").textContent()) ?? "").trim();
+    await page.click("[data-testid=token-saved]");
+    const asked = await mcpCall(server.base, token, "request_grant", { item_name: "SPOTIFY_SECRET", task_description: "Show my profile" });
+    assert.equal(asked.error, undefined, JSON.stringify(asked));
+    await page.click("[data-testid=nav-inbox]");
+    await page.waitForSelector("[data-testid=inbox-approve]");
+    await page.click("[data-testid=inbox-approve]");
+    await page.waitForSelector("[data-testid=inbox-approved]");
+    const me = toolJson(await mcpCall(server.base, token, "http_request", { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" }));
+    assert.equal(me.status, "user_connect_required", JSON.stringify(me));
+    const connectUrl = new URL(String(me.connect_url));
+
+    // The Inbox card names the agent, the provider, and the item, and offers Connect.
+    await page.reload();
+    await page.waitForSelector("[data-testid=inbox-connect-need]");
+    const title = (await page.locator("[data-testid=inbox-connect-need] .inbox-title").first().textContent()) ?? "";
+    assert.match(title, /cursor needs a Spotify account for SPOTIFY_SECRET/);
+    await within(page, "[data-testid=inbox-connect]", 1280);
+    await page.click("[data-testid=inbox-connect]");
+    await expectConnectDialogForAgent(page, clientId);
+    assert.match(page.url(), /#credentials\/item\/.*connect=spotify.*agent=.*need=nid_/);
+    await page.click("#connect-dialog [data-close]");
+    await page.waitForSelector("#connect-dialog:not([open])", { state: "attached" });
+
+    // The connect_url the agent got opens the same dialog on a fresh page load, once the list is loaded.
+    await page.goto("about:blank");
+    await page.goto(`${server.base}${connectUrl.pathname}${connectUrl.hash}`);
+    await expectConnectDialogForAgent(page, clientId);
+    await page.click("#connect-dialog [data-close]");
+    await page.waitForSelector("#connect-dialog:not([open])", { state: "attached" });
+
+    // Deny from the card: specific confirm copy, then the card is gone and the need is denied.
+    await page.goto(`${server.base}/console#inbox`);
+    await page.waitForSelector("[data-testid=inbox-need-deny]");
+    await page.click("[data-testid=inbox-need-deny]");
+    await page.waitForSelector("#confirm[open]");
+    assert.equal(await page.locator("#confirm-title").textContent(), "Deny cursor's request to connect a Spotify account?");
+    await page.click("#confirm-yes");
+    await page.waitForSelector("#confirm:not([open])", { state: "attached" });
+    await page.waitForSelector("[data-testid=inbox-connect-need]", { state: "detached" });
+    const inbox = await page.evaluate<{ needs: unknown[] }>("fetch('/api/inbox', { credentials: 'include' }).then((r) => r.json())");
+    assert.deepEqual(inbox.needs, []);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally {
+    await browser.close();
     await server.close();
   }
 });

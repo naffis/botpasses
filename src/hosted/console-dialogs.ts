@@ -104,8 +104,14 @@ function connectDialog(): string {
       <input type="hidden" name="provider_id" />
       <input type="hidden" name="item_name" />
       <input type="hidden" name="environment" />
+      <input type="hidden" name="agent_client_id" />
+      <input type="hidden" name="need_id" />
       <label for="connect-client-id"><span id="connect-client-id-label">Client ID</span></label>
       <input id="connect-client-id" name="client_id" required autocomplete="off" />
+      <div id="connect-agent-row" hidden>
+        <label class="inline-select" for="connect-allow-agent"><input type="checkbox" id="connect-allow-agent" name="allow_agent" checked data-testid="connect-allow-agent" /> <span id="connect-agent-label">Also allow this agent to use the connected account</span></label>
+        <p class="hint field-hint">The agent gets a standing approval on the refresh token, so its next call goes through without another inbox card. Uncheck to approve it by hand later.</p>
+      </div>
       <div class="dialog-actions">
         <button type="submit" id="connect-submit" class="btn-primary">Continue</button>
         <button type="button" class="btn-ghost" data-close>Cancel</button>

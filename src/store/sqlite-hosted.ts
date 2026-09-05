@@ -28,6 +28,7 @@ import {
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
   HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
+  HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_SQLITE,
@@ -62,6 +63,7 @@ import {
   mapUser,
   mapVault,
   NEED_INSERT_COLUMNS,
+  NEED_INSERT_COUNT,
   needValues,
   placeholders,
 } from "./rows.ts";
@@ -96,6 +98,7 @@ const SQLITE_ALTERS = [
   HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
   HOSTED_SCHEMA_V10_ALTER_SQLITE,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
+  HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE,
 ];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
@@ -808,7 +811,7 @@ export class SqliteHostedStore implements VaultStore {
   async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
     try {
       this.#db
-        .prepare(`INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(13, "sqlite")})`)
+        .prepare(`INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(NEED_INSERT_COUNT, "sqlite")})`)
         .run(...needValues(row));
       return row;
     } catch (err) {
@@ -861,6 +864,18 @@ export class SqliteHostedStore implements VaultStore {
 
   async cancelNeed(id: string): Promise<void> {
     this.#db.prepare("UPDATE need_items SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(id);
+  }
+
+  async denyNeed(id: string): Promise<boolean> {
+    const r = this.#db.prepare("UPDATE need_items SET status = 'denied' WHERE id = ? AND status = 'pending'").run(id);
+    return Number(r.changes) === 1;
+  }
+
+  async fulfillNeedWithItem(id: string, itemId: string, fulfilledAt: string): Promise<boolean> {
+    const r = this.#db
+      .prepare("UPDATE need_items SET status = 'fulfilled', item_id = ?, fulfilled_at = ? WHERE id = ? AND status = 'pending'")
+      .run(itemId, fulfilledAt, id);
+    return Number(r.changes) === 1;
   }
 
   async refreshNeedExpires(id: string, expiresAt: string): Promise<void> {
@@ -1305,7 +1320,7 @@ export class SqliteHostedStore implements VaultStore {
       approvalChallenges: run("DELETE FROM approval_challenges WHERE expires_at < ?", nowIso),
       needItems: run(
         `DELETE FROM need_items
-         WHERE (status = 'cancelled' AND created_at < ?)
+         WHERE (status IN ('cancelled', 'denied') AND created_at < ?)
             OR (status = 'pending' AND expires_at < ?)`,
         dayAgo,
         dayAgo,

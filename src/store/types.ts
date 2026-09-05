@@ -260,8 +260,15 @@ export type VaultStore = {
   }): Promise<NeedItemRecord | undefined>;
   listPendingNeeds(orgId: string): Promise<NeedItemRecord[]>;
   cancelNeed(id: string): Promise<void>;
+  /** The operator refused the request. True when a pending row became `denied`. */
+  denyNeed(id: string): Promise<boolean>;
   refreshNeedExpires(id: string, expiresAt: string): Promise<void>;
   persistFulfill(input: PersistFulfillInput): Promise<void>;
+  /**
+   * A `connect` need is fulfilled by the item the provider callback stored (no grant row: the
+   * callback writes a standing policy instead). True when a pending row became `fulfilled`.
+   */
+  fulfillNeedWithItem(id: string, itemId: string, fulfilledAt: string): Promise<boolean>;
 
   insertUser(row: UserRecord): Promise<void>;
   getUser(id: string): Promise<UserRow | undefined>;

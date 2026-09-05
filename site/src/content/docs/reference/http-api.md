@@ -63,9 +63,10 @@ Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end 
 | DELETE | `/api/items/:id` | Removes the credential and its approvals |
 | POST | `/api/folders` | `{ "environment", "name" }` |
 | GET | `/api/need-items/:id` | Operator only. Metadata of a pending collect request. Unauthenticated, or a request from another organization, is 404 |
-| POST | `/api/need-items/:id/fulfill` | `{ "value", "name?", "allowed_hosts?", "inject?", "kind?", "username?" }`. Stores the value from the collect page and activates the requesting agent's approval |
+| POST | `/api/need-items/:id/fulfill` | `{ "value", "name?", "allowed_hosts?", "inject?", "kind?", "username?" }`. Stores the value from the collect page and activates the requesting agent's approval. A `connect` request (an agent needs a provider account) is 409: it is answered from the Inbox card, not typed in |
+| POST | `/api/need-items/:id/deny` | Denies a pending request from the Inbox |
 | GET | `/collect/:id` | HTML shell for the collect page. Details load only for a signed-in operator |
-| POST | `/api/integrations/:provider/start` | `:provider` is `spotify`, `github`, `google`, `slack`, or `stripe` (unknown is 404). `{ "item_name", "environment?", "client_id?", "redirect_uri?", "agent_client_id?" }`. Returns `authorize_url`, `redirect_uri`, and `provider` for a user connect. `agent_client_id` names one agent that gets a standing approval on the refresh credential after connect |
+| POST | `/api/integrations/:provider/start` | `:provider` is `spotify`, `github`, `google`, `slack`, or `stripe` (unknown is 404). `{ "item_name", "environment?", "client_id?", "redirect_uri?", "agent_client_id?", "need_id?" }`. Returns `authorize_url`, `redirect_uri`, and `provider` for a user connect. `agent_client_id` names one agent that gets a standing approval on the refresh credential after connect; `need_id` closes the Inbox request the connect answers |
 | GET | `/integrations/:provider/callback` | Operator cookie, authenticator step passed. Exchanges the code, stores the refresh token as `<ITEM>_REFRESH`, redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>&reason=<code>` (`state_expired`, `provider_denied`, `exchange_failed`, or `no_refresh_token`). `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `spotify` as the provider |
 
 Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 400.
@@ -83,7 +84,7 @@ Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 
 | POST | `/api/grants/:id/revoke` | Status becomes `revoked`. The row stays listed |
 | POST | `/api/grants/approve-by-code` | `{ "code" }`, 8 digits. Reuse is 409, expired is 410 |
 | GET, POST | `/approve?token=...` | Email approval link. Operator session required; the token is single use |
-| GET | `/api/inbox` | Pending approvals and collect requests |
+| GET | `/api/inbox` | Pending approvals and requests. Each request has a `kind`: `secret` (typed on the collect page) or `connect` (an agent needs a provider account for a stored client secret; the card's Connect button opens the connect dialog with that agent pre-selected) |
 | GET | `/api/audit` | Actions and names. Optional `client_id` and `item_name` filters. No values |
 
 Policies: `prompt` (one successful call, then consumed; a failed call keeps it usable), `session` (8 hours), `item_standing`, `folder_standing`.

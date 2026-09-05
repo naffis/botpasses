@@ -276,6 +276,46 @@ test("G3 (local): a once grant is spent by any origin answer and handed back onl
   }
 });
 
+test("INF-49 (local): a provider user path with only a client_credentials item is refused before dialing, the once grant stays active, and the hint names vault set", async () => {
+  const { vault, home } = makeVault();
+  let sent = 0;
+  const fetchImpl: typeof fetch = async () => {
+    sent += 1;
+    return new Response("{}", { status: 200 });
+  };
+  const session = newMcpSession();
+  session.agentId = "cursor";
+  const ctx = { session, fetchImpl, ...origin };
+  try {
+    vault.setSecret("SPOTIFY_SECRET", CANARY, { allowedHosts: ["api.spotify.com", "accounts.spotify.com"], inject: "client_credentials", username: "cid_public" });
+    vault.approveGrant({ secretName: "SPOTIFY_SECRET", agentId: "cursor", toolId: "http_request", scope: "once" });
+    const me = parsed(await callMcpTool(vault, "http_request", { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" }, ctx));
+    assert.equal(me.status, "user_connect_required", JSON.stringify(me));
+    assert.equal(me.provider, "spotify");
+    assert.equal(me.item_name, "SPOTIFY_SECRET");
+    assert.equal(me.refresh_item_name, "SPOTIFY_REFRESH");
+    assert.equal(me.connect_url, undefined, "the local console has no connect flow");
+    assert.match(String(me.hint), /vault set SPOTIFY_REFRESH --host api\.spotify\.com,accounts\.spotify\.com --inject refresh/);
+    assert.deepEqual(me.retry, { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET" });
+    assert.equal(sent, 0, "nothing was sent");
+    assert.equal(vault.listGrants().find((g) => g.secretName === "SPOTIFY_SECRET")?.status, "active", "the once grant is not spent");
+    assert.ok(vault.listAudit().some((a) => a.action === "inject_denied" && a.secretName === "SPOTIFY_SECRET"));
+    assert.ok(!JSON.stringify(me).includes(CANARY));
+
+    // A public path goes out as before; with the refresh item stored the user path is no longer refused.
+    const search = parsed(await callMcpTool(vault, "http_request", { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/search?q=x" }, ctx));
+    assert.equal(search.origin_status, 200);
+    assert.equal(sent, 1);
+    vault.setSecret("SPOTIFY_REFRESH", "refresh_value_CANARY", { allowedHosts: ["api.spotify.com", "accounts.spotify.com"], inject: "refresh", username: "cid_public" });
+    vault.approveGrant({ secretName: "SPOTIFY_SECRET", agentId: "cursor", toolId: "http_request", scope: "session" });
+    const dry = parsed(await callMcpTool(vault, "http_request", { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me", dry_run: true }, ctx));
+    assert.equal(dry.would_send, true, "with <ITEM>_REFRESH stored the call is not refused");
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
 test("local http_request calls the origin with the credential and never shows it in the result", async () => {
   const { vault, home } = makeVault();
   const seen: { url: string; auth: string }[] = [];

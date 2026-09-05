@@ -26,6 +26,7 @@ import {
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG,
   HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
+  HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG,
   HOSTED_SCHEMA_OAUTH_ALTER_PG,
   HOSTED_SCHEMA_SCOPE_ALTER_PG,
   HOSTED_SCHEMA_SQLITE,
@@ -60,6 +61,7 @@ import {
   mapUser,
   mapVault,
   NEED_INSERT_COLUMNS,
+  NEED_INSERT_COUNT,
   needValues,
   placeholders,
 } from "./rows.ts";
@@ -167,6 +169,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_V10_INDEXES);
     await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
+    await this.#pool.query(HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
@@ -189,7 +192,7 @@ export class PostgresStore implements VaultStore {
       approvalChallenges: await count("DELETE FROM approval_challenges WHERE expires_at < $1", [nowIso]),
       needItems: await count(
         `DELETE FROM need_items
-         WHERE (status = 'cancelled' AND created_at < $1)
+         WHERE (status IN ('cancelled', 'denied') AND created_at < $1)
             OR (status = 'pending' AND expires_at < $1)`,
         [dayAgo],
       ),
@@ -829,7 +832,7 @@ export class PostgresStore implements VaultStore {
   async insertPendingNeed(row: NeedItemRecord): Promise<NeedItemRecord> {
     try {
       await this.#pool.query(
-        `INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(13, "pg")})`,
+        `INSERT INTO need_items (${NEED_INSERT_COLUMNS}) VALUES (${placeholders(NEED_INSERT_COUNT, "pg")})`,
         needValues(row),
       );
       return row;
@@ -880,6 +883,19 @@ export class PostgresStore implements VaultStore {
       "UPDATE need_items SET status='cancelled' WHERE id=$1 AND status='pending'",
       [id],
     );
+  }
+
+  async denyNeed(id: string): Promise<boolean> {
+    const r = await this.#pool.query("UPDATE need_items SET status='denied' WHERE id=$1 AND status='pending'", [id]);
+    return r.rowCount === 1;
+  }
+
+  async fulfillNeedWithItem(id: string, itemId: string, fulfilledAt: string): Promise<boolean> {
+    const r = await this.#pool.query(
+      "UPDATE need_items SET status='fulfilled', item_id=$1, fulfilled_at=$2 WHERE id=$3 AND status='pending'",
+      [itemId, fulfilledAt, id],
+    );
+    return r.rowCount === 1;
   }
 
   async refreshNeedExpires(id: string, expiresAt: string): Promise<void> {

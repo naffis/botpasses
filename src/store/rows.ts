@@ -160,6 +160,9 @@ export function mapNeed(r: Row): NeedItemRecord {
     expiresAt: String(r.expires_at),
     createdAt: String(r.created_at),
     fulfilledAt: text(r.fulfilled_at),
+    kind: r.kind === "connect" ? "connect" : "secret",
+    provider: text(r.provider),
+    sourceItemId: text(r.source_item_id),
   };
 }
 
@@ -280,7 +283,10 @@ export function itemValues(row: ItemRecord): (string | number | null)[] {
 }
 
 export const NEED_INSERT_COLUMNS =
-  "id, org_id, client_id, environment_id, suggested_name, host, task_description, status, item_id, grant_id, expires_at, created_at, fulfilled_at";
+  "id, org_id, client_id, environment_id, suggested_name, host, task_description, status, item_id, grant_id, expires_at, created_at, fulfilled_at, kind, provider, source_item_id";
+
+/** How many placeholders `NEED_INSERT_COLUMNS` takes. */
+export const NEED_INSERT_COUNT = 16;
 
 export function needValues(row: NeedItemRecord): (string | null)[] {
   return [
@@ -297,6 +303,9 @@ export function needValues(row: NeedItemRecord): (string | null)[] {
     row.expiresAt,
     row.createdAt,
     row.fulfilledAt,
+    row.kind,
+    row.provider,
+    row.sourceItemId,
   ];
 }
 
