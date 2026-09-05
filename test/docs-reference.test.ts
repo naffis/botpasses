@@ -62,3 +62,31 @@ test("MCP and HTTP reference docs name hosted tools and forbid get_secret", () =
   assert.doesNotMatch(publicMcp, /^\| `environment` \|/m, "no environment argument row in any tool table");
   assert.match(publicMcp, /there is no environment argument/);
 });
+
+test("site docs, the HTTP reference, and the README describe the local CLI and server as they are", () => {
+  // The local stdio server has the same five tools as hosted, including http_request.
+  for (const rel of ["site/src/content/docs/install.md", "site/src/content/docs/connect/cursor.md", "site/src/content/docs/connect/claude-code.md"]) {
+    const text = read(rel);
+    assert.doesNotMatch(text, /`list_secrets`, `request_grant`, and `list_grants`/, `${rel} lists the old local tool names`);
+    assert.doesNotMatch(text, /no `http_request`/, `${rel} says the local server has no http_request`);
+    assert.match(text, /`http_request`/, rel);
+  }
+  // vault serve serves /api/items next to /api/secrets.
+  for (const rel of ["docs/reference/http-api.md", "site/src/content/docs/reference/http-api.md"]) {
+    const text = read(rel);
+    const local = text.slice(text.search(/^## Local/m));
+    assert.ok(local.length > 0, `${rel} has a local section`);
+    assert.match(local, /`\/api\/items`/, `${rel} lists /api/items on the local plane`);
+    assert.doesNotMatch(local, /no `\/api\/items`/i, `${rel} denies /api/items on the local plane`);
+  }
+  // --ttl belongs to --session; the scope flags exclude each other; per-command help exists.
+  const cli = read("site/src/content/docs/reference/cli.md");
+  assert.match(cli, /\[--once \\\| --session \[--ttl 8h\]\]/);
+  assert.match(cli, /`--ttl` applies to `--session` only/);
+  assert.match(cli, /--user-jwt=TOKEN/);
+  assert.match(cli, /`vault <command> --help`/);
+  const readme = read("README.md");
+  assert.doesNotMatch(readme, /^\| `list_secrets` \|/m, "README local tool table names the current tools");
+  assert.match(readme, /^\| `http_request` \|/m);
+  assert.match(readme, /\[--once\\\|--session \[--ttl 8h\]\]/);
+});

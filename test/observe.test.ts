@@ -49,12 +49,16 @@ test("logRequest writes method, path without query, status, ms, request_id", () 
   assert.ok(!JSON.stringify(line).includes("123456"));
 });
 
-test("requestIdFrom reuses a well-formed inbound id and mints otherwise", () => {
-  assert.equal(requestIdFrom({ "x-request-id": "fly-abc.123:z" }), "fly-abc.123:z");
-  assert.equal(requestIdFrom({ "x-request-id": ["first", "second"] }), "first");
-  assert.match(requestIdFrom({}), /^[0-9a-f-]{36}$/);
-  assert.match(requestIdFrom({ "x-request-id": "bad id with spaces" }), /^[0-9a-f-]{36}$/);
-  assert.match(requestIdFrom({ "x-request-id": "x".repeat(200) }), /^[0-9a-f-]{36}$/);
+test("requestIdFrom reuses a well-formed Fly-Request-Id only on Fly, never a client x-request-id, and mints otherwise", () => {
+  assert.equal(requestIdFrom({ "fly-request-id": "fly-abc.123:z" }, true), "fly-abc.123:z");
+  assert.equal(requestIdFrom({ "fly-request-id": ["first", "second"] }, true), "first");
+  assert.match(requestIdFrom({}, true), /^[0-9a-f-]{36}$/);
+  assert.match(requestIdFrom({ "fly-request-id": "bad id with spaces" }, true), /^[0-9a-f-]{36}$/);
+  assert.match(requestIdFrom({ "fly-request-id": "x".repeat(200) }, true), /^[0-9a-f-]{36}$/);
+  // Off Fly the Fly header is whatever the client sent; and x-request-id is client-chosen anywhere.
+  assert.match(requestIdFrom({ "fly-request-id": "fly-abc.123:z" }, false), /^[0-9a-f-]{36}$/);
+  assert.match(requestIdFrom({ "x-request-id": "chosen-by-client" }, true), /^[0-9a-f-]{36}$/);
+  assert.match(requestIdFrom({ "x-request-id": "chosen-by-client" }, false), /^[0-9a-f-]{36}$/);
 });
 
 test("logAuthEvent hashes the email and never logs the code", () => {

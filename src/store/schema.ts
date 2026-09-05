@@ -234,10 +234,16 @@ CREATE INDEX IF NOT EXISTS email_otp_challenges_email ON email_otp_challenges (e
 CREATE INDEX IF NOT EXISTS backup_codes_user ON backup_codes (user_id);
 `;
 
-/** Indexes on columns added by the identity ALTERs. Run after those ALTERs on both stores. */
+/**
+ * Indexes on columns added by the identity ALTERs. Run after those ALTERs on both stores.
+ * `clients_oauth_client_id` and `org_members_org` ship in migrations/003_identity.sql; they are
+ * listed here so the migrations and the bootstrap create the same set.
+ */
 export const HOSTED_SCHEMA_IDENTITY_INDEXES = `
 CREATE UNIQUE INDEX IF NOT EXISTS clients_hashed_secret ON clients (hashed_secret) WHERE hashed_secret IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS clients_org_oauth ON clients (org_id, oauth_client_id) WHERE oauth_client_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS clients_oauth_client_id ON clients (oauth_client_id);
+CREATE INDEX IF NOT EXISTS org_members_org ON org_members (org_id);
 `;
 
 /**
@@ -411,4 +417,45 @@ ALTER TABLE org_members ADD COLUMN joined_at TEXT;
 export const HOSTED_SCHEMA_TEAM_ALTER_PG = `
 ALTER TABLE operator_sessions ADD COLUMN IF NOT EXISTS active_org_id TEXT;
 ALTER TABLE org_members ADD COLUMN IF NOT EXISTS joined_at TEXT;
+`;
+
+/**
+ * Migration 010. `orgs.created_by` is the provisioning user (null for rows written before the
+ * column). `items.aad_version` is 0 until the boot-time rebind has verified or re-encrypted the
+ * envelope under the item-bound AAD, then 1; new rows are written as 1. Expand-only; mirrored
+ * by migrations/010_org_creator_item_aad_indexes.sql. SQLite splits on ";" and tolerates
+ * "duplicate column".
+ */
+export const HOSTED_SCHEMA_V10_ALTER_SQLITE = `
+ALTER TABLE orgs ADD COLUMN created_by TEXT;
+ALTER TABLE items ADD COLUMN aad_version INTEGER NOT NULL DEFAULT 0;
+`;
+
+export const HOSTED_SCHEMA_V10_ALTER_PG = `
+ALTER TABLE orgs ADD COLUMN IF NOT EXISTS created_by TEXT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS aad_version INTEGER NOT NULL DEFAULT 0;
+`;
+
+/** Indexes on the 010 columns plus the grant sweep index. Run after `HOSTED_SCHEMA_V10_ALTER_*`. */
+export const HOSTED_SCHEMA_V10_INDEXES = `
+CREATE INDEX IF NOT EXISTS orgs_created_by ON orgs (created_by) WHERE created_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS items_aad_legacy ON items (aad_version) WHERE aad_version = 0;
+CREATE INDEX IF NOT EXISTS grants_status_settled ON grants (status, created_at);
+`;
+
+/**
+ * `access_events.grant_id`: the oidc-provider grant an OAuth token was issued under, so
+ * revoking a refresh token (RFC 7009, or reuse detection) marks its sibling access tokens.
+ * Null for machine bearers and operator sessions. Mirrored by migrations/012_access_events_grant_id.sql.
+ */
+export const HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE = `
+ALTER TABLE access_events ADD COLUMN grant_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG = `
+ALTER TABLE access_events ADD COLUMN IF NOT EXISTS grant_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_LEDGER_GRANT_INDEXES = `
+CREATE INDEX IF NOT EXISTS access_events_grant ON access_events (grant_id) WHERE grant_id IS NOT NULL;
 `;

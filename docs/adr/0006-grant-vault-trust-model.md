@@ -5,6 +5,8 @@ Renumbered from 0003 on 2026-09-04; the number collided with [0003-first-party-o
 - Status: accepted
 - Date: 2026-08-31
 
+The tool named `http.request` below is `http_request` today; the dotted form survives only as an alias.
+
 ## Context
 
 Operators will store live API keys in Botpasses. Human password managers (1Password, Bitwarden, LastPass) encrypt in the client so the vendor never holds the key. Hosted Botpasses injects credentials via `http.request`, `vault run`, and trusted `POST /runtime/resolve`. The Fly process must decrypt to attach `Authorization`. A claim that "even we cannot read your keys" would be false the first time an agent calls Stripe.

@@ -68,7 +68,7 @@ test("identity on Postgres: enroll, pending session rotation, lockout, backup co
     return m[1];
   };
   try {
-    const pending = await identityA.verifyOtp(email, await otpFor("203.0.113.1"), { secure: false });
+    const pending = await identityA.verifyOtp(email, await otpFor("203.0.113.1"), { secure: false }, "203.0.113.1");
     const pendingHash = hashToken(pending.sessionToken);
     assert.equal((await store.getSession(pendingHash))?.mfaAt, null);
 
@@ -85,7 +85,7 @@ test("identity on Postgres: enroll, pending session rotation, lockout, backup co
 
     // Lockout is persisted in the users row.
     clock.now += 30_000;
-    const stray = await identityA.verifyOtp(email, await otpFor("203.0.113.2"), { secure: false });
+    const stray = await identityA.verifyOtp(email, await otpFor("203.0.113.2"), { secure: false }, "203.0.113.2");
     const strayHash = hashToken(stray.sessionToken);
     let last = 0;
     for (let i = 0; i < TOTP_MAX_FAILURES; i += 1) {

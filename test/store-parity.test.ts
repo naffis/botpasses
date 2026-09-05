@@ -11,6 +11,7 @@ import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import type { AccessEventRecord, UserRecord } from "../src/hosted-types.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { PostgresStore } from "../src/store/postgres.ts";
+import { ITEM_AAD_VERSION } from "../src/store/rows.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import type { OperatorSessionRow, VaultStore } from "../src/store/types.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
@@ -223,7 +224,8 @@ for (const backend of backends) {
       const oauth = await kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging" });
       assert.equal((await store.findClientByOrgAndOauthId(orgId, id("dcr")))?.id, oauth.id);
       await store.setClientRevoked(oauth.id, "2026-01-01T00:00:00.000Z");
-      const revived = await kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging" });
+      await assert.rejects(kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging" }));
+      const revived = await kernel.ensureModelClient({ orgId, clerkOauthUserId: id("dcr"), name: "oauth-agent", environment: "staging", reactivateRevoked: true });
       assert.equal(revived.id, oauth.id);
       assert.equal(revived.revokedAt, null);
       assert.equal(await store.findClientByOrgAndOauthId(id("other-org"), id("dcr")), undefined);
@@ -292,6 +294,121 @@ for (const backend of backends) {
     }
   });
 
+  test(`[${backend.name}] atomic auth counters: OTP attempts, TOTP failures and lock, replay step, single-use backup code`, async () => {
+    const { store, done } = await backend.open();
+    try {
+      const id = ids("at");
+      const userId = id("user");
+      await store.insertUser(user(userId, `${id("u")}@example.com`));
+      const email = `${id("otp")}@example.com`;
+      await store.insertEmailOtp({
+        id: id("challenge"),
+        email,
+        codeScrypt: "00:00",
+        expiresAt: "2026-01-01T00:10:00.000Z",
+        attempts: 0,
+        sentAt: "2026-01-01T00:00:00.000Z",
+      });
+      const now = "2026-01-01T00:01:00.000Z";
+      const otpClaims = await Promise.all([1, 2, 3, 4, 5, 6].map(() => store.claimOtpAttempt(id("challenge"), now, 5)));
+      assert.deepEqual(
+        otpClaims.filter((n) => n !== undefined).sort(),
+        [1, 2, 3, 4, 5],
+        "five claims each get their own slot (in any order under concurrency)",
+      );
+      assert.equal(otpClaims.filter((n) => n === undefined).length, 1, "the sixth is refused");
+      assert.equal(await store.claimOtpAttempt(id("challenge"), "2026-01-01T00:11:00.000Z", 50), undefined, "expired");
+      assert.equal(await store.claimOtpAttempt(id("missing"), now, 5), undefined);
+      // A resend expires the previous challenge in the same instant; the live one is the latest.
+      await store.updateEmailOtp({ id: id("challenge"), email, codeScrypt: "00:00", expiresAt: now, attempts: 5, sentAt: now });
+      await store.insertEmailOtp({ id: id("resend"), email, codeScrypt: "11:11", expiresAt: "2026-01-01T00:11:00.000Z", attempts: 0, sentAt: now });
+      assert.equal((await store.latestEmailOtp(email))?.id, id("resend"));
+
+      // TOTP: the charge restarts at 1 after an expired lock and is refused while locked.
+      const claims = await Promise.all(Array.from({ length: 3 }, () => store.claimTotpAttempt(userId, now)));
+      assert.deepEqual([...claims].sort(), [1, 2, 3]);
+      await store.lockTotp(userId, "2026-01-01T00:16:00.000Z");
+      assert.equal(await store.claimTotpAttempt(userId, now), undefined, "locked");
+      assert.equal(await store.claimTotpAttempt(userId, "2026-01-01T00:16:00.000Z"), 1, "an expired lock restarts the count");
+      assert.equal((await store.getUser(userId))?.totpLockedUntil, null);
+      await store.resetTotpFailures(userId);
+      assert.equal((await store.getUser(userId))?.totpFailures, 0);
+      assert.equal(await store.claimTotpAttempt(id("nobody"), now), undefined);
+
+      assert.equal(await store.consumeTotpStep(userId, 100), true);
+      assert.equal(await store.consumeTotpStep(userId, 100), false, "replay of the same step");
+      assert.equal(await store.consumeTotpStep(userId, 99), false, "an older step");
+      assert.equal(await store.consumeTotpStep(userId, 101), true);
+      assert.equal((await store.getUser(userId))?.totpLastStep, 101);
+
+      // A pending authenticator secret is consumed exactly once, and only the one that is pending.
+      const security = await store.getUser(userId);
+      assert.ok(security);
+      await store.updateUserSecurity(userId, {
+        totpFailures: security.totpFailures,
+        totpLockedUntil: security.totpLockedUntil,
+        totpPendingWrappedIv: id("iv"),
+        totpPendingWrappedCiphertext: id("ct"),
+        totpPendingWrappedTag: id("tag"),
+        totpPendingAt: now,
+      });
+      assert.equal(await store.consumePendingTotp(userId, id("other-iv")), false, "a different pending secret is not consumed");
+      const pendingRaces = await Promise.all([store.consumePendingTotp(userId, id("iv")), store.consumePendingTotp(userId, id("iv"))]);
+      assert.deepEqual([...pendingRaces].sort(), [false, true], "one concurrent confirm wins");
+      const cleared = await store.getUser(userId);
+      assert.equal(cleared?.totpPendingWrappedIv, null);
+      assert.equal(cleared?.totpPendingWrappedCiphertext, null);
+      assert.equal(cleared?.totpPendingWrappedTag, null);
+      assert.equal(cleared?.totpPendingAt, null);
+      assert.equal(await store.consumePendingTotp(userId, id("iv")), false, "nothing pending any more");
+
+      await store.insertBackupCode(userId, sha(id("code")));
+      // Two concurrent consumes: exactly one wins, in whichever order the pool answers them.
+      const consumed = await Promise.all([store.markBackupUsed(userId, sha(id("code")), now), store.markBackupUsed(userId, sha(id("code")), now)]);
+      assert.deepEqual([...consumed].sort(), [false, true], "a backup code is consumed exactly once under concurrency");
+    } finally {
+      await done();
+    }
+  });
+
+  test(`[${backend.name}] memberships list oldest first and sessions belong to the org they act in`, async () => {
+    const { store, done } = await backend.open();
+    try {
+      const id = ids("mo");
+      const userId = id("user");
+      const other = id("other");
+      await store.insertUser(user(userId, `${id("u")}@example.com`));
+      await store.insertUser(user(other, `${id("o")}@example.com`));
+      // Inserted newest first with ids that sort the other way, so only joined_at can order them.
+      await store.insertMember({ orgId: id("c-newest"), userId, role: "operator", joinedAt: "2026-03-01T00:00:00.000Z" });
+      await store.insertMember({ orgId: id("b-older"), userId, role: "owner", joinedAt: "2026-02-01T00:00:00.000Z" });
+      await store.insertMember({ orgId: id("a-legacy"), userId, role: "owner" });
+      assert.deepEqual(
+        (await store.listMembershipsForUser(userId)).map((m) => m.orgId),
+        [id("a-legacy"), id("b-older"), id("c-newest")],
+        "rows without joined_at (pre-migration) first, then by joined_at",
+      );
+      await store.insertMember({ orgId: id("c-newest"), userId: other, role: "owner", joinedAt: "2026-01-01T00:00:00.000Z" });
+
+      // No active org: the session acts in the first membership only.
+      await store.insertSession(session(sha(id("s-first")), userId, "2026-01-01T00:00:00.000Z"));
+      await store.insertSession(session(sha(id("s-other")), other, "2026-01-01T00:00:00.000Z"));
+      assert.deepEqual((await store.listOperatorSessions(id("a-legacy"))).map((s) => s.idHash), [sha(id("s-first"))]);
+      assert.deepEqual(await store.listOperatorSessions(id("b-older")), []);
+      assert.deepEqual((await store.listOperatorSessions(id("c-newest"))).map((s) => s.userId), [other]);
+      // Pinned to a member org: listed there and nowhere else.
+      await store.setSessionActiveOrg(sha(id("s-first")), id("c-newest"));
+      assert.deepEqual(await store.listOperatorSessions(id("a-legacy")), []);
+      assert.ok((await store.listOperatorSessions(id("c-newest"))).some((s) => s.idHash === sha(id("s-first"))));
+      // Pinned to an org the user left (or never joined): falls back to the first membership.
+      await store.setSessionActiveOrg(sha(id("s-first")), id("gone"));
+      assert.deepEqual((await store.listOperatorSessions(id("a-legacy"))).map((s) => s.idHash), [sha(id("s-first"))]);
+      assert.ok(!(await store.listOperatorSessions(id("c-newest"))).some((s) => s.idHash === sha(id("s-first"))));
+    } finally {
+      await done();
+    }
+  });
+
   test(`[${backend.name}] access events: jti lookup, revoke one, revoke per client`, async () => {
     const { store, done } = await backend.open();
     try {
@@ -339,12 +456,12 @@ for (const backend of backends) {
       await store.insertUser(user(invitee, inviteeEmail));
       const { orgId } = await kernel.createOrg(id("org"), owner);
 
-      const invited = await kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator" });
+      const invited = await kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator", ip: "127.0.0.1" });
       const token = new URL(invited.accept_url).searchParams.get("token") ?? "";
       assert.ok(token);
       assert.equal((await store.listInvites(orgId)).length, 1);
       await assert.rejects(
-        kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator" }),
+        kernel.inviteMember({ orgId, actorUserId: owner, actorRole: "owner", email: inviteeEmail, role: "operator", ip: "127.0.0.1" }),
         /already pending/,
       );
 
@@ -420,6 +537,93 @@ for (const backend of backends) {
       await kernel.writeAudit(orgId, "inject", client.id, "PARITY", null);
       assert.equal(await store.countAuditSince(orgId, "inject", "2000-01-01T00:00:00.000Z"), 2);
       assert.equal(await store.countAuditSince(orgId, "inject", "2999-01-01T00:00:00.000Z"), 0);
+    } finally {
+      await done();
+    }
+  });
+
+  test(`[${backend.name}] orgs: created_by, pair grants, envelope+meta, legacy AAD listing, approve_code hits, grant sweep`, async () => {
+    const { store, done } = await backend.open();
+    try {
+      const id = ids("w5");
+      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const owner = id("owner");
+      const { orgId } = await kernel.createOrg(id("org"), owner);
+      assert.equal((await store.getOrg(orgId))?.createdBy, owner);
+      assert.deepEqual((await store.listOrgsCreatedBy(owner)).map((o) => o.id), [orgId]);
+      assert.deepEqual(await store.listOrgsCreatedBy(id("nobody")), []);
+
+      const item = await kernel.createItem({
+        orgId,
+        actor: owner,
+        environment: "staging",
+        kind: "secret",
+        name: "PAIR",
+        value: CANARY,
+        allowedHosts: ["api.example.com"],
+        inject: "bearer",
+      });
+      const { client } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
+      const { client: other } = await kernel.createModelClient({ orgId, name: "n", environment: "staging" });
+      const asked = await kernel.requestGrant({ orgId, clientId: client.id, itemName: "PAIR", environment: "staging" });
+      await kernel.requestGrant({ orgId, clientId: other.id, itemName: "PAIR", environment: "staging" });
+      assert.deepEqual((await store.listGrantsForPair(orgId, client.id, item.id)).map((g) => g.id), [asked.grant.id]);
+      assert.deepEqual(await store.listGrantsForPair(id("other-org"), client.id, item.id), []);
+
+      const before = await store.getItem(item.id);
+      assert.ok(before);
+      await store.updateItemEnvelopeAndMeta(item.id, {
+        ...before,
+        name: "PAIR_2",
+        allowedHostsJson: JSON.stringify(["api.two.example"]),
+        inject: "header:X-Key",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+      });
+      const after = await store.getItem(item.id);
+      assert.deepEqual([after?.name, after?.inject, after?.allowedHostsJson, after?.updatedAt], ["PAIR_2", "header:X-Key", '["api.two.example"]', "2026-02-01T00:00:00.000Z"]);
+
+      assert.deepEqual((await store.listItemsWithLegacyAad({ limit: 100 })).filter((x) => x.orgId === orgId), [], "fresh rows carry the current AAD version");
+      await store.setItemAadVersion(item.id, 0);
+      const legacy = (await store.listItemsWithLegacyAad({ limit: 100 })).filter((x) => x.orgId === orgId);
+      assert.deepEqual(legacy.map((x) => x.item.id), [item.id]);
+      const legacyRow = legacy[0]?.item;
+      assert.ok(legacyRow);
+
+      // Keyset paging (the boot rebind's loop): pages of one row walked by the last row seen. The
+      // walk starts at this org so legacy rows other tests left in other orgs cannot interleave.
+      const second = await kernel.createItem({
+        orgId,
+        actor: owner,
+        environment: "staging",
+        kind: "secret",
+        name: "PAIR_TWO",
+        value: CANARY,
+        allowedHosts: ["api.example.com"],
+        inject: "bearer",
+      });
+      await store.setItemAadVersion(second.id, 0);
+      const expected = [item.id, second.id].sort();
+      const page1 = await store.listItemsWithLegacyAad({ limit: 1, after: { orgId, itemId: "" } });
+      assert.deepEqual(page1.map((x) => [x.orgId, x.item.id]), [[orgId, expected[0]]], "the first page is the lowest item id of the org");
+      const page2 = await store.listItemsWithLegacyAad({ limit: 1, after: { orgId, itemId: expected[0] ?? "" } });
+      assert.deepEqual(page2.map((x) => [x.orgId, x.item.id]), [[orgId, expected[1]]], "the cursor skips the row already seen");
+      const page3 = await store.listItemsWithLegacyAad({ limit: 1, after: { orgId, itemId: expected[1] ?? "" } });
+      assert.deepEqual(page3.filter((x) => x.orgId === orgId), [], "past the last row of the org the page moves on");
+      assert.equal((await store.listItemsWithLegacyAad({ limit: 0, after: { orgId, itemId: "" } })).length, 1, "a limit under 1 reads one row");
+      await store.setItemAadVersion(second.id, ITEM_AAD_VERSION);
+
+      await store.updateItemEnvelope(item.id, { ...legacyRow, updatedAt: legacyRow.updatedAt });
+      assert.deepEqual((await store.listItemsWithLegacyAad({ limit: 100 })).filter((x) => x.orgId === orgId), [], "an envelope write records the binding");
+
+      const window = "2026-01-01T00:00:00.000Z";
+      assert.equal(await store.incrementRateHit(orgId, "approve_code", window), 1);
+      assert.equal(await store.countRateHits(orgId, "approve_code", window), 1);
+      assert.equal(await store.countRateHits(orgId, "grant", window), 0, "approve_code has its own bucket");
+
+      await store.updateGrant({ ...asked.grant, status: "revoked", approvedAt: "2020-01-01T00:00:00.000Z" });
+      const swept = await store.sweepExpired("2026-01-01T00:00:00.000Z");
+      assert.ok(swept.grants >= 1);
+      assert.equal(await store.getGrant(asked.grant.id), undefined);
     } finally {
       await done();
     }

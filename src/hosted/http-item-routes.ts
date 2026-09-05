@@ -60,8 +60,9 @@ export async function handleItemRoutes(
       json(res, 404, { error: "Unknown need" });
       return true;
     }
+    // Another org's need reads as unknown: a 403 would confirm the id exists.
     if (row.orgId !== op.orgId) {
-      json(res, 403, { error: "Need is not in this organization" });
+      json(res, 404, { error: "Unknown need" });
       return true;
     }
     const found = await kernel.getNeed(needId);

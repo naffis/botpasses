@@ -32,6 +32,7 @@ const GH = "https://github.com/naffis/botpasses/blob/dev";
 const adrs = [
   { href: `${GH}/docs/adr/0006-grant-vault-trust-model.md`, label: "ADR 0006: Grant-vault, not zero-knowledge" },
   { href: `${GH}/docs/adr/0007-kms-wrapped-kek.md`, label: "ADR 0007: KMS-wrapped platform key" },
+  { href: `${GH}/docs/adr/0008-security-hardening.md`, label: "ADR 0008: Security hardening after the 2026-09 audit" },
   { href: `${GH}/docs/adr/0003-first-party-operator-identity.md`, label: "ADR 0003b: First-party operator identity" },
   { href: `${GH}/docs/adr/0004-same-origin-oauth-as.md`, label: "ADR 0004b: Same-origin OAuth authorization server" },
   { href: `${GH}/docs/adr/0005-access-ledger.md`, label: "ADR 0005: Access ledger" },
@@ -57,7 +58,7 @@ const adrs = [
     hosted process (and anyone holding both the AWS KMS role and the database) can read values. The model,
     the transcript, logs, and staff without both of those cannot. We publish that instead of a claim we
     could not keep. Decision:
-    <a href={adrs[0]?.href} rel="noopener">ADR 0003</a>.
+    <a href={adrs[0]?.href} rel="noopener">ADR 0006</a>.
   </p>
   <div class="table-wrap">
     <table aria-label="Which surfaces see a secret value">

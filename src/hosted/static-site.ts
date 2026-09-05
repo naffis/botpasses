@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logVaultEvent } from "./observe.ts";
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -66,7 +67,13 @@ export function isPublicSitePath(path: string): boolean {
 }
 
 export function resolveSiteFile(siteRoot: string, urlPath: string): string | undefined {
-  const decoded = decodeURIComponent(urlPath.split("?")[0] ?? "/");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath.split("?")[0] ?? "/");
+  } catch {
+    // A malformed percent-escape names no file; the caller serves its 404 page.
+    return undefined;
+  }
   if (decoded.includes("\0")) return undefined;
   const rel = decoded === "/" ? "index.html" : decoded.replace(/^\//, "");
   const withHtml = rel.endsWith("/") ? `${rel.slice(0, -1)}.html` : extname(rel) ? rel : `${rel}.html`;
@@ -104,7 +111,14 @@ export function staticHeaders(filePath: string): Record<string, string> {
 export function sendSiteFile(res: ServerResponse, filePath: string, extra: Record<string, string> = {}): void {
   const headers = { ...staticHeaders(filePath), ...extra };
   res.writeHead(200, headers);
-  createReadStream(filePath).pipe(res);
+  const stream = createReadStream(filePath);
+  stream.on("error", (err) => {
+    // The file vanished or became unreadable mid-stream (a deploy swapping site/dist). The
+    // headers are out, so cut the response rather than end it as if the body were complete.
+    logVaultEvent("static_stream_failed", { message: err.message.slice(0, 200) });
+    res.destroy(err);
+  });
+  stream.pipe(res);
 }
 
 /**

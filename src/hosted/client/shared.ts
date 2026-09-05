@@ -8,9 +8,18 @@
 
 export const FLASH_CLEAR_MS = 6000;
 
-export function csrf(): string {
-  const m = document.cookie.match(/(?:^|; )(?:__Host-bp_csrf|bp_csrf)=([^;]+)/);
+/**
+ * The CSRF token from a cookie header. The `__Host-` cookie wins whenever it is present; the
+ * plain name is only a fallback for the loopback console, since a subdomain can plant a plain
+ * `bp_csrf` that would otherwise sort first and break every mutation on the HTTPS origin.
+ */
+export function csrfFromCookie(cookie: string): string {
+  const m = /(?:^|; )__Host-bp_csrf=([^;]+)/.exec(cookie) ?? /(?:^|; )bp_csrf=([^;]+)/.exec(cookie);
   return m?.[1] ? decodeURIComponent(m[1]) : "";
+}
+
+export function csrf(): string {
+  return csrfFromCookie(document.cookie);
 }
 
 export function bootstrapToken(): string {
@@ -54,6 +63,17 @@ export function arr<T>(v: unknown, guard: (x: unknown) => x is T): T[] {
   return Array.isArray(v) ? v.filter(guard) : [];
 }
 
+/**
+ * Where a 403 `mfa_required` sends the browser: the `verify_url` (enrolled, this session has
+ * not passed the authenticator step) or `enroll_url` (no authenticator yet) the server named.
+ * Only same-origin paths are followed. Undefined for every other response.
+ */
+export function mfaRedirectUrl(status: number, body: Json): string | undefined {
+  if (status !== 403 || body.error !== "mfa_required") return undefined;
+  const next = str(body.verify_url) || str(body.enroll_url);
+  return next.startsWith("/") && !next.startsWith("//") ? next : undefined;
+}
+
 export async function api(url: string, init: RequestInit = {}): Promise<ApiResult> {
   let res: Response;
   try {
@@ -68,6 +88,8 @@ export async function api(url: string, init: RequestInit = {}): Promise<ApiResul
   } catch {
     body = {};
   }
+  const next = mfaRedirectUrl(res.status, body);
+  if (next && typeof location !== "undefined") location.assign(next);
   return { ok: res.ok, status: res.status, body };
 }
 
@@ -273,11 +295,15 @@ export function relativeTime(iso: string | null | undefined, now: number = Date.
   const abs = Math.abs(diff);
   const future = diff > 0;
   const unit = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
+  // The unit is chosen from the rounded count, so 59.6 minutes reads "1 hour", never "60 min".
+  const minutes = Math.round(abs / 60_000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
   let phrase: string;
   if (abs < 45_000) return future ? "in under a minute" : "just now";
-  else if (abs < 3_600_000) phrase = unit(Math.round(abs / 60_000), "min");
-  else if (abs < 86_400_000) phrase = unit(Math.round(abs / 3_600_000), "hour");
-  else if (abs < 30 * 86_400_000) phrase = unit(Math.round(abs / 86_400_000), "day");
+  else if (minutes < 60) phrase = unit(minutes, "min");
+  else if (hours < 24) phrase = unit(hours, "hour");
+  else if (days < 30) phrase = unit(days, "day");
   else phrase = unit(Math.round(abs / (30 * 86_400_000)), "month");
   return future ? `in ${phrase}` : `${phrase} ago`;
 }

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { stdin as input } from "node:process";
 import {
   DEFAULT_HOME_DIRNAME,
+  deployPlaneRaw,
   PRODUCT_NAME,
   publicOriginError,
   resolvePublicOrigin,
@@ -13,13 +14,16 @@ import { generateMasterKey, parseMasterKey } from "./crypto.ts";
 import { maskLast4 } from "./ids.ts";
 import { runMcpStdio } from "./mcp-stdio.ts";
 import { createVaultServer } from "./server.ts";
-import { defaultHome, initVaultHome, loadMasterKey, Vault } from "./vault.ts";
-import type { GrantScope } from "./types.ts";
+import { defaultHome, initVaultHome, loadMasterKey, loopbackBearer, Vault } from "./vault.ts";
+import type { LocalGrantScope } from "./types.ts";
 
 // Hosted dependencies (pg, the AWS KMS SDK, oidc-provider) load only for the commands that
 // need them, so `vault set` and `vault list` stay a sqlite-only startup.
 function loadHostedMain(): Promise<typeof import("./hosted/main.ts")> {
   return import("./hosted/main.ts");
+}
+function loadHostedBoot(): Promise<typeof import("./hosted/boot.ts")> {
+  return import("./hosted/boot.ts");
 }
 function loadHostedKernel(): Promise<typeof import("./hosted/kernel.ts")> {
   return import("./hosted/kernel.ts");
@@ -38,35 +42,47 @@ export type Io = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   readStdin: () => Promise<string>;
+  /** Reads one line from an interactive terminal without echo. Absent when stdin is not a TTY. */
+  promptSecret?: (label: string) => Promise<string>;
 };
 
 const defaultIo: Io = {
   log: (...args) => console.log(...args),
   error: (...args) => console.error(...args),
   readStdin: readStdin,
+  promptSecret: input.isTTY ? promptSecret : undefined,
 };
 
 const USAGE = `${PRODUCT_NAME}: named credentials for agents and tools, never for the model.
 
 Usage:
   vault init
-  vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]
+  vault set NAME [--host api.example.com]... [--inject bearer|basic|header:Name|...] [--username USER]
+    reads the value from stdin (pipe it) or prompts without echo on a terminal; never from argv
     --host allowlists the API hosts http_request may send this credential to (repeatable)
+    --inject takes the hosted vocabulary: bearer, basic, client_credentials, refresh, sigv4,
+      header:Name, query:param, cookie:name, hmac:stripe_sig|slack_sig|github_sig
+    --username is the HTTP Basic user, OAuth client id, or AWS access key id (--username "" clears it)
   vault list
-  vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]
+  vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session [--ttl 8h]]
   vault grant --id GRANT_ID --agent AGENT --tool TOOL
     MCP http_request grants use --tool http_request; the agent is the MCP client's name
+    --once (default) is spent by the first use; --ttl applies to --session only (default 8h)
   vault revoke --id GRANT_ID
   vault revoke --secret NAME --agent AGENT --tool TOOL
   vault audit
   vault run --with NAME [--with NAME] --agent AGENT --tool TOOL -- COMMAND
   vault serve [--host 127.0.0.1] [--port 8788]
-    prints a loopback bearer (HMAC of the master key); send it as Authorization on /api and POST /mcp
+    prints two loopback bearers (HMACs of the master key): the operator bearer is the
+    Authorization for /api and the console; the model bearer is the Authorization for POST /mcp
   vault login
-  vault mcp [--user-jwt JWT]
+  vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt [JWT]]
     stdio MCP with list_items, find_items, request_grant, list_grants, http_request (same as hosted)
+    --remote forwards stdio to a running vault serve with the model bearer
+    --user-jwt proxies the hosted server; the token is the flag's value or VAULT_USER_JWT
   vault kek-wrap
   vault kek-rotate
+  vault <command> --help
 
 Env:
   VAULT_MASTER_KEY   32-byte key as 64 hex chars (preferred) or base64
@@ -82,6 +98,12 @@ export async function main(argv = process.argv.slice(2), io: Io = defaultIo): Pr
     return argv.length === 0 ? 1 : 0;
   }
   const [command = "", ...rest] = argv;
+  // Per-command help is answered before any option parsing, so `vault grant --help` prints usage
+  // instead of "Unknown option" and `vault mcp --help` does not start serving.
+  if (wantsHelp(rest)) {
+    io.log(USAGE);
+    return 0;
+  }
   switch (command) {
     case "init":
       return cmdInit(io);
@@ -135,35 +157,34 @@ function cmdInit(io: Io): number {
 }
 
 async function cmdSet(argv: string[], io: Io): Promise<number> {
+  // No `--value`: argv is visible to every process on the machine (`ps`, shell history).
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
-      value: { type: "string" },
       host: { type: "string", multiple: true },
       inject: { type: "string" },
+      username: { type: "string" },
     },
     allowPositionals: true,
   });
   const name = positionals[0];
   if (!name) {
-    io.error("Usage: vault set NAME [--value VALUE] [--host api.example.com]... [--inject bearer|basic|header:Name]");
-    io.error("Prefer piping the value on stdin so it is not visible in `ps`.");
+    io.error("Usage: vault set NAME [--host api.example.com]... [--inject bearer|basic|header:Name|...] [--username USER]");
+    io.error("Pipe the value on stdin, or run on a terminal to be prompted without echo.");
     return 1;
   }
-  let value = values.value;
-  if (value === undefined) {
-    const piped = await io.readStdin();
-    value = piped.replace(/\r?\n$/, "");
-  }
+  const raw = io.promptSecret ? await io.promptSecret(`Value for ${name} (not echoed): `) : await io.readStdin();
+  const value = raw.replace(/\r?\n$/, "");
   if (!value) {
-    io.error("No value. Pipe the secret on stdin or pass --value (argv is visible in process lists).");
+    io.error("No value. Pipe the secret on stdin (printf '%s' VALUE | vault set NAME) or type it at the prompt.");
     return 1;
   }
   const vault = open();
   try {
-    const meta = vault.setSecret(name, value, { allowedHosts: values.host, inject: values.inject });
+    const meta = vault.setSecret(name, value, { allowedHosts: values.host, inject: values.inject, username: values.username });
     const hosts = meta.allowedHosts.length ? ` hosts=${meta.allowedHosts.join(",")}` : "";
-    io.log(`Stored ${meta.name} ${maskLast4(meta.last4)}${hosts} inject=${meta.inject} (value not shown)`);
+    const user = meta.username ? ` username=${meta.username}` : "";
+    io.log(`Stored ${meta.name} ${maskLast4(meta.last4)}${hosts} inject=${meta.inject}${user} (value not shown)`);
     return 0;
   } finally {
     vault.close();
@@ -203,10 +224,18 @@ function cmdGrant(argv: string[], io: Io): number {
     allowPositionals: false,
   });
   if (!values.agent || !values.tool) {
-    io.error("Usage: vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session]");
+    io.error("Usage: vault grant --secret NAME --agent AGENT --tool TOOL [--once|--session] [--ttl 8h]");
     return 1;
   }
-  const scope: GrantScope = values.session ? "session" : "once";
+  if (values.once && values.session) {
+    io.error("Pass --once or --session, not both.");
+    return 1;
+  }
+  if (values.ttl !== undefined && !values.session) {
+    io.error("--ttl applies to --session grants only; a --once grant is spent by its first use and has no expiry.");
+    return 1;
+  }
+  const scope: LocalGrantScope = values.session ? "session" : "once";
   const vault = open();
   try {
     const grant = vault.approveGrant({
@@ -322,7 +351,10 @@ async function cmdRun(argv: string[], io: Io): Promise<number> {
 
 async function cmdServe(argv: string[], io: Io): Promise<number> {
   if (process.env.VAULT_MODE === "hosted") {
-    const { startHosted } = await loadHostedMain();
+    // Same last-resort guards as `npm run hosted`: an unknown broken invariant exits 1 so Fly
+    // restarts the Machine instead of a half-alive process serving requests.
+    const [{ startHosted }, { installProcessGuards }] = await Promise.all([loadHostedMain(), loadHostedBoot()]);
+    installProcessGuards();
     await startHosted();
     return 0;
   }
@@ -334,12 +366,17 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
     },
     allowPositionals: false,
   });
+  const port = parsePort(values.port);
+  if (port === undefined) {
+    io.error(`--port must be a whole number from 1 to 65535 (got "${values.port}").`);
+    return 1;
+  }
   const vault = open();
-  const port = Number(values.port);
   const http = createVaultServer({ vault, host: values.host, port });
   const addr = await http.listen();
   io.error(`${PRODUCT_NAME} listening on http://${addr.host}:${addr.port}`);
-  io.error(`Loopback token: ${vault.loopbackToken()}`);
+  io.error(`Operator bearer (console and /api): ${vault.loopbackToken("operator")}`);
+  io.error(`Model bearer (POST /mcp, vault mcp --remote): ${vault.loopbackToken("model")}`);
   io.error("Operator console shows names + last-4 only. MCP is POST /mcp. Bind is loopback by default.");
   await new Promise<void>((resolve) => {
     const stop = () => {
@@ -372,13 +409,85 @@ function cmdLogin(io: Io): number {
   return 0;
 }
 
+const MCP_USAGE = "Usage: vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt [JWT]]";
+
+/**
+ * `--remote` and `--user-jwt` both take an optional value, which parseArgs has no notion of:
+ * a bare `--user-jwt` becomes `--user-jwt=` (the token then comes from VAULT_USER_JWT) and
+ * `--remote=URL` becomes `--remote URL` so the URL is read as a positional.
+ */
+export function normalizeMcpArgs(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    if (arg === "--user-jwt") {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("-")) {
+        out.push("--user-jwt=");
+        continue;
+      }
+    }
+    if (arg.startsWith("--remote=")) {
+      out.push("--remote", arg.slice("--remote=".length));
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
 async function cmdMcp(argv: string[], io: Io): Promise<number> {
-  const jwtIdx = argv.indexOf("--user-jwt");
-  const wantsJwt = jwtIdx >= 0 || Boolean(process.env.VAULT_USER_JWT);
+  let values: { remote: boolean; "user-jwt"?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: normalizeMcpArgs(argv),
+      options: {
+        remote: { type: "boolean", default: false },
+        "user-jwt": { type: "string" },
+      },
+      allowPositionals: true,
+    }));
+  } catch (err) {
+    io.error(err instanceof Error ? err.message : String(err));
+    io.error(MCP_USAGE);
+    return 1;
+  }
+  const jwtOption = values["user-jwt"];
+  if (values.remote && jwtOption !== undefined) {
+    io.error("Pass --remote or --user-jwt, not both.");
+    return 1;
+  }
+  if (!values.remote && positionals.length > 0) {
+    io.error(`Unexpected argument: ${positionals[0]}`);
+    io.error(MCP_USAGE);
+    return 1;
+  }
+  if (values.remote) {
+    // Forward stdio to a running `vault serve` on loopback with the model bearer. The bearer is
+    // derived from the master key here, so nothing is pasted into an MCP client's config.
+    const rawUrl = positionals[0] ?? "http://127.0.0.1:8788";
+    let target: URL;
+    try {
+      target = new URL(rawUrl);
+    } catch {
+      io.error("vault mcp --remote takes a loopback URL such as http://127.0.0.1:8788.");
+      return 1;
+    }
+    if (target.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(target.hostname)) {
+      io.error("vault mcp --remote only forwards to a loopback vault serve (http://127.0.0.1:PORT).");
+      return 1;
+    }
+    const { key } = loadMasterKey(defaultHome());
+    const { runRemoteMcpStdio } = await loadRemoteMcp();
+    await runRemoteMcpStdio({ publicUrl: target.origin, userJwt: loopbackBearer(key, "model") });
+    return 0;
+  }
+  // The option's presence (in either `--user-jwt TOKEN` or `--user-jwt=TOKEN` form) means hosted
+  // mode; it must never fall through to serving the local vault because the token was not seen.
+  const wantsJwt = jwtOption !== undefined || Boolean(process.env.VAULT_USER_JWT);
   if (wantsJwt) {
-    const next = jwtIdx >= 0 ? argv[jwtIdx + 1] : undefined;
-    const token =
-      next && !next.startsWith("-") ? next : process.env.VAULT_USER_JWT;
+    const token = jwtOption || process.env.VAULT_USER_JWT;
     const rawUrl = process.env.VAULT_PUBLIC_URL;
     if (!rawUrl) {
       io.error("VAULT_PUBLIC_URL is required for hosted stdio MCP.");
@@ -418,9 +527,9 @@ function refuseMachineKekCli(io: Io): boolean {
 async function cmdKekWrap(io: Io): Promise<number> {
   if (refuseMachineKekCli(io)) return 1;
   const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
-  const plane = process.env.VAULT_DEPLOY_PLANE;
+  const plane = deployPlaneRaw(process.env);
   const app = process.env.FLY_APP_NAME?.trim() ?? "";
-  if (!keyId || (plane !== "staging" && plane !== "production") || !app) {
+  if (!keyId || !plane || !app) {
     io.error(
       "vault kek-wrap requires VAULT_KMS_KEY_ID, VAULT_DEPLOY_PLANE=staging|production, FLY_APP_NAME, and laptop AWS credentials (SSO or console Encrypt). Fly OIDC is Machine-only.",
     );
@@ -453,7 +562,9 @@ async function cmdKekRotate(io: Io): Promise<number> {
     return 1;
   }
   const oldKek = parseMasterKey(oldRaw);
-  const newHex = generateMasterKey();
+  // VAULT_KEK_NEW: the KEK the running process already has as current (docs/ops/kek-rotation.md);
+  // without it a fresh key is generated, which is only right before that deploy.
+  const newHex = process.env.VAULT_KEK_NEW?.trim() || generateMasterKey();
   const newKek = parseMasterKey(newHex);
   const [{ PostgresStore }, { HostedKernel }, { awsKmsEncrypt, kekEncryptionContext }] = await Promise.all([
     loadPostgresStore(),
@@ -466,9 +577,9 @@ async function cmdKekRotate(io: Io): Promise<number> {
     const result = await kernel.rotateKek(oldKek, newKek);
     io.error(`rewrapped=${result.rewrapped} skipped=${result.skipped} identity=${JSON.stringify(result.identity)}`);
     const keyId = process.env.VAULT_KMS_KEY_ID?.trim() ?? "";
-    const plane = process.env.VAULT_DEPLOY_PLANE;
+    const plane = deployPlaneRaw(process.env);
     const app = process.env.FLY_APP_NAME?.trim() ?? "";
-    if (keyId && (plane === "staging" || plane === "production") && app) {
+    if (keyId && plane && app) {
       const cipher = await awsKmsEncrypt(keyId)(newKek, kekEncryptionContext({ plane, app }));
       io.log(cipher.toString("base64"));
     } else {
@@ -487,10 +598,61 @@ function open(): Vault {
   return new Vault({ home, masterKey: key });
 }
 
+/** `-h` or `--help` anywhere before `--`; a child command after `--` keeps its own flags. */
+function wantsHelp(args: string[]): boolean {
+  const end = args.indexOf("--");
+  return (end === -1 ? args : args.slice(0, end)).some((a) => a === "-h" || a === "--help");
+}
+
+/** A TCP port from argv, or undefined for anything that is not a whole number in range. */
+export function parsePort(raw: string): number | undefined {
+  if (!/^\d{1,5}$/.test(raw.trim())) return undefined;
+  const port = Number(raw);
+  return port >= 1 && port <= 65535 ? port : undefined;
+}
+
 function splitRun(argv: string[]): { vaultArgs: string[]; childArgs: string[] } {
   const idx = argv.indexOf("--");
   if (idx === -1) return { vaultArgs: argv, childArgs: [] };
   return { vaultArgs: argv.slice(0, idx), childArgs: argv.slice(idx + 1) };
+}
+
+/** One line from the terminal with echo off. Ctrl-C aborts with exit 130 like any prompt. */
+function promptSecret(label: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    process.stderr.write(label);
+    const wasRaw = input.isRaw;
+    input.setRawMode(true);
+    input.resume();
+    input.setEncoding("utf8");
+    let buf = "";
+    const finish = (err?: Error) => {
+      input.setRawMode(wasRaw);
+      input.pause();
+      input.off("data", onData);
+      process.stderr.write("\n");
+      if (err) reject(err);
+      else resolve(buf);
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === "\u0003") {
+          finish(new Error("Aborted"));
+          return;
+        }
+        if (ch === "\r" || ch === "\n") {
+          finish();
+          return;
+        }
+        if (ch === "\u007f" || ch === "\b") {
+          buf = buf.slice(0, -1);
+          continue;
+        }
+        buf += ch;
+      }
+    };
+    input.on("data", onData);
+  });
 }
 
 async function readStdin(): Promise<string> {

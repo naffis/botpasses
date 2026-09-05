@@ -156,6 +156,126 @@ test("request_grant leaves the grant pending under the agent named by initialize
   }
 });
 
+test("C4: arguments outside a tool's schema are refused; agent_id and tool_id no longer rebind the caller", async () => {
+  const { vault, home } = makeVault();
+  try {
+    vault.setSecret("STRIPE_KEY", CANARY, { allowedHosts: ["api.stripe.com"] });
+    const session = newMcpSession();
+    session.agentId = "cursor";
+    const rpc = await handleMcpRpc(
+      vault,
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "request_grant", arguments: { item_name: "STRIPE_KEY", agent_id: "someone-else", tool_id: "stripe" } } },
+      session,
+    );
+    assert.equal(rpc?.error?.code, -32602);
+    assert.match(rpc?.error?.message ?? "", /Invalid params: unknown arguments agent_id, tool_id for tool request_grant/);
+    assert.equal(vault.listGrants().length, 0, "nothing was created");
+    const direct = await callMcpTool(vault, "list_grants", { agent_id: "someone-else" }, { session });
+    assert.equal(direct.isError, true);
+    assert.match(direct.content[0]?.text ?? "", /Invalid params/);
+    const aliased = await handleMcpRpc(vault, { jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "list_secrets", arguments: { environment: "x" } } }, session);
+    assert.equal(aliased?.error?.code, -32602, "aliases are checked against the canonical schema");
+    const ok = parsed(await callMcpTool(vault, "request_grant", { item_name: "STRIPE_KEY", scope: "session", task_description: "x" }, { session }));
+    assert.equal(ok.agent_id, "cursor");
+    assert.equal(ok.tool_id, "http_request");
+    assert.equal(ok.policy, "session");
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
+test("C5/C14: local http_request honours dry_run, timeout_ms, and client_id; items carry a username and the hosted inject vocabulary", async () => {
+  const { vault, home } = makeVault();
+  const seen: { url: string; auth: string; query: string }[] = [];
+  const fetchImpl: typeof fetch = async (url, init) => {
+    const headers = new Headers(init?.headers);
+    seen.push({ url: String(url), auth: headers.get("authorization") ?? "", query: new URL(String(url)).search });
+    if (init?.signal) {
+      return new Promise<Response>((_resolve, reject) => {
+        if (String(url).includes("/slow")) init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        else _resolve(new Response("{}", { status: 200 }));
+      });
+    }
+    return new Response("{}", { status: 200 });
+  };
+  const session = newMcpSession();
+  session.agentId = "cursor";
+  const ctx = { session, fetchImpl, ...origin };
+  try {
+    const stored = vault.setSecret("BASIC_KEY", CANARY, { allowedHosts: ["api.example.com"], inject: "basic", username: "svc-user" });
+    assert.equal(stored.username, "svc-user");
+    assert.equal(vault.setSecret("QUERY_KEY", CANARY, { allowedHosts: ["api.other.com"], inject: "query:api_key" }).inject, "query:api_key");
+    assert.throws(() => vault.setSecret("BAD", CANARY, { inject: "cookie" }), /inject must be/);
+    assert.throws(() => vault.setSecret("BAD", CANARY, { username: "a\nb" }), /control characters/);
+    const listed = parsed(await callMcpTool(vault, "list_items", {}, ctx)).items as Parsed[];
+    assert.equal(listed.find((i) => i.name === "BASIC_KEY")?.username, "svc-user");
+
+    const dry = parsed(await callMcpTool(vault, "http_request", { item_name: "BASIC_KEY", method: "GET", path: "/v1/me", dry_run: true }, ctx));
+    assert.deepEqual(
+      { ...dry, retry: undefined },
+      { dry_run: true, item_name: "BASIC_KEY", host: "api.example.com", method: "GET", path: "/v1/me", would_send: false, reason: "grant_required", grant_status: "none", inject_mode: "basic", provider: null, retry: undefined },
+    );
+    assert.equal(seen.length, 0, "a dry run sends nothing");
+    assert.equal(vault.listGrants().length, 0, "and requests no grant");
+    vault.approveGrant({ secretName: "BASIC_KEY", agentId: "cursor", toolId: "http_request", scope: "session" });
+    const ready = parsed(await callMcpTool(vault, "http_request", { host: "api.example.com", method: "GET", path: "/v1/me", dry_run: true }, ctx));
+    assert.equal(ready.would_send, true);
+    assert.equal(ready.grant_status, "active");
+    const mismatch = parsed(await callMcpTool(vault, "http_request", { item_name: "BASIC_KEY", host: "api.other.com", method: "GET", path: "/", dry_run: true }, ctx));
+    assert.equal(mismatch.reason, "host_mismatch");
+
+    const sent = parsed(await callMcpTool(vault, "http_request", { item_name: "BASIC_KEY", method: "GET", path: "/v1/me" }, ctx));
+    assert.equal(sent.origin_status, 200);
+    assert.equal(sent.status, 200);
+    assert.deepEqual(sent.origin_headers, { "content-type": "text/plain;charset=UTF-8" });
+    assert.equal(seen[0]?.auth, `Basic ${Buffer.from(`svc-user:${CANARY}`).toString("base64")}`, "the stored username is sent");
+    await callMcpTool(vault, "http_request", { item_name: "BASIC_KEY", method: "GET", path: "/v1/me", client_id: "override-id" }, ctx);
+    assert.equal(seen[1]?.auth, `Basic ${Buffer.from(`override-id:${CANARY}`).toString("base64")}`, "client_id overrides the username for one call");
+
+    const started = Date.now();
+    const slow = await callMcpTool(vault, "http_request", { item_name: "BASIC_KEY", method: "GET", path: "/slow", timeout_ms: 1000 }, ctx);
+    assert.equal(slow.isError, true);
+    assert.match(slow.content[0]?.text ?? "", /did not respond within 1s/);
+    assert.ok(Date.now() - started < 5000, "timeout_ms applied instead of the 10 s default");
+    assert.ok(!JSON.stringify({ sent, slow, seen: seen.map((s) => s.url) }).includes(CANARY));
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
+test("G3 (local): a once grant is spent by any origin answer and handed back only when the send never left", async () => {
+  const { vault, home } = makeVault();
+  const session = newMcpSession();
+  session.agentId = "cursor";
+  const call = (fetchImpl: typeof fetch) =>
+    callMcpTool(vault, "http_request", { item_name: "STRIPE_KEY", method: "GET", path: "/v1/balance" }, { session, fetchImpl, ...origin });
+  const status = () => vault.listGrants().find((g) => g.status !== "revoked")?.status;
+  const approveOnce = () => vault.approveGrant({ secretName: "STRIPE_KEY", agentId: "cursor", toolId: "http_request", scope: "once" });
+  try {
+    vault.setSecret("STRIPE_KEY", CANARY, { allowedHosts: ["api.stripe.com"] });
+    approveOnce();
+    await call(async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    });
+    assert.equal(status(), "active", "DNS failure: the value never left");
+    await call(async () => new Response("", { status: 503 }));
+    assert.equal(status(), "consumed", "an origin answer spends the grant");
+    assert.equal((await call(async () => new Response("{}", { status: 200 }))).content[0]?.text.includes('"pending"'), true, "the next call needs a new approval");
+    const revoked = vault.listGrants().filter((g) => g.status === "consumed");
+    for (const g of revoked) vault.revokeGrant({ grantId: g.id });
+    approveOnce();
+    await call(async () => {
+      throw new Error("socket hang up");
+    });
+    assert.equal(vault.listGrants().some((g) => g.status === "consumed"), true, "an unclassified transport failure counts as sent");
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
 test("local http_request calls the origin with the credential and never shows it in the result", async () => {
   const { vault, home } = makeVault();
   const seen: { url: string; auth: string }[] = [];

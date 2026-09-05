@@ -37,8 +37,8 @@ test("operator page uses the product vocabulary and no vendor names in generic c
 test("console shell: routed panels, tabs, account, breakglass hidden, mark from assets", () => {
   const html = hostedOperatorHtml();
   assert.match(html, /data-testid="app-shell"/);
-  assert.match(html, /src="\/assets\/mark\.svg"/);
-  assert.match(html, /<link rel="icon" href="\/assets\/mark\.svg"/);
+  assert.match(html, /src="\/assets\/mark\.[0-9a-f]{8}\.svg"/);
+  assert.match(html, /<link rel="icon" href="\/assets\/mark\.[0-9a-f]{8}\.svg"/);
   assert.match(html, /<meta name="color-scheme" content="light dark"/);
   for (const panel of ["inbox", "credentials", "agents", "account"]) assert.match(html, new RegExp(`data-panel="${panel}"`));
   assert.match(html, /role="tablist"/);
@@ -153,7 +153,8 @@ test("console bundle carries the routed behaviours", () => {
   assert.doesNotMatch(CONSOLE_JS, /\/api\/items\?environment=/);
   assert.match(CONSOLE_JS, /history\.pushState/);
   assert.match(CONSOLE_JS, /addEventListener\("hashchange"/);
-  assert.match(CONSOLE_JS, /addEventListener\("popstate"/);
+  // popstate fires for every hash navigation too; binding both loaded each panel twice.
+  assert.doesNotMatch(CONSOLE_JS, /addEventListener\("popstate"/);
   assert.match(CONSOLE_JS, /\/api\/auth\/logout/);
   assert.match(CONSOLE_JS, /\/api\/auth\/me/);
   assert.match(CONSOLE_JS, /\/api\/auth\/backup-codes\/regenerate/);
@@ -180,7 +181,7 @@ test("collect HTML is a shell until the operator loads need details", () => {
   assert.match(COLLECT_JS, /\/api\/need-items\//);
   assert.match(COLLECT_JS, /errorMessage\(r, "Store failed"\)/);
   assert.match(html, /\/sign-in/);
-  assert.match(html, /\/assets\/console\.css/);
+  assert.match(html, /\/assets\/console\.[0-9a-f]{8}\.css/);
   assert.match(html, /class="auth-body"/);
   assert.doesNotMatch(html, /<img/);
 });

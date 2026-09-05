@@ -1,6 +1,6 @@
 /** Shared fixtures for the OAuth authorization-server tests. Not a test file itself. */
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import * as OTPAuth from "otpauth";
 import type Provider from "oidc-provider";
@@ -10,11 +10,13 @@ import type { PinnedFetch } from "../src/hosted/cimd-fetch.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { identityAuthResolver } from "../src/hosted/identity.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
-import { createOauthProvider } from "../src/hosted/oauth-as.ts";
+import { createOauthProvider, type CimdGate } from "../src/hosted/oauth-as.ts";
+import type { OidcPrivateJwk } from "../src/hosted/boot.ts";
 import { OperatorIdentity } from "../src/hosted/operator-identity.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import type { VaultEnvName } from "../src/hosted-types.ts";
 import { TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "./helpers.ts";
+import { codeFromEmail } from "./identity-harness.ts";
 
 export const ISSUER = "http://127.0.0.1:8788";
 export const AUDIENCE = `${ISSUER}/mcp`;
@@ -59,10 +61,22 @@ export function pkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-export function codeFromEmail(html: string): string {
-  const m = />(\d{8})</.exec(html);
-  assert.ok(m?.[1], "otp missing from email");
-  return m[1];
+/** A second RS256 private JWK, distinct from `testOidcPrivateJwk()`, for key-rotation tests. */
+export function testOidcPreviousJwk(): OidcPrivateJwk {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const raw = privateKey.export({ format: "jwk" }) as Record<string, string>;
+  const parsed = parseOidcPrivateJwk(JSON.stringify({ ...raw, alg: "RS256" }));
+  assert.ok(parsed);
+  return parsed;
+}
+
+/** Polls `check` until it returns true or `attempts` are used up (background ledger writes). */
+export async function eventually(check: () => Promise<boolean>, attempts = 20): Promise<boolean> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (await check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return check();
 }
 
 export type OauthServer = Awaited<ReturnType<typeof startOauthServer>>;
@@ -76,6 +90,8 @@ export async function startOauthServer(opts: {
   secure: boolean;
   deployPlane?: VaultEnvName;
   fetchImpl?: PinnedFetch;
+  previousJwk?: OidcPrivateJwk;
+  cimdGate?: CimdGate;
 }) {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "oauth.sqlite"));
@@ -94,9 +110,11 @@ export async function startOauthServer(opts: {
     kernel,
     sessionSecret: TEST_SESSION_SECRET,
     jwk,
+    previousJwk: opts.previousJwk,
     secureCookies: opts.secure,
     deployPlane,
     fetchImpl: opts.fetchImpl,
+    cimdGate: opts.cimdGate,
   });
   const http = createHostedServer({
     kernel,
@@ -112,6 +130,7 @@ export async function startOauthServer(opts: {
       kernel,
       secureCookies: opts.secure,
       oidcJwk: jwk,
+      oidcPreviousJwk: opts.previousJwk,
       issuer: ISSUER,
     }),
   });
@@ -264,6 +283,18 @@ export async function startOauthServer(opts: {
     cleanup(home);
   }
 
+  /** Adds the signed-in `who` to `orgId` and pins that org on their session (the switcher). */
+  async function joinOrg(who: { jar: Jar; userId: string }, orgId: string, role: "owner" | "operator" = "operator"): Promise<void> {
+    await store.insertMember({ orgId, userId: who.userId, role, joinedAt: new Date().toISOString() });
+    const pinned = await go("/api/session/org", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ org_id: orgId }),
+      jar: who.jar,
+    });
+    assert.equal(pinned.status, 200, await pinned.text());
+  }
+
   return {
     base,
     store,
@@ -272,6 +303,8 @@ export async function startOauthServer(opts: {
     oidcProvider,
     emails,
     deployPlane,
+    jwk,
+    joinOrg,
     go,
     signInReady,
     registerClient,

@@ -3,7 +3,8 @@
  * HMAC magic link, and the approval email. `kernel-grants.ts` calls these from `requestGrant`,
  * `approveByCode`, and `approveMagic`; the `GrantHost` it passes is the same object.
  */
-import { createHmac, createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
+import { sha256Hex } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { ClientRecord, HostedGrantRecord, RequestedScope } from "../hosted-types.ts";
 import { escapeHtml } from "./auth-shell.ts";
@@ -28,10 +29,14 @@ export function isPast(iso: string | null, now: Date): boolean {
 }
 
 export function hashCode(code: string, salt: string): string {
-  return createHash("sha256").update(`${salt}:${code}`).digest("hex");
+  return sha256Hex(`${salt}:${code}`);
 }
 
-/** Replaces the grant's code challenge with a fresh 8-digit code and returns the plaintext. */
+/**
+ * Replaces the grant's code challenge with a fresh 8-digit code and returns the plaintext. The
+ * wrong-code count carries over from the challenge it replaces, so re-requesting the grant
+ * does not hand a guesser five fresh attempts per rotation.
+ */
 export async function rotateCodeChallenge(host: GrantHost, grantId: string, now: Date): Promise<string> {
   const prior = await host.store.getChallengeByGrantKind(grantId, "code");
   if (prior) await host.store.deleteChallenge(prior.id);
@@ -42,7 +47,7 @@ export async function rotateCodeChallenge(host: GrantHost, grantId: string, now:
     grantId,
     codeHash: `${salt}:${hashCode(code, salt)}`,
     expiresAt: new Date(now.getTime() + CODE_TTL_MS).toISOString(),
-    attempts: 0,
+    attempts: prior?.attempts ?? 0,
     kind: "code",
   });
   return code;
@@ -51,6 +56,7 @@ export async function rotateCodeChallenge(host: GrantHost, grantId: string, now:
 /** Keeps an unexpired magic link; mints a new one otherwise. `fresh` means a new link was made. */
 export async function ensureMagicChallenge(
   host: GrantHost,
+  orgId: string,
   grantId: string,
   now: Date,
 ): Promise<{ token?: string; fresh: boolean }> {
@@ -59,7 +65,7 @@ export async function ensureMagicChallenge(
   if (prior && !isPast(prior.expiresAt, now)) return { token: prior.codeHash, fresh: false };
   if (prior) await host.store.deleteChallenge(prior.id);
   const exp = now.getTime() + MAGIC_TTL_MS;
-  const token = mintApprovalToken(host.approvalHmac, grantId, exp);
+  const token = mintApprovalToken(host.approvalHmac, grantId, exp, orgId);
   await host.store.insertChallenge({
     id: `chl_${randomUUID()}`,
     grantId,
@@ -124,7 +130,7 @@ export async function notify(
 /** The pending grant a magic link points at, once the link and its stored challenge check out. */
 export async function magicGrant(host: GrantHost, orgId: string, token: string): Promise<HostedGrantRecord> {
   if (!host.approvalHmac) throw new HttpError(500, "Magic links are not configured");
-  const grantId = verifyApprovalToken(host.approvalHmac, token, host.now().getTime());
+  const grantId = verifyApprovalToken(host.approvalHmac, token, host.now().getTime(), orgId);
   const grant = await host.store.getGrant(grantId);
   if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
   if (grant.status !== "pending") throw new HttpError(410, "Expired link");
@@ -151,13 +157,14 @@ export async function previewMagic(host: GrantHost, orgId: string, token: string
   return preview;
 }
 
-export function mintApprovalToken(hmac: Buffer, grantId: string, expMs: number): string {
-  const body = Buffer.from(JSON.stringify({ grantId, exp: expMs })).toString("base64url");
+/** The signed body names the org as well as the grant, so a link is only ever valid for the org it was minted for. */
+export function mintApprovalToken(hmac: Buffer, grantId: string, expMs: number, orgId: string): string {
+  const body = Buffer.from(JSON.stringify({ grantId, exp: expMs, orgId })).toString("base64url");
   const sig = createHmac("sha256", hmac).update(body).digest("base64url");
   return `${body}.${sig}`;
 }
 
-export function verifyApprovalToken(hmac: Buffer, token: string, nowMs: number): string {
+export function verifyApprovalToken(hmac: Buffer, token: string, nowMs: number, orgId: string): string {
   const [body, sig] = token.split(".");
   if (!body || !sig) throw new HttpError(410, "Invalid link");
   const expected = createHmac("sha256", hmac).update(body).digest("base64url");
@@ -166,8 +173,8 @@ export function verifyApprovalToken(hmac: Buffer, token: string, nowMs: number):
   }
   const parsed: unknown = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
   if (!parsed || typeof parsed !== "object") throw new HttpError(410, "Invalid link");
-  const rec = parsed as { grantId?: unknown; exp?: unknown };
-  if (typeof rec.grantId !== "string" || typeof rec.exp !== "number") {
+  const rec = parsed as { grantId?: unknown; exp?: unknown; orgId?: unknown };
+  if (typeof rec.grantId !== "string" || typeof rec.exp !== "number" || rec.orgId !== orgId) {
     throw new HttpError(410, "Invalid link");
   }
   if (rec.exp < nowMs) throw new HttpError(410, "Expired link");

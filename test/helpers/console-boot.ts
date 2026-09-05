@@ -1,15 +1,23 @@
 /**
  * Boots the hosted server on sqlite with first-party identity and a captured mailbox,
  * for browser smoke tests and screenshot scripts. Loopback only, random port.
+ *
+ * With `oauth: true` the OAuth authorization server is mounted as well. Its issuer must be
+ * the origin the browser is on (resume URLs are absolute), so the port is chosen up front.
  */
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import type Provider from "oidc-provider";
 import { generateMasterKey, parseMasterKey } from "../../src/crypto.ts";
+import { parseOidcPrivateJwk } from "../../src/hosted/boot.ts";
 import { createHostedServer } from "../../src/hosted/http.ts";
 import { identityAuthResolver } from "../../src/hosted/identity.ts";
 import { HostedKernel } from "../../src/hosted/kernel.ts";
+import { createOauthProvider } from "../../src/hosted/oauth-as.ts";
 import { OperatorIdentity } from "../../src/hosted/operator-identity.ts";
 import { openHostedSqlite } from "../../src/store/sqlite-hosted.ts";
-import { TEST_SESSION_SECRET, cleanup, tempHome } from "../helpers.ts";
+import { TEST_SESSION_SECRET, cleanup, tempHome, testOidcPrivateJwk } from "../helpers.ts";
 
 export type CapturedMail = { to: string; subject: string; html: string; text: string };
 
@@ -21,8 +29,20 @@ export type ConsoleServer = {
   close: () => Promise<void>;
 };
 
+/** A loopback port nothing is listening on right now. */
+function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address() as AddressInfo;
+      probe.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
 export async function bootConsoleServer(
-  opts: { deployPlane?: "staging" | "production"; siteRoot?: string } = {},
+  opts: { deployPlane?: "staging" | "production"; siteRoot?: string; oauth?: boolean } = {},
 ): Promise<ConsoleServer> {
   const home = tempHome();
   const store = openHostedSqlite(join(home, "console-smoke.sqlite"));
@@ -31,18 +51,35 @@ export async function bootConsoleServer(
   const sendEmail = async (to: string, subject: string, html: string, text?: string): Promise<void> => {
     mailbox.push({ to, subject, html, text: text ?? "" });
   };
-  const publicUrl = "http://127.0.0.1:8788";
+  const port = opts.oauth ? await freeLoopbackPort() : 0;
+  const publicUrl = opts.oauth ? `http://127.0.0.1:${port}` : "http://127.0.0.1:8788";
   const deployPlane = opts.deployPlane ?? "production";
   const kernel = new HostedKernel({ store, kek, publicUrl, deployPlane, sendEmail });
   const identity = new OperatorIdentity({ store, sessionSecret: TEST_SESSION_SECRET, kek, sendEmail });
-  const authResolver = identityAuthResolver({ identity, kernel, secureCookies: false });
+  let oidcProvider: Provider | undefined;
+  let oidc: { oidcJwk: NonNullable<ReturnType<typeof parseOidcPrivateJwk>>; issuer: string } | undefined;
+  if (opts.oauth) {
+    const jwk = parseOidcPrivateJwk(testOidcPrivateJwk());
+    if (!jwk) throw new Error("test OIDC JWK did not parse");
+    oidcProvider = createOauthProvider({
+      issuer: publicUrl,
+      kernel,
+      sessionSecret: TEST_SESSION_SECRET,
+      jwk,
+      secureCookies: false,
+      deployPlane,
+    });
+    oidc = { oidcJwk: jwk, issuer: publicUrl };
+  }
+  const authResolver = identityAuthResolver({ identity, kernel, secureCookies: false, ...oidc });
   const http = createHostedServer({
     kernel,
     host: "127.0.0.1",
-    port: 0,
+    port,
     publicUrl,
     authResolver,
     identity,
+    oidcProvider,
     secureCookies: false,
     siteRoot: opts.siteRoot,
     deployPlane,

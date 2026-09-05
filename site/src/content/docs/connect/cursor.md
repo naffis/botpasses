@@ -51,7 +51,7 @@ Ask the agent for the task in plain language. It calls `http_request`. Pending a
 }
 ```
 
-Run it from the cloned repository until the npm package is published (see [Install](/docs/install)). The local server has `list_secrets`, `request_grant`, and `list_grants`. Inject is `vault run`, not a tool.
+Run it from the cloned repository until the npm package is published (see [Install](/docs/install)). The local server has the same five tools as hosted, `http_request` included; approve an agent with `vault grant --secret NAME --agent AGENT --tool http_request`, where the agent is the name Cursor sends on `initialize`. Values still never reach the model.
 
 ## Stdio proxy to the hosted service
 

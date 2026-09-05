@@ -15,7 +15,8 @@ import { isBlockedIp, resolvePublicAddresses } from "./ssrf.ts";
 
 /** Hard ceiling on bytes buffered from a remote document, above oidc-provider's own per-purpose caps. */
 const BODY_CAP = 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 5000;
+/** Socket inactivity ceiling. oidc-provider also aborts a metadata fetch after 2.5 s. */
+const DEFAULT_TIMEOUT_MS = 3000;
 /** Statuses for which the Fetch Response constructor forbids a body. */
 const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
 

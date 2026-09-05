@@ -3,6 +3,15 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 const IV_LEN = 12;
 const TAG_LEN = 16;
 
+/**
+ * Envelope layout: `BPBK` magic, one version byte, then AES-256-GCM nonce (12), tag (16), and
+ * ciphertext. The header is authenticated as AAD, so a blob from another tool, a future
+ * layout, or an edited header fails closed before any plaintext is produced.
+ */
+export const BACKUP_MAGIC = Buffer.from("BPBK", "ascii");
+export const BACKUP_VERSION = 1;
+const HEADER_LEN = BACKUP_MAGIC.length + 1;
+
 /** 32-byte hex key used only for offsite `pg_dump` blobs. Never the vault KEK. */
 export function parseBackupKey(raw: string | undefined): Buffer {
   const key = Buffer.from(raw ?? "", "hex");
@@ -10,19 +19,30 @@ export function parseBackupKey(raw: string | undefined): Buffer {
   return key;
 }
 
+function header(version: number): Buffer {
+  return Buffer.concat([BACKUP_MAGIC, Buffer.from([version])]);
+}
+
 export function encryptDump(plaintext: Buffer, key: Buffer): Buffer {
   const iv = randomBytes(IV_LEN);
+  const head = header(BACKUP_VERSION);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(head);
   const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), ct]);
+  return Buffer.concat([head, iv, cipher.getAuthTag(), ct]);
 }
 
 export function decryptDump(blob: Buffer, key: Buffer): Buffer {
-  if (blob.length < IV_LEN + TAG_LEN) throw new Error("backup blob too short");
-  const iv = blob.subarray(0, IV_LEN);
-  const tag = blob.subarray(IV_LEN, IV_LEN + TAG_LEN);
-  const ct = blob.subarray(IV_LEN + TAG_LEN);
+  if (blob.length < HEADER_LEN + IV_LEN + TAG_LEN) throw new Error("backup blob too short");
+  const magic = blob.subarray(0, BACKUP_MAGIC.length);
+  if (!magic.equals(BACKUP_MAGIC)) throw new Error("not a Botpasses backup envelope (bad magic)");
+  const version = blob[BACKUP_MAGIC.length] ?? 0;
+  if (version !== BACKUP_VERSION) throw new Error(`unsupported backup envelope version ${version}`);
+  const iv = blob.subarray(HEADER_LEN, HEADER_LEN + IV_LEN);
+  const tag = blob.subarray(HEADER_LEN + IV_LEN, HEADER_LEN + IV_LEN + TAG_LEN);
+  const ct = blob.subarray(HEADER_LEN + IV_LEN + TAG_LEN);
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAAD(header(version));
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]);
 }

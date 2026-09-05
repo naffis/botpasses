@@ -26,16 +26,21 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER_SQLITE,
   HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
+  HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_SQLITE,
   HOSTED_SCHEMA_TEAM,
   HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+  HOSTED_SCHEMA_V10_ALTER_SQLITE,
+  HOSTED_SCHEMA_V10_INDEXES,
 } from "./schema.ts";
 import { mapClientRow } from "./map-client.ts";
 import {
   GRANT_INSERT_COLUMNS,
   grantValues,
+  ITEM_AAD_VERSION,
   ITEM_INSERT_COLUMNS,
   itemValues,
   mapAccess,
@@ -67,9 +72,12 @@ import {
   type AuditListFilter,
   type IdentityKeyRecord,
   type InviteRecord,
+  type LegacyAadItem,
+  type LegacyAadPage,
   type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
+  type RateHitKind,
   type SweepCounts,
   type UserRow,
   type UserSecurityState,
@@ -77,6 +85,7 @@ import {
 } from "./types.ts";
 
 const GRANT_INSERT_SQL = `INSERT INTO grants (${GRANT_INSERT_COLUMNS}) VALUES (${placeholders(20, "sqlite")})`;
+const TERMINAL_GRANT_STATUSES = "('revoked', 'consumed', 'expired')";
 
 /** Column additions shipped after the base schema; "duplicate column" means the database has them. */
 const SQLITE_ALTERS = [
@@ -85,12 +94,16 @@ const SQLITE_ALTERS = [
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
   HOSTED_SCHEMA_IDENTITY_ALTER2_SQLITE,
   HOSTED_SCHEMA_TEAM_ALTER_SQLITE,
+  HOSTED_SCHEMA_V10_ALTER_SQLITE,
+  HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
 ];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
+  // Wait up to 5 s for a concurrent writer instead of failing at once (default busy_timeout is 0).
+  db.exec("PRAGMA busy_timeout = 5000;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(HOSTED_SCHEMA_SQLITE);
   db.exec(HOSTED_SCHEMA_IDENTITY);
@@ -115,6 +128,8 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
   }
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
   db.exec(HOSTED_SCHEMA_TEAM);
+  db.exec(HOSTED_SCHEMA_V10_INDEXES);
+  db.exec(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
   return new SqliteHostedStore(db);
 }
 
@@ -135,8 +150,8 @@ export class SqliteHostedStore implements VaultStore {
   async insertOrg(row: OrgRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO orgs (id, name, wrapped_dek_iv, wrapped_dek_ciphertext, wrapped_dek_tag, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -145,11 +160,19 @@ export class SqliteHostedStore implements VaultStore {
         row.wrappedDekCiphertext,
         row.wrappedDekTag,
         row.createdAt,
+        row.createdBy,
       );
   }
 
   async listOrgs(): Promise<OrgRecord[]> {
     const rows = this.#db.prepare("SELECT * FROM orgs").all() as Record<string, unknown>[];
+    return rows.map(mapOrg);
+  }
+
+  async listOrgsCreatedBy(userId: string): Promise<OrgRecord[]> {
+    const rows = this.#db
+      .prepare("SELECT * FROM orgs WHERE created_by = ? ORDER BY created_at, id")
+      .all(userId) as Record<string, unknown>[];
     return rows.map(mapOrg);
   }
 
@@ -198,7 +221,6 @@ export class SqliteHostedStore implements VaultStore {
       this.#db.prepare("DELETE FROM policies WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM clients WHERE org_id = ?").run(orgId);
       this.#db.prepare("DELETE FROM audit WHERE org_id = ?").run(orgId);
-      this.#db.prepare("DELETE FROM agentpass_passes WHERE org_id = ?").run(orgId);
       this.#db
         .prepare(
           `DELETE FROM items WHERE environment_id IN (
@@ -306,7 +328,7 @@ export class SqliteHostedStore implements VaultStore {
 
   async insertItem(row: ItemRecord): Promise<void> {
     this.#db
-      .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+      .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "sqlite")})`)
       .run(...itemValues(row));
   }
 
@@ -316,9 +338,72 @@ export class SqliteHostedStore implements VaultStore {
   ): Promise<void> {
     this.#db
       .prepare(
-        "UPDATE items SET iv = ?, ciphertext = ?, tag = ?, last4 = ?, updated_at = ? WHERE id = ?",
+        "UPDATE items SET iv = ?, ciphertext = ?, tag = ?, last4 = ?, updated_at = ?, aad_version = ? WHERE id = ?",
       )
-      .run(patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, id);
+      .run(patch.iv, patch.ciphertext, patch.tag, patch.last4, patch.updatedAt, ITEM_AAD_VERSION, id);
+  }
+
+  async updateItemEnvelopeAndMeta(
+    id: string,
+    patch: Pick<
+      ItemRecord,
+      | "iv"
+      | "ciphertext"
+      | "tag"
+      | "last4"
+      | "name"
+      | "kind"
+      | "environmentId"
+      | "username"
+      | "inject"
+      | "allowedHostsJson"
+      | "updatedAt"
+    >,
+  ): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE items SET iv = ?, ciphertext = ?, tag = ?, last4 = ?, name = ?, kind = ?, environment_id = ?,
+         username = ?, inject = ?, allowed_hosts_json = ?, updated_at = ?, aad_version = ? WHERE id = ?`,
+      )
+      .run(
+        patch.iv,
+        patch.ciphertext,
+        patch.tag,
+        patch.last4,
+        patch.name,
+        patch.kind,
+        patch.environmentId,
+        patch.username,
+        patch.inject,
+        patch.allowedHostsJson,
+        patch.updatedAt,
+        ITEM_AAD_VERSION,
+        id,
+      );
+  }
+
+  async listItemsWithLegacyAad(page: LegacyAadPage): Promise<LegacyAadItem[]> {
+    const limit = Math.max(1, Math.floor(page.limit));
+    const params: (string | number)[] = [ITEM_AAD_VERSION];
+    let where = "i.aad_version < ?";
+    if (page.after) {
+      params.push(page.after.orgId, page.after.orgId, page.after.itemId);
+      where += " AND (v.org_id > ? OR (v.org_id = ? AND i.id > ?))";
+    }
+    params.push(limit);
+    const rows = this.#db
+      .prepare(
+        `SELECT i.*, v.org_id AS org_id FROM items i
+         JOIN environments e ON e.id = i.environment_id
+         JOIN vaults v ON v.id = e.vault_id
+         WHERE ${where} ORDER BY v.org_id, i.id LIMIT ?`,
+      )
+      .all(...params) as Record<string, unknown>[];
+    return rows.map((r) => ({ item: mapItem(r), orgId: String(r.org_id) }));
+  }
+
+  async setItemAadVersion(id: string, version: number): Promise<void> {
+    this.#db.prepare("UPDATE items SET aad_version = ? WHERE id = ?").run(version, id);
   }
 
   async updateItemMeta(
@@ -415,7 +500,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("UPDATE clients SET environment = ? WHERE id = ?").run(environment, id);
   }
 
-  async incrementRateHit(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+  async incrementRateHit(orgId: string, kind: RateHitKind, windowStart: string): Promise<number> {
     this.#db
       .prepare(
         `INSERT INTO rate_hits (org_id, kind, window_start, count) VALUES (?, ?, ?, 1)
@@ -428,7 +513,7 @@ export class SqliteHostedStore implements VaultStore {
     return Number(r.count);
   }
 
-  async countRateHits(orgId: string, kind: "grant" | "need", windowStart: string): Promise<number> {
+  async countRateHits(orgId: string, kind: RateHitKind, windowStart: string): Promise<number> {
     const r = this.#db
       .prepare("SELECT count FROM rate_hits WHERE org_id = ? AND kind = ? AND window_start = ?")
       .get(orgId, kind, windowStart) as { count: number } | undefined;
@@ -571,6 +656,15 @@ export class SqliteHostedStore implements VaultStore {
     return rows.map(mapGrant);
   }
 
+  async listGrantsForPair(orgId: string, clientId: string, itemId: string): Promise<HostedGrantRecord[]> {
+    const rows = this.#db
+      .prepare(
+        "SELECT * FROM grants WHERE client_id = ? AND item_id = ? AND org_id = ? ORDER BY created_at DESC",
+      )
+      .all(clientId, itemId, orgId) as Record<string, unknown>[];
+    return rows.map(mapGrant);
+  }
+
   async updateGrant(row: HostedGrantRecord): Promise<void> {
     this.#db
       .prepare(
@@ -681,79 +775,6 @@ export class SqliteHostedStore implements VaultStore {
       .run(row.id, row.orgId, row.action, row.actor, row.itemName, row.clientId, row.at);
   }
 
-  async insertAgentPass(row: {
-    id: string;
-    orgId: string;
-    status: string;
-    holderCnf: string | null;
-    scopeJson: string;
-    taskId: string | null;
-    createdAt: string;
-    consumedAt: string | null;
-  }): Promise<void> {
-    this.#db
-      .prepare(
-        `INSERT INTO agentpass_passes (id, org_id, status, holder_cnf, scope_json, task_id, created_at, consumed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.orgId,
-        row.status,
-        row.holderCnf,
-        row.scopeJson,
-        row.taskId,
-        row.createdAt,
-        row.consumedAt,
-      );
-  }
-
-  async getAgentPass(id: string) {
-    const r = this.#db.prepare("SELECT * FROM agentpass_passes WHERE id = ?").get(id) as
-      | Record<string, unknown>
-      | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r.id),
-      orgId: String(r.org_id),
-      status: String(r.status),
-      holderCnf: r.holder_cnf == null ? null : String(r.holder_cnf),
-      scopeJson: String(r.scope_json),
-      taskId: r.task_id == null ? null : String(r.task_id),
-      createdAt: String(r.created_at),
-      consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
-    };
-  }
-
-  async updateAgentPassStatus(id: string, status: string): Promise<void> {
-    this.#db.prepare("UPDATE agentpass_passes SET status = ? WHERE id = ?").run(status, id);
-  }
-
-  async consumeAgentPass(id: string, consumedAt: string): Promise<boolean> {
-    const result = this.#db
-      .prepare(
-        "UPDATE agentpass_passes SET status = 'consumed', consumed_at = ? WHERE id = ? AND status = 'approved'",
-      )
-      .run(consumedAt, id);
-    return result.changes === 1;
-  }
-
-  async listAgentPasses(orgId: string) {
-    const rows = this.#db
-      .prepare("SELECT * FROM agentpass_passes WHERE org_id = ? ORDER BY created_at DESC")
-      .all(orgId) as Record<string, unknown>[];
-    return rows.map((r) => ({
-      id: String(r.id),
-      orgId: String(r.org_id),
-      status: String(r.status),
-      holderCnf: r.holder_cnf == null ? null : String(r.holder_cnf),
-      scopeJson: String(r.scope_json),
-      taskId: r.task_id == null ? null : String(r.task_id),
-      createdAt: String(r.created_at),
-      consumedAt: r.consumed_at == null ? null : String(r.consumed_at),
-    }));
-  }
-
   async listAudit(orgId: string, limit = 200, filter?: AuditListFilter): Promise<HostedAuditRecord[]> {
     const clauses = ["org_id = ?"];
     const params: Array<string | number> = [orgId];
@@ -852,7 +873,7 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.exec("BEGIN");
     try {
       this.#db
-        .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(14, "sqlite")})`)
+        .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "sqlite")})`)
         .run(...itemValues(input.item));
       this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(input.grant));
       const claimed = this.#db
@@ -896,10 +917,9 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async listMembershipsForUser(userId: string): Promise<MemberRecord[]> {
-    const rows = this.#db.prepare("SELECT * FROM org_members WHERE user_id = ?").all(userId) as Record<
-      string,
-      unknown
-    >[];
+    const rows = this.#db
+      .prepare("SELECT * FROM org_members WHERE user_id = ? ORDER BY joined_at NULLS FIRST, org_id")
+      .all(userId) as Record<string, unknown>[];
     return rows.map(mapMemberRecord);
   }
 
@@ -1006,8 +1026,9 @@ export class SqliteHostedStore implements VaultStore {
   }
 
   async latestEmailOtp(email: string): Promise<EmailOtpRecord | undefined> {
+    // A resend expires the previous challenge in the same instant; the live one sorts first.
     const r = this.#db
-      .prepare("SELECT * FROM email_otp_challenges WHERE email = ? ORDER BY sent_at DESC LIMIT 1")
+      .prepare("SELECT * FROM email_otp_challenges WHERE email = ? ORDER BY sent_at DESC, expires_at DESC LIMIT 1")
       .get(email.toLowerCase()) as Record<string, unknown> | undefined;
     return r ? mapOtp(r) : undefined;
   }
@@ -1016,6 +1037,16 @@ export class SqliteHostedStore implements VaultStore {
     this.#db
       .prepare("UPDATE email_otp_challenges SET attempts = ?, expires_at = ? WHERE id = ?")
       .run(row.attempts, row.expiresAt, row.id);
+  }
+
+  async claimOtpAttempt(id: string, nowIso: string, maxAttempts: number): Promise<number | undefined> {
+    const r = this.#db
+      .prepare(
+        `UPDATE email_otp_challenges SET attempts = attempts + 1
+         WHERE id = ? AND attempts < ? AND expires_at > ? RETURNING attempts`,
+      )
+      .get(id, maxAttempts, nowIso) as { attempts: number } | undefined;
+    return r ? Number(r.attempts) : undefined;
   }
 
   async countEmailOtpSince(email: string, sinceIso: string): Promise<number> {
@@ -1043,10 +1074,11 @@ export class SqliteHostedStore implements VaultStore {
     }));
   }
 
-  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<void> {
-    this.#db
+  async markBackupUsed(userId: string, codeScrypt: string, usedAt: string): Promise<boolean> {
+    const r = this.#db
       .prepare("UPDATE backup_codes SET used_at = ? WHERE user_id = ? AND code_scrypt = ? AND used_at IS NULL")
       .run(usedAt, userId, codeScrypt);
+    return Number(r.changes) > 0;
   }
 
   async insertSession(row: OperatorSessionRow): Promise<void> {
@@ -1076,10 +1108,17 @@ export class SqliteHostedStore implements VaultStore {
     const rows = this.#db
       .prepare(
         `SELECT s.* FROM operator_sessions s
-         JOIN org_members m ON m.user_id = s.user_id
-         WHERE m.org_id = ?`,
+         WHERE (
+           s.active_org_id = ?
+           AND EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = s.active_org_id AND m.user_id = s.user_id)
+         ) OR (
+           (s.active_org_id IS NULL
+             OR NOT EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = s.active_org_id AND m.user_id = s.user_id))
+           AND ? = (SELECT f.org_id FROM org_members f WHERE f.user_id = s.user_id
+                    ORDER BY f.joined_at NULLS FIRST, f.org_id LIMIT 1)
+         )`,
       )
-      .all(orgId) as Record<string, unknown>[];
+      .all(orgId, orgId) as Record<string, unknown>[];
     return rows.map(mapSess);
   }
 
@@ -1104,6 +1143,45 @@ export class SqliteHostedStore implements VaultStore {
         patch.totpPendingAt,
         userId,
       );
+  }
+
+  async claimTotpAttempt(userId: string, nowIso: string): Promise<number | undefined> {
+    const r = this.#db
+      .prepare(
+        `UPDATE users SET
+           totp_failures = CASE WHEN totp_locked_until IS NOT NULL THEN 1 ELSE totp_failures + 1 END,
+           totp_locked_until = NULL
+         WHERE id = ? AND (totp_locked_until IS NULL OR totp_locked_until <= ?)
+         RETURNING totp_failures`,
+      )
+      .get(userId, nowIso) as { totp_failures: number } | undefined;
+    return r ? Number(r.totp_failures) : undefined;
+  }
+
+  async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+    const r = this.#db
+      .prepare("UPDATE users SET totp_last_step = ? WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)")
+      .run(step, userId, step);
+    return Number(r.changes) > 0;
+  }
+
+  async consumePendingTotp(userId: string, pendingIv: string): Promise<boolean> {
+    const r = this.#db
+      .prepare(
+        `UPDATE users SET totp_pending_wrapped_iv = NULL, totp_pending_wrapped_ciphertext = NULL,
+           totp_pending_wrapped_tag = NULL, totp_pending_at = NULL
+         WHERE id = ? AND totp_pending_wrapped_iv = ?`,
+      )
+      .run(userId, pendingIv);
+    return Number(r.changes) > 0;
+  }
+
+  async lockTotp(userId: string, untilIso: string): Promise<void> {
+    this.#db.prepare("UPDATE users SET totp_locked_until = ? WHERE id = ?").run(untilIso, userId);
+  }
+
+  async resetTotpFailures(userId: string): Promise<void> {
+    this.#db.prepare("UPDATE users SET totp_failures = 0, totp_locked_until = NULL WHERE id = ?").run(userId);
   }
 
   async listUsersWithTotp(): Promise<UserRow[]> {
@@ -1150,8 +1228,8 @@ export class SqliteHostedStore implements VaultStore {
   async insertAccessEvent(row: AccessEventRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO access_events (id, org_id, client_id, actor_user_id, kind, jti_hash, issued_at, expires_at, revoked_at, grant_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1163,6 +1241,7 @@ export class SqliteHostedStore implements VaultStore {
         row.issuedAt,
         row.expiresAt,
         row.revokedAt,
+        row.grantId ?? null,
       );
   }
 
@@ -1190,6 +1269,13 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("UPDATE access_events SET revoked_at = ? WHERE jti_hash = ?").run(at, jtiHash);
   }
 
+  async revokeAccessEventsForGrant(grantId: string, at: string): Promise<AccessEventRecord[]> {
+    const rows = this.#db
+      .prepare("UPDATE access_events SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL RETURNING *")
+      .all(at, grantId) as Record<string, unknown>[];
+    return rows.map(mapAccess);
+  }
+
   async setClientRevoked(id: string, at: string | null): Promise<void> {
     this.#db.prepare("UPDATE clients SET revoked_at = ? WHERE id = ?").run(at, id);
   }
@@ -1210,6 +1296,7 @@ export class SqliteHostedStore implements VaultStore {
     const dayAgo = new Date(Date.parse(nowIso) - 24 * 60 * 60 * 1000).toISOString();
     const twoHoursAgo = new Date(Date.parse(nowIso) - 2 * 60 * 60 * 1000).toISOString();
     const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const thirtyDaysAgo = new Date(Date.parse(nowIso) - 30 * 24 * 60 * 60 * 1000).toISOString();
     const run = (sql: string, ...params: string[]): number =>
       Number(this.#db.prepare(sql).run(...params).changes);
     return {
@@ -1226,6 +1313,11 @@ export class SqliteHostedStore implements VaultStore {
       rateHits: run("DELETE FROM rate_hits WHERE window_start < ?", twoHoursAgo),
       oidcPayloads: run("DELETE FROM oidc_payloads WHERE expires_at IS NOT NULL AND expires_at < ?", nowIso),
       orgInvites: run("DELETE FROM org_invites WHERE accepted_at IS NULL AND expires_at < ?", weekAgo),
+      grants: run(
+        `DELETE FROM grants WHERE status IN ${TERMINAL_GRANT_STATUSES}
+         AND COALESCE(consumed_at, expires_at, approved_at, created_at) < ?`,
+        thirtyDaysAgo,
+      ),
     };
   }
 
@@ -1263,15 +1355,40 @@ export class SqliteHostedStore implements VaultStore {
     this.#db.prepare("DELETE FROM oidc_payloads WHERE kind = ? AND grant_id = ?").run(kind, grantId);
   }
 
-  async deleteOidcPayloadsForClient(kind: string, clientIds: string[], accountId: string | null): Promise<void> {
+  async deleteOidcPayloadsForClient(
+    kind: string,
+    clientIds: string[],
+    accountId: string | null,
+    onlyWithoutGrant = false,
+  ): Promise<void> {
     if (clientIds.length === 0) return;
     const marks = clientIds.map(() => "?").join(", ");
     this.#db
       .prepare(
         `DELETE FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})
-         AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)`,
+         AND ((? IS NULL AND account_id IS NULL) OR account_id = ?)
+         ${onlyWithoutGrant ? "AND grant_id IS NULL" : ""}`,
       )
       .run(kind, ...clientIds, accountId, accountId);
+  }
+
+  async listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]> {
+    if (clientIds.length === 0) return [];
+    const marks = clientIds.map(() => "?").join(", ");
+    const rows = this.#db
+      .prepare(`SELECT id, payload FROM oidc_payloads WHERE kind = ? AND client_id IN (${marks})`)
+      .all(kind, ...clientIds) as Record<string, unknown>[];
+    return rows.map((r) => ({ id: String(r.id), payload: String(r.payload) }));
+  }
+
+  async consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean> {
+    const r = this.#db
+      .prepare(
+        `UPDATE oidc_payloads SET payload = json_set(payload, '$.consumed', ?)
+         WHERE id = ? AND kind = ? AND json_extract(payload, '$.consumed') IS NULL`,
+      )
+      .run(consumedAt, id, kind);
+    return Number(r.changes) === 1;
   }
 
   async purgeExpiredOidcPayloads(nowIso: string): Promise<number> {

@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from "../brand.ts";
+import { assetPath } from "./hosted-assets.ts";
 
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -22,7 +23,7 @@ export function authDocument(input: {
   const testid = input.testid ? ` data-testid="${escapeAttr(input.testid)}"` : "";
   const cardClass = input.wide ? "auth-card wide" : "auth-card";
   const nonce = input.nonce ? ` nonce="${escapeAttr(input.nonce)}"` : "";
-  const scriptSrc = input.script === "" ? "" : (input.script ?? "/assets/auth.js");
+  const scriptSrc = input.script === "" ? "" : (input.script ?? assetPath("auth.js"));
   const scriptTag = scriptSrc
     ? `<script${nonce} src="${escapeAttr(scriptSrc)}"></script>`
     : "";
@@ -33,8 +34,8 @@ export function authDocument(input: {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(input.title)}</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/assets/console.css" />
-  <link rel="stylesheet" href="/assets/auth.css" />
+  <link rel="stylesheet" href="${assetPath("console.css")}" />
+  <link rel="stylesheet" href="${assetPath("auth.css")}" />
 </head>
 <body class="auth-body">
   <a class="skip" href="#content">Skip to content</a>

@@ -4,19 +4,23 @@
  * example `{"credentials":100,"calls":50000}`.
  *
  * `calls` counts `inject` audit rows for the org since the first of the current UTC month.
+ * `orgs` is per user, not per org: how many orgs one account may own.
  */
 import { HttpError } from "./errors.ts";
 
-export type PlanLimitKind = "credentials" | "agents" | "members" | "calls";
+export type PlanLimitKind = "credentials" | "agents" | "members" | "calls" | "orgs";
 
-export const PLAN_LIMIT_KINDS: readonly PlanLimitKind[] = ["credentials", "agents", "members", "calls"];
+/** Kinds counted against one org (the plan report); `orgs` is counted per user instead. */
+export type OrgUsageKind = Exclude<PlanLimitKind, "orgs">;
+
+const PLAN_LIMIT_KINDS: readonly PlanLimitKind[] = ["credentials", "agents", "members", "calls", "orgs"];
 
 export type PlanLimits = Record<PlanLimitKind, number>;
 
 export type PlanName = "free";
 
 export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
-  free: { credentials: 25, agents: 10, members: 3, calls: 5000 },
+  free: { credentials: 25, agents: 10, members: 3, calls: 5000, orgs: 10 },
 };
 
 export const PLAN_LIMITS_ENV = "VAULT_PLAN_LIMITS_JSON";
@@ -82,7 +86,7 @@ export function monthStartIso(now: Date): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
-export type PlanUsage = Record<PlanLimitKind, number>;
+export type PlanUsage = Record<OrgUsageKind, number>;
 
 export type PlanReport = {
   plan: PlanName;

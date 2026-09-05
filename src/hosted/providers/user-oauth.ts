@@ -96,7 +96,16 @@ export function authorizeUrl(
   url.searchParams.set("client_id", input.clientId);
   url.searchParams.set("redirect_uri", input.redirectUri);
   const scopes = input.scopes ?? provider.defaultScopes ?? [];
-  if (provider.scopesParam && scopes.length > 0) url.searchParams.set(provider.scopesParam, scopes.join(" "));
+  if (scopes.length === 0 && provider.scopesRequired) {
+    throw new HttpError(400, `${provider.displayName} requires at least one scope on the authorize request`, {
+      provider: provider.id,
+      status: "scopes_required",
+    });
+  }
+  if (provider.scopesParam && scopes.length > 0) {
+    url.searchParams.set(provider.scopesParam, scopes.join(provider.scopesDelimiter ?? " "));
+  }
+  for (const [key, value] of Object.entries(provider.authorizeParams ?? {})) url.searchParams.set(key, value);
   url.searchParams.set("state", input.state);
   if (provider.pkce) {
     url.searchParams.set("code_challenge", pkceChallenge(input.codeVerifier));

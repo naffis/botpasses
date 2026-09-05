@@ -1,5 +1,17 @@
+import { createHash } from "node:crypto";
+
 const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
 const ACTOR_ID = /^[a-z][a-z0-9_-]{0,127}$/;
+
+/** ISO-8601 timestamp for store rows and public records. The one `nowIso`; local and hosted share it. */
+export function nowIso(d: Date = new Date()): string {
+  return d.toISOString();
+}
+
+/** Lowercase hex SHA-256; the one hash behind every `*_hash` column, fingerprint, and asset tag. */
+export function sha256Hex(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 export function normalizeSecretName(name: string): string {
   const n = name.trim().toUpperCase();
@@ -24,11 +36,18 @@ export function last4(value: string): string {
   return value.slice(-4);
 }
 
-/** Structural hostname → env-var name. Not semantic classification. */
+/**
+ * Structural hostname → env-var name. Not semantic classification. Every character outside
+ * `[A-Z0-9]` becomes `_`, runs collapse, ends are trimmed, and a leading digit gets an `H_`
+ * prefix, so any non-empty host yields a valid name (`api-v2.example.com` → `API_V2_EXAMPLE_COM`,
+ * `1password.com` → `H_1PASSWORD_COM`).
+ */
 export function suggestedNameFromHost(host: string): string | undefined {
-  const raw = host.trim().toLowerCase();
+  const raw = host.trim().toUpperCase();
   if (!raw) return undefined;
-  const candidate = raw.split(".").filter(Boolean).join("_").toUpperCase();
+  const compact = raw.replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+  if (!compact) return undefined;
+  const candidate = /^[0-9]/.test(compact) ? `H_${compact}` : compact;
   try {
     return normalizeSecretName(candidate);
   } catch {

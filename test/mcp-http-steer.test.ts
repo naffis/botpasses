@@ -66,7 +66,7 @@ test("origin results are keyed on origin_status, so a numeric legacy status alon
   assert.match(nextForPayload({ origin_status: 200, body: "{}" })?.for_model ?? "", /origin_headers/);
 });
 
-test("origin 401 next tells the model to retry the same grant", () => {
+test("origin 401 next tells the model to retry and that a one-call approval was spent", () => {
   const next = nextForPayload({
     origin_status: 401,
     status: 401,
@@ -75,7 +75,8 @@ test("origin 401 next tells the model to retry the same grant", () => {
     retry: { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET" },
   });
   assert.equal(next?.tool, "http_request");
-  assert.match(next?.for_model ?? "", /same Botpasses approval|new 8-digit code/i);
+  assert.match(next?.for_model ?? "", /one-call approval was spent/);
+  assert.doesNotMatch(next?.for_model ?? "", /same .*approval is still valid/i, "no promise that a prompt grant survives an origin answer");
   assert.equal(next?.arguments?.item_name, "SPOTIFY_SECRET");
 });
 
@@ -91,6 +92,23 @@ test("origin 4xx says fix the request, 5xx says retry once; neither asks for a n
     assert.doesNotMatch(next?.for_model ?? "", /spotify|grok/i, "generic steering names no vendor");
     assert.doesNotMatch(next?.for_model ?? "", /http\.request|—/);
   }
+});
+
+test("body_too_large is not a transient 5xx: the model is told to narrow the call, not to retry it (R3-8)", () => {
+  const retry = { method: "GET", path: "/v1/items", host: "api.example.com", item_name: "X" };
+  const body = JSON.stringify({ error: "body_too_large", hint: "The origin response exceeded 1048576 bytes and was discarded." });
+  const cut = nextForPayload({ origin_status: 502, status: 502, body, origin_headers: {}, retry });
+  assert.equal(cut?.tool, "http_request");
+  assert.match(cut?.for_model ?? "", /larger than 1 MiB/);
+  assert.match(cut?.for_model ?? "", /Do not retry the same call/);
+  assert.match(cut?.for_model ?? "", /pagination|page size|fields/);
+  assert.doesNotMatch(cut?.for_model ?? "", /retry once|Transient/i);
+  assert.equal(cut?.arguments?.item_name, "X", "the narrowed retry keeps the item and target");
+  // A 502 whose body is the origin's own (JSON with another error, or not JSON) still reads as transient.
+  const origin502 = nextForPayload({ origin_status: 502, status: 502, body: JSON.stringify({ error: "upstream_timeout" }), retry });
+  assert.match(origin502?.for_model ?? "", /Transient origin error; retry once/);
+  const html502 = nextForPayload({ origin_status: 502, status: 502, body: "<html>Bad Gateway</html>", retry });
+  assert.match(html502?.for_model ?? "", /retry once/);
 });
 
 test("dry_run reports steer to a real call or to fixing the target, and never to pasting a key", () => {

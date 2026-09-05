@@ -167,8 +167,9 @@ test("name-bound AAD rejects a swapped envelope (AC-06)", () => {
     const key = parseMasterKey(keyHex);
     assert.equal(decrypt(row, key, "STRIPE_KEY"), CANARY);
     assert.throws(() => decrypt(row, key, "OTHER_KEY"));
-    assert.notEqual(loopbackBearer(key), keyHex);
-    assert.match(loopbackBearer(key), /^[0-9a-f]{64}$/);
+    assert.notEqual(loopbackBearer(key, "operator"), keyHex);
+    assert.match(loopbackBearer(key, "operator"), /^[0-9a-f]{64}$/);
+    assert.notEqual(loopbackBearer(key, "model"), loopbackBearer(key, "operator"), "two surfaces, two bearers");
   } finally {
     vault.close();
     cleanup(home);

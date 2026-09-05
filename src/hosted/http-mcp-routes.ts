@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ConnectorFetch } from "./connector.ts";
 import { defaultEnvironmentForDeployPlane } from "./deploy-plane.ts";
 import { HttpError } from "./errors.ts";
-import type { ModelPrincipal, Principal } from "./auth.ts";
+import { requireModelOrOperator, type ModelPrincipal, type Principal } from "./auth.ts";
 import { json, originIsLoopback, readJson, sendError } from "./http-util.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { handleHostedMcpRpc, isMcpHandshakeMethod, type JsonRpcRequest } from "./mcp.ts";
@@ -86,7 +86,8 @@ export function assertCookieMcpRequest(
 
 /**
  * The stdio shim runs as a synthetic model client for the operator. Its environment is the
- * plane default, never something the request body chose (S4).
+ * plane default, never something the request body chose (S4). An operator session that has not
+ * passed the authenticator step (or has no org yet) is refused like every other operator route.
  */
 export async function mcpModelPrincipal(
   kernel: HostedKernel,
@@ -95,6 +96,8 @@ export async function mcpModelPrincipal(
 ): Promise<ModelPrincipal> {
   if (principal?.channel === "model") return principal;
   if (principal?.channel === "operator") {
+    requireModelOrOperator(principal);
+    if (!principal.orgId) throw new HttpError(403, "Organization required");
     const environment = defaultEnvironmentForDeployPlane(deployPlane);
     const client = await kernel.ensureModelClient({
       orgId: principal.orgId,

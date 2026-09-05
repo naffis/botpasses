@@ -1,13 +1,18 @@
 /**
- * Browser smoke test for the operator console: sign up, enroll TOTP, store a credential,
- * issue a token, request a grant over MCP, approve from the Inbox, revoke from Agents,
- * sign out. Also checks Cancel closes dialogs and the Actions column is visible at 1280
- * and 390 px. Skips with a reason when the preinstalled Chromium is absent.
+ * Browser smoke tests for the operator console. The first signs up, enrolls TOTP, stores a
+ * credential, issues a token, requests a grant over MCP, approves from the Inbox, revokes from
+ * Agents, and signs out; it also checks Cancel closes dialogs and the Actions column is visible
+ * at 1280 and 390 px. The second completes a real OAuth consent (DCR, /authorize, Allow, code on
+ * the redirect URI, token exchange) and re-enrolls the authenticator from the console. Both skip
+ * with a reason when the preinstalled Chromium is absent.
  */
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import * as OTPAuth from "otpauth";
-import { bootConsoleServer } from "./helpers/console-boot.ts";
+import { bootConsoleServer, type ConsoleServer } from "./helpers/console-boot.ts";
 import { launchChromium, playwrightUnavailableReason, type PwPage } from "./helpers/playwright.ts";
 
 const skipReason = playwrightUnavailableReason();
@@ -20,6 +25,12 @@ async function within(page: PwPage, selector: string, width: number): Promise<vo
   assert.ok(box, `${selector} has no box`);
   assert.ok(box.x >= 0 && box.x + box.width <= width + 1, `${selector} overflows ${width}px: x=${box.x} w=${box.width}`);
   assert.ok(await page.locator(selector).first().isVisible(), `${selector} not visible`);
+}
+
+/** How many times this page has fetched `path` since it loaded (resource timing entries). */
+async function loads(page: PwPage, path: string): Promise<number> {
+  // A string is evaluated as an expression (an arrow function would be created, not called).
+  return page.evaluate<number>(`performance.getEntriesByType('resource').filter((e) => new URL(e.name).pathname === '${path}').length`);
 }
 
 async function cancelCloses(page: PwPage, open: () => Promise<void>, dialog: string, cancel: string): Promise<void> {
@@ -39,7 +50,56 @@ async function mcpCall(base: string, token: string, name: string, args: Record<s
   return (await res.json()) as Record<string, unknown>;
 }
 
-test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 and 390", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS }, async () => {
+type Authenticator = ReturnType<typeof OTPAuth.URI.parse>;
+
+/** On /enroll-totp: read the otpauth URL the page shows, submit a current code, return the authenticator. */
+async function confirmEnrollment(page: PwPage): Promise<Authenticator> {
+  await page.waitForFunction("() => (document.getElementById('otpauth')?.textContent || '').startsWith('otpauth://')");
+  const otpauth = (await page.locator("#otpauth").textContent()) ?? "";
+  const totp = OTPAuth.URI.parse(otpauth.trim());
+  await page.fill("input[name=code]", totp.generate());
+  await page.locator("input[name=code]").press("Enter");
+  await page.waitForSelector("[data-testid=backup-codes]:not([hidden])");
+  return totp;
+}
+
+/** Sign up with the email code, enroll, keep one backup code, continue to the console. */
+async function signUpInBrowser(page: PwPage, server: ConsoleServer, email: string): Promise<{ totp: Authenticator; backupCode: string }> {
+  await page.goto(`${server.base}/sign-up`);
+  await page.fill("input[name=email]", email);
+  await page.locator("input[name=email]").first().press("Enter");
+  await page.waitForSelector("input[name=otp]", { state: "visible" });
+  const otp = server.otpFor(email);
+  assert.match(otp, /^\d{8}$/, "otp captured from mailbox");
+  await page.fill("input[name=otp]", otp);
+  await page.locator("input[name=otp]").press("Enter");
+  await page.waitForURL(/\/enroll-totp/);
+  const totp = await confirmEnrollment(page);
+  const backupCode = ((await page.locator("#backups li").first().textContent()) ?? "").trim();
+  assert.match(backupCode, /^[A-Z2-9]{10}$/, "a backup code is shown");
+  await page.click("#backups-continue");
+  await page.waitForURL(/\/console/);
+  return { totp, backupCode };
+}
+
+/** Where the OAuth client "lives": records the redirect the browser lands on. */
+async function startRedirectTarget(): Promise<{ redirectUri: string; hits: string[]; close: () => Promise<void> }> {
+  const hits: string[] = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url ?? "");
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    res.end("callback received");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    redirectUri: `http://127.0.0.1:${port}/cb`,
+    hits,
+    close: () => new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 and 390", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS * 2 }, async () => {
   const server = await bootConsoleServer();
   const browser = await launchChromium();
   const errors: string[] = [];
@@ -49,31 +109,8 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     page.on("pageerror", (e) => errors.push(e.message));
     const email = `smoke-${Date.now()}@example.com`;
 
-    // Sign up with email OTP
-    await page.goto(`${server.base}/sign-up`);
-    await page.fill("input[name=email]", email);
-    await page.locator("input[name=email]").first().press("Enter");
-    await page.waitForSelector("input[name=otp]", { state: "visible" });
-    await page.waitForFunction("() => true");
-    const otp = server.otpFor(email);
-    assert.match(otp, /^\d{8}$/, "otp captured from mailbox");
-    await page.fill("input[name=otp]", otp);
-    await page.locator("input[name=otp]").press("Enter");
-
-    // Enroll TOTP
-    await page.waitForURL(/\/enroll-totp/);
-    await page.waitForFunction("() => (document.getElementById('otpauth')?.textContent || '').startsWith('otpauth://')");
-    const otpauth = (await page.locator("#otpauth").textContent()) ?? "";
-    const totp = OTPAuth.URI.parse(otpauth.trim());
-    await page.fill("input[name=code]", totp.generate());
-    await page.locator("input[name=code]").press("Enter");
-    try {
-      await page.waitForURL(/\/console/, { timeout: 4000 });
-    } catch {
-      // A backup-codes step with an explicit Continue may sit between enroll and the console.
-      await page.locator("button:has-text('Continue'), a:has-text('Continue'), button:has-text('saved')").first().click();
-      await page.waitForURL(/\/console/);
-    }
+    // Sign up with email OTP, enroll TOTP, land in the console
+    const { backupCode } = await signUpInBrowser(page, server, email);
 
     // Credentials: empty state, Cancel closes, auto-uppercase, store
     await page.waitForSelector("[data-testid=items-empty]:not([hidden])");
@@ -95,8 +132,54 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await page.click("tr[data-item] td.name");
     await page.waitForSelector("#item-drawer[open]");
     assert.match(page.url(), /#credentials\/item\//);
+    const itemUrl = page.url();
     await page.click("[data-testid=drawer-close]");
     await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+
+    // Enter on a focused row opens the drawer, and the same keypress must not close it again.
+    // Closing the drawer refreshes the list (the rows are re-rendered), so let that settle first.
+    const itemLoadsBeforeEnter = await loads(page, "/api/items");
+    // waitForFunction takes the arrow form (a bare expression is eval'd in the page, which the CSP refuses).
+    await page.waitForFunction(`() => performance.getEntriesByType('resource').filter((e) => new URL(e.name).pathname === '/api/items').length > ${itemLoadsBeforeEnter}`);
+    await page.waitForTimeout(200);
+    await page.locator("tr[data-item]").first().press("Enter");
+    assert.equal(await page.evaluate<string>("document.activeElement?.tagName || ''"), "BUTTON", "focus moved into the drawer");
+    await page.waitForSelector("#item-drawer[open]");
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator("#item-drawer[open]").count(), 1, "the drawer stays open after Enter");
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+
+    // A deep link on a fresh page load opens the drawer once the list is loaded; the list loads once.
+    // Via about:blank so this is a full document load, not a same-document hash change.
+    await page.goto("about:blank");
+    await page.goto(itemUrl);
+    try {
+      await page.waitForSelector("#item-drawer[open]", { timeout: 5_000 });
+    } catch (err) {
+      const state = await page.evaluate<string>(
+        "JSON.stringify({ hash: location.hash, open: document.getElementById('item-drawer')?.open, rows: document.querySelectorAll('tr[data-item]').length, flash: document.getElementById('flash')?.textContent })",
+      );
+      throw new Error(`deep link did not open the drawer: ${state}; page errors: ${JSON.stringify(errors)}`, { cause: err });
+    }
+    assert.equal(((await page.locator("#drawer-title").textContent()) ?? "").trim(), "GITHUB_TOKEN");
+    await page.waitForTimeout(500);
+    assert.equal(await loads(page, "/api/items"), 1, "boot loads the credential list once");
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+
+    // An id no credential has says so and returns to the list
+    await page.goto(`${server.base}/console#credentials/item/itm_missing`);
+    await page.waitForSelector("#flash.is-err");
+    await page.waitForFunction("() => location.hash === '#credentials'");
+    assert.equal(await page.locator("#item-drawer[open]").count(), 0);
+
+    // Navigating by hash loads the panel once (hashchange only; popstate used to fire a second load)
+    const accessBefore = await loads(page, "/api/access");
+    await page.click("[data-testid=nav-agents]");
+    await page.waitForSelector("[data-panel=agents].is-active");
+    await page.waitForTimeout(500);
+    assert.equal((await loads(page, "/api/access")) - accessBefore, 1, "one load per navigation");
 
     // Agents: issue a token, shown once in a modal
     await page.click("[data-testid=nav-agents]");
@@ -127,6 +210,11 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await page.click("[data-testid=grant-revoke]");
     await page.waitForSelector("#confirm[open]");
     assert.equal(await page.locator("#confirm-title").textContent(), "Revoke cursor's approval for GITHUB_TOKEN?");
+    assert.equal(
+      await page.evaluate<string>("document.activeElement?.getAttribute('data-testid') || ''"),
+      "confirm-cancel",
+      "the confirm dialog focuses Cancel, not the destructive button",
+    );
     await page.click("#confirm-yes");
     await page.waitForSelector("#confirm:not([open])", { state: "attached" });
     await page.waitForSelector("[data-testid=grant-row] .pill:has-text('revoked')");
@@ -159,6 +247,36 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await page.waitForSelector("#tabpanel-activity:not([hidden])");
     assert.match(page.url(), /#agents\/activity$/);
 
+    // Account: backup-code Copy works on every click, and a regenerate copies the new codes, not the old
+    await page.goto(`${server.base}/console#account`);
+    await page.waitForSelector("[data-testid=account-regen]");
+    await page.evaluate("(window.__copied = [], navigator.clipboard.writeText = (t) => { window.__copied.push(t); return Promise.resolve(); }, 0)");
+    await page.click("[data-testid=account-regen]");
+    await page.waitForSelector("#code-dialog[open]");
+    await page.fill("#code-dialog-input", backupCode);
+    await page.locator("#code-dialog-input").press("Enter");
+    await page.waitForSelector("#backup-dialog[open]");
+    const firstCodes = ((await page.locator("#backup-codes").textContent()) ?? "").trim();
+    assert.match(firstCodes, /^[A-Z2-9]{10}(\n[A-Z2-9]{10})+$/);
+    await page.click("#backup-copy");
+    await page.click("#backup-copy");
+    assert.equal(await page.evaluate<number>("window.__copied.length"), 2, "Copy works on the second click too");
+    await page.click("#backup-dialog [data-close]");
+    await page.waitForSelector("#backup-dialog:not([open])", { state: "attached" });
+    await page.click("[data-testid=account-regen]");
+    await page.waitForSelector("#code-dialog[open]");
+    await page.fill("#code-dialog-input", firstCodes.split("\n")[0] ?? "");
+    await page.locator("#code-dialog-input").press("Enter");
+    await page.waitForSelector("#backup-dialog[open]");
+    const secondCodes = ((await page.locator("#backup-codes").textContent()) ?? "").trim();
+    assert.notEqual(secondCodes, firstCodes);
+    await page.click("#backup-copy");
+    const copied = await page.evaluate<string[]>("window.__copied");
+    assert.equal(copied.length, 3, "no stale handler from the first dialog fires");
+    assert.equal(copied[2], secondCodes, "the second dialog copies the new codes");
+    await page.click("#backup-dialog [data-close]");
+    await page.waitForSelector("#backup-dialog:not([open])", { state: "attached" });
+
     // 390 px: Actions visible, Cancel closes
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${server.base}/console#credentials`);
@@ -177,6 +295,119 @@ test("console smoke: sign up, store, connect, approve, revoke, sign out at 1280 
     await ctx.close();
   } finally {
     await browser.close();
+    await server.close();
+  }
+});
+
+test("console smoke: OAuth consent in Chromium lands on the redirect URI with a code; re-enroll shows the pending QR", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS * 2 }, async () => {
+  const server = await bootConsoleServer({ oauth: true });
+  const target = await startRedirectTarget();
+  const browser = await launchChromium();
+  const errors: string[] = [];
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    page.on("pageerror", (e) => errors.push(e.message));
+    const email = `consent-${Date.now()}@example.com`;
+    const { totp, backupCode } = await signUpInBrowser(page, server, email);
+
+    // The MCP client registers itself (DCR) and sends the browser to /authorize.
+    const registered = await fetch(`${server.base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Smoke Desktop",
+        redirect_uris: [target.redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      }),
+    });
+    const registeredText = await registered.text();
+    assert.ok(registered.status === 200 || registered.status === 201, registeredText);
+    const { client_id: clientId } = JSON.parse(registeredText) as { client_id: string };
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const audience = `${server.base}/mcp`;
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: target.redirectUri,
+      response_type: "code",
+      scope: "openid mcp",
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      resource: audience,
+      state: "smoke-state",
+    });
+    await page.goto(`${server.base}/oauth/authorize?${params}`);
+    await page.waitForSelector("[data-testid=oauth-consent]");
+    assert.match(page.url(), /\/consent\?uid=/);
+    assert.equal(((await page.locator("[data-testid=consent-client]").textContent()) ?? "").trim(), "Smoke Desktop");
+
+    // Allow: the page posts the decision, follows the resume URL, and the AS redirects to the client.
+    await page.click("button[name=decision][value=allow]");
+    await page.waitForURL(/\/cb\?/);
+    const landed = new URL(page.url());
+    assert.equal(landed.origin + landed.pathname, target.redirectUri);
+    const code = landed.searchParams.get("code") ?? "";
+    assert.ok(code, "authorization code on the redirect URI");
+    assert.equal(landed.searchParams.get("state"), "smoke-state");
+    assert.equal(landed.searchParams.get("iss"), server.base);
+    // Chromium also asks the target for /favicon.ico; only the callback itself counts.
+    assert.equal(target.hits.filter((u) => u.startsWith("/cb?")).length, 1, "the client received the redirect once");
+
+    // The code is real: it exchanges for a JWT that the MCP endpoint accepts.
+    const issued = await fetch(`${server.base}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: target.redirectUri,
+        client_id: clientId,
+        code_verifier: verifier,
+        resource: audience,
+      }),
+    });
+    const issuedText = await issued.text();
+    assert.equal(issued.status, 200, issuedText);
+    const tokens = JSON.parse(issuedText) as { access_token?: string };
+    assert.match(tokens.access_token ?? "", /^eyJ/);
+    const tools = await fetch(`${server.base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${tokens.access_token ?? ""}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    assert.equal(tools.status, 200);
+
+    // Re-enroll from the console: a current factor (a backup code), then the enroll page shows the
+    // pending secret rather than redirecting to the console or starting a second one.
+    await page.goto(`${server.base}/console#account`);
+    await page.waitForSelector("[data-testid=account-reenroll]");
+    await page.click("[data-testid=account-reenroll]");
+    await page.waitForSelector("#code-dialog[open]");
+    await page.fill("#code-dialog-input", backupCode);
+    await page.locator("#code-dialog-input").press("Enter");
+    await page.waitForURL(/\/enroll-totp/);
+    await page.waitForSelector("[data-testid=totp-qr] svg");
+    const pendingUrl = await page.evaluate<string>(
+      "fetch('/api/auth/totp/pending', { credentials: 'include' }).then((r) => r.json()).then((j) => j.otpauth_url || '')",
+    );
+    const second = await confirmEnrollment(page);
+    assert.notEqual(second.secret.base32, totp.secret.base32, "re-enroll issued a new secret");
+    assert.equal(new URL(pendingUrl).searchParams.get("secret"), second.secret.base32, "the page shows the secret the server holds");
+    await page.click("#backups-continue");
+    await page.waitForURL(/\/console/);
+    const me = await page.evaluate<{ totp_enabled?: boolean; backup_codes_remaining?: number }>(
+      "fetch('/api/auth/me', { credentials: 'include' }).then((r) => r.json())",
+    );
+    assert.equal(me.totp_enabled, true);
+    assert.equal(me.backup_codes_remaining, 10, "a fresh set of backup codes");
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally {
+    await browser.close();
+    await target.close();
     await server.close();
   }
 });

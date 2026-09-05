@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { resolvePublicOrigin } from "../brand.ts";
+import type { Envelope } from "../crypto.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type {
   AccessEventRecord,
@@ -29,7 +30,8 @@ import * as items from "./kernel-items.ts";
 import * as members from "./kernel-members.ts";
 import * as orgs from "./kernel-orgs.ts";
 import * as needs from "./need-ops.ts";
-import { assertWithinLimit, monthStartIso, planLimits, type PlanLimitKind, type PlanLimits, type PlanReport, type PlanUsage } from "./plan-limits.ts";
+import { assertWithinLimit, monthStartIso, planLimits, type OrgUsageKind, type PlanLimitKind, type PlanLimits, type PlanReport, type PlanUsage } from "./plan-limits.ts";
+import { IpWindowLimiter } from "./identity-limiter.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
 import type { IdentityRotateResult } from "./identity-keys.ts";
 import { openOauthState, sealOauthState } from "./providers/user-oauth.ts";
@@ -41,6 +43,8 @@ export type { PreparedItem } from "./kernel-items.ts";
 export type HostedKernelOpts = {
   store: VaultStore;
   kek: Buffer;
+  /** The KEK a rotation is leaving (`VAULT_KEK_PREVIOUS`); DEKs still under it are re-wrapped on read. */
+  previousKek?: Buffer;
   now?: () => Date;
   sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
   publicUrl?: string;
@@ -56,6 +60,7 @@ export type InjectOutcome = "inject" | "inject_denied" | "inject_failed";
 export class HostedKernel {
   readonly store: VaultStore;
   readonly #kek: Buffer;
+  readonly #previousKek: Buffer | undefined;
   readonly now: () => Date;
   readonly sendEmail: HostedKernelOpts["sendEmail"];
   readonly publicUrl: string;
@@ -63,12 +68,18 @@ export class HostedKernel {
   readonly deployPlane: "staging" | "production";
   readonly limiter: OrgRateLimiter;
   readonly planLimits: PlanLimits;
+  /** Invite spam bounds (`kernel-members.ts`), per inviting account and per client address. */
+  readonly inviteLimiter = new IpWindowLimiter();
 
   constructor(opts: HostedKernelOpts) {
     this.store = opts.store;
     this.#kek = opts.kek;
+    this.#previousKek = opts.previousKek;
     this.now = opts.now ?? (() => new Date());
     this.sendEmail = opts.sendEmail;
+    if (opts.approvalHmac && opts.approvalHmac.length < 32) {
+      throw new Error("approvalHmac must be at least 32 bytes (VAULT_APPROVAL_HMAC is 64 hex characters).");
+    }
     this.approvalHmac = opts.approvalHmac;
     this.planLimits = opts.planLimits ?? planLimits();
     this.deployPlane = opts.deployPlane ?? "production";
@@ -157,8 +168,16 @@ export class HostedKernel {
     actorRole: MemberRole;
     email: string;
     role: MemberRole;
+    ip: string;
   }): Promise<{ invite: members.PendingInvite; accept_url: string; email_sent: boolean }> {
     return members.inviteMember(this.#memberHost(), input);
+  }
+
+  /** `POST /api/orgs`: a validated name and the per-user `orgs` plan limit, then `createOrg`. */
+  async createOrgForUser(name: string, userId: string): Promise<{ orgId: string }> {
+    const clean = members.assertOrgName(name);
+    await members.assertMayCreateOrg(this.#memberHost(), userId);
+    return this.createOrg(clean, userId);
   }
 
   async cancelInvite(input: { orgId: string; actorUserId: string; actorRole: MemberRole; inviteId: string }): Promise<void> {
@@ -198,7 +217,7 @@ export class HostedKernel {
   /* ---- plan limits (3.9) ---- */
 
   /** Current usage for one limit kind. `credentials` spans every environment, not just the plane. */
-  async planUsageFor(orgId: string, kind: PlanLimitKind): Promise<number> {
+  async planUsageFor(orgId: string, kind: OrgUsageKind): Promise<number> {
     switch (kind) {
       case "credentials":
         return this.store.countItemsForOrg(orgId);
@@ -217,6 +236,8 @@ export class HostedKernel {
 
   /** 402 `plan_limit` when one more `kind` would exceed the org's plan. */
   async assertPlanLimit(orgId: string, kind: PlanLimitKind): Promise<void> {
+    // `orgs` is counted per user (`createOrgForUser`), never against one org.
+    if (kind === "orgs") throw new Error("orgs is a per-user limit; use createOrgForUser");
     assertWithinLimit(kind, await this.planUsageFor(orgId, kind), this.planLimits);
   }
 
@@ -264,6 +285,11 @@ export class HostedKernel {
 
   async decryptItem(orgId: string, itemId: string): Promise<items.DecryptedItem> {
     return items.decryptItem(this.#itemHost(), orgId, itemId);
+  }
+
+  /** Boot-time one-shot, batched: binds every item envelope still under the legacy `orgId` AAD. See `kernel-items.ts`. */
+  async rebindLegacyItems(opts: items.RebindOptions = {}): Promise<items.RebindResult> {
+    return items.rebindLegacyItems(this.#itemHost(), opts);
   }
 
   async findStoredItem(orgId: string, environment: VaultEnvName, itemName: string) {
@@ -487,11 +513,13 @@ export class HostedKernel {
   }
 
   #orgHost(): orgs.OrgHost {
+    const previous = this.#previousKek;
     return {
       store: this.store,
       now: this.now,
       wrapDek: (dek, orgId) => wrapDek(dek, this.#kek, orgId),
       unwrapDek: (envelope, orgId) => unwrapDek(envelope, this.#kek, orgId),
+      ...(previous ? { unwrapDekPrevious: (envelope: Envelope, orgId: string) => unwrapDek(envelope, previous, orgId) } : {}),
     };
   }
 
@@ -500,6 +528,7 @@ export class HostedKernel {
       store: this.store,
       now: this.now,
       deployPlane: this.deployPlane,
+      assertPlane: (name) => this.#assertPlane(name),
       envFor: (orgId, name) => this.envFor(orgId, name),
       dekForOrg: (orgId) => this.dekForOrg(orgId),
       assertPlanLimit: (orgId, kind) => this.assertPlanLimit(orgId, kind),
@@ -579,6 +608,7 @@ export class HostedKernel {
       now: this.now,
       publicUrl: this.publicUrl,
       planLimits: this.planLimits,
+      inviteLimiter: this.inviteLimiter,
       sendEmail: this.sendEmail,
       audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),
     };

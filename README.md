@@ -4,7 +4,7 @@ Named credentials for **agents and tools**, injected into the **runtime** (child
 
 This is not a human password manager. It does not do browser autofill, TOTP, passkeys, or sharing secrets with other people. If the LLM can see a secret value, the product failed.
 
-Hosted origins: **https://botpasses.com** (prod) and **https://staging.botpasses.com**. MCP collect URLs, CLI login, OAuth resource, and emails use those origins only. Process env names stay `VAULT_*`. AgentPass (`/agentpass/*`) is a separate protocol, not the product name.
+Hosted origins: **https://botpasses.com** (prod) and **https://staging.botpasses.com**. MCP collect URLs, CLI login, OAuth resource, and emails use those origins only. Process env names stay `VAULT_*`.
 
 An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAULT_HOME` to that path.
 
@@ -39,7 +39,7 @@ Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` 
 | ChatGPT | Remote MCP requires OAuth 2.1 + Dynamic Client Registration on this origin |
 | Cursor | Remote MCP URL or local `npx vault mcp` stdio. Hosted stdio: `npx vault login`, then `npx vault mcp --user-jwt` |
 
-Until the package is published on npm, use `npx vault` from this repo or `npm run botpasses`.
+Until the package is published on npm, use `npx vault` from this repo or `npm run vault -- <command>`.
 
 ### Hosted MCP stdio
 
@@ -72,7 +72,7 @@ Approve via the web inbox, the email sent to every org member (magic link), or t
 
 ## Threat model
 
-Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0006](docs/adr/0006-grant-vault-trust-model.md), [0007](docs/adr/0007-kms-wrapped-kek.md).
+Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Decisions: [0006](docs/adr/0006-grant-vault-trust-model.md), [0007](docs/adr/0007-kms-wrapped-kek.md), [0008](docs/adr/0008-security-hardening.md).
 
 | Surface | Sees secret value? |
 | --- | --- |
@@ -125,9 +125,11 @@ npx vault serve --host 127.0.0.1 --port 8788
 ```
 
 - Console: `http://127.0.0.1:8788/` — store, approve, revoke, audit.
-- JSON: `/api/secrets`, `/api/grants`, `/api/audit` — metadata only.
+- JSON: `/api/secrets` (also as `/api/items`), `/api/grants`, `/api/audit`: metadata only.
 - MCP JSON-RPC: `POST /mcp`
 - `GET /health` — `{ ok, product: "botpasses" }` with **no** key fingerprint
+
+`vault serve` prints two loopback bearers, both HMACs of the master key with different labels. The **operator** bearer is the `Authorization` for `/api/*` and the console (paste it there). The **model** bearer is the `Authorization` for `POST /mcp` and is what `vault mcp --remote` sends. Neither opens the other surface: an MCP client holding the model bearer cannot approve its own grants through `/api`. The server answers only to a loopback `Host`. Each MCP client's `initialize` opens its own session (`Mcp-Session-Id`, echoed on later frames), so several clients on one `vault serve` keep separate agent ids and approvals.
 
 ### MCP (stdio)
 
@@ -148,9 +150,11 @@ npx vault serve --host 127.0.0.1 --port 8788
 
 | Tool (local) | Returns |
 | --- | --- |
-| `list_secrets` | names, last-4, timestamps |
+| `list_items` | names, last-4, hosts, inject mode, username (`list_secrets` accepted as an alias for one release) |
+| `find_items` | one item by exact name or API host, or `need_item` |
 | `request_grant` | pending grant metadata |
-| `list_grants` | grant status |
+| `list_grants` | grant status for this agent |
+| `http_request` | redacted origin response after an active grant for `(item, agent, http_request)`; never the value |
 
 There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and revoke are operator surfaces.
 
@@ -159,21 +163,21 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 | Command | Purpose |
 | --- | --- |
 | `vault init` | Create `$VAULT_HOME` + SQLite schema; generate key if needed |
-| `vault set NAME` | Encrypt and store. Prints name + last-4 |
+| `vault set NAME [--host H]... [--inject MODE] [--username USER]` | Encrypt and store. Reads the value from stdin, or prompts without echo on a terminal; there is no `--value` (argv is visible in `ps`). Hosts, inject mode (hosted vocabulary), and username drive `http_request`. Prints name + last-4 |
 | `vault list` | Names + last-4 |
-| `vault grant --secret NAME --agent A --tool T [--once\|--session] [--ttl 8h]` | Human approval |
+| `vault grant --secret NAME --agent A --tool T [--once\|--session [--ttl 8h]]` | Human approval. `--ttl` applies to `--session` only; `--once` and `--session` exclude each other |
 | `vault revoke --id GRANT_ID` | Stop future injects |
 | `vault audit` | Grant/revoke/store/inject events, no values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject into child env without printing |
-| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788). Prints an HMAC loopback bearer. Required on `/api` and `POST /mcp`. |
+| `vault serve` | Loopback HTTP + operator console + `/mcp` (port 8788). Prints two HMAC loopback bearers: operator (`/api`, console) and model (`POST /mcp`). |
 | `vault login` | Print `/sign-in`, `/console`, and `/device` on the hosted origin |
-| `vault mcp` | MCP stdio (local sqlite). `vault mcp --user-jwt` proxies hosted MCP over an access token |
+| `vault mcp` | MCP stdio (local sqlite). `vault mcp --remote` forwards stdio to a running `vault serve` with the model bearer. `vault mcp --user-jwt` proxies hosted MCP over an access token |
 
 `VAULT_MODE=hosted` on `vault serve` starts the hosted process (Postgres). Do not set `VAULT_HOME` in that mode (exit 78).
 
 ## Encryption
 
-Local: AES-256-GCM envelope with `VAULT_MASTER_KEY` (AAD is the secret name). Hosted: AWS KMS unwraps the platform KEK at boot (`VAULT_KEK_WRAPPED`); that KEK wraps a per-org DEK; item encrypt uses the org DEK with AAD `org_id`. Before cutover, raw `VAULT_KEK` still boots (`VAULT_KEK_REQUIRE_KMS` unset). After cutover, set `VAULT_KEK_REQUIRE_KMS=1` and unset the raw key. Runbook: [docs/ops/kek-rotation.md](docs/ops/kek-rotation.md).
+Local: AES-256-GCM envelope with `VAULT_MASTER_KEY` (AAD is the secret name). Hosted: AWS KMS unwraps the platform KEK at boot (`VAULT_KEK_WRAPPED`); that KEK wraps a per-org DEK (AAD `org_id`); each item is encrypted under the org DEK with AAD `org_id|item_id|allowed_hosts_json|inject`, so a database writer cannot swap ciphertexts between items or edit an item's hosts or inject mode without breaking the envelope. Rows written before that binding are re-encrypted once at boot (`aad_rebind`, tracked by `items.aad_version`); the inject path never accepts the old `org_id`-only binding. Before cutover, raw `VAULT_KEK` still boots (`VAULT_KEK_REQUIRE_KMS` unset). After cutover, set `VAULT_KEK_REQUIRE_KMS=1` and unset the raw key. Rotation runs without a maintenance window: the process accepts `VAULT_KEK_PREVIOUS` (or `VAULT_KEK_PREVIOUS_WRAPPED`) next to the new KEK and re-wraps each org DEK on first use. Runbook: [docs/ops/kek-rotation.md](docs/ops/kek-rotation.md).
 
 ## Hosted deploy (Fly + Neon + Cloudflare)
 
@@ -181,17 +185,15 @@ Two Fly apps (`botpasses-staging`, `botpasses-prod`), **one Machine each** in `i
 
 **DNS:** orange-cloud `A`/`AAAA` for `botpasses.com` and `staging.botpasses.com`, plus grey-cloud `_fly-ownership` TXT. `www.botpasses.com` is a Cloudflare 301 to the apex (no Fly cert).
 
-**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
+**Fly secrets (names only):** `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, `VAULT_KEK_REQUIRE_KMS` (set `1` after wrap is confirmed), raw `VAULT_KEK` (pre-cutover fallback only), `DATABASE_URL` (Neon pooled `-pooler` host, used by the app), `DATABASE_URL_DIRECT` (Neon direct host, used by the migration release command and the backup job; falls back to `DATABASE_URL`), `VAULT_SESSION_SECRET` (32+ bytes), `VAULT_OIDC_PRIVATE_JWK` (RS256 private JWK; `VAULT_OIDC_PREVIOUS_JWK` only while rotating it, see [docs/ops/oidc-key-rotation.md](docs/ops/oidc-key-rotation.md)), `VAULT_BOOTSTRAP_TOKEN` (32+ chars; break-glass; a plane boots with it only while `VAULT_BOOTSTRAP_ALLOW_PLANE=1`, and every use is logged), `RESEND_API_KEY` (sending-access, domain-scoped), `VAULT_EMAIL_FROM` (`Botpasses <noreply@staging.botpasses.com>` on staging, `Botpasses <noreply@botpasses.com>` on production), `VAULT_PUBLIC_URL`, `VAULT_APPROVAL_HMAC`, `SENTRY_DSN`, `VAULT_PLAN_LIMITS_JSON` (optional; overrides the free-tier plan limits: `credentials`, `agents`, `members`, `calls`, `orgs`), `VAULT_TRUST_PROXY` (optional; `1` trusts the last `X-Forwarded-For` hop for client addresses behind your own proxy; Fly implies it and is the only place `Fly-Client-IP` counts). Every variable, with which plane needs it, is tabulated in [.env.example](.env.example). Hosted boot exits 78 if `RESEND_API_KEY` is set and `VAULT_EMAIL_FROM` is empty, if the session secret is short, if the JWK is missing, if `site/dist/index.html` is missing, or if Postgres cannot be opened.
 
 **Schema:** `migrations/NNN_*.sql` is applied by `scripts/migrate.ts` as the Fly `release_command` (advisory lock, one transaction per file, recorded in `schema_migrations`). Boot runs no DDL once that table exists. Runbook: [docs/ops/migrations.md](docs/ops/migrations.md).
 
-**GitHub Actions secrets for `backup-prod.yml`:** `DATABASE_URL_DIRECT`, `BACKUP_KEY` (32-byte hex, not the vault KEK), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. The workflow reads repo Actions secrets, not Fly secrets. Missing R2 fails the job.
+**GitHub Actions secrets for `backup-prod.yml`:** `DATABASE_URL_DIRECT`, `BACKUP_KEY` (32-byte hex, not the vault KEK), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`. They are environment secrets of the `backup` environment; `FLY_API_TOKEN` lives in `staging` and `production` (app-scoped deploy tokens, `-a <app>` on every `flyctl deploy`). Nothing is a repository secret. Missing R2 fails the job. Setup: [docs/ops/default-branch.md](docs/ops/default-branch.md).
 
-Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong. **One Machine per app.** TOTP enrollment state and per-IP limiters live in process memory; do not `fly scale count` above 1 until they are store-backed (plan task 1.5).
+Every plane must set `VAULT_DEPLOY_PLANE` (`staging` or `production`); an unset plane is exit 78, not a silent production default. Behind Cloudflare the visitor address for rate limits comes from `CF-Connecting-IP`, read only when the address Fly saw is inside `VAULT_TRUSTED_PROXY_CIDRS` (default: Cloudflare's published ranges). A plane without `SENTRY_DSN` logs `sentry_dsn_missing` at boot. Staging Fly app sets `VAULT_DEPLOY_PLANE=staging` and refuses vault environment `production`. Rollback: `fly releases rollback` on that app; Neon PITR if data is wrong. **One Machine per app.** TOTP enrollment state and per-IP limiters live in process memory; do not `fly scale count` above 1 until they are store-backed (plan task 1.5).
 
-`ci.yml` runs lint, typecheck, gitleaks, `npm audit` (root and `site/`), migrations twice against Postgres 16, and the suite with an 80 percent line-coverage gate. `deploy-staging.yml` deploys the SHA that `ci` just passed on `dev`. `deploy-prod.yml` is `workflow_dispatch` behind the `production` environment (required reviewer) and refuses a `staging_sha` that is not on `dev`. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT` with PGDG `pg_dump` 16, encrypts with `BACKUP_KEY` (not the vault KEK), uploads to R2, then a `backup-verify` job downloads and decrypts the object. GitHub only runs `schedule` and `workflow_dispatch` from the default branch; that branch must be `dev`, and `ci` fails on `dev` pushes until it is ([docs/ops/default-branch.md](docs/ops/default-branch.md)). Alerts: [docs/ops/alerts.md](docs/ops/alerts.md).
-
-AgentPass Authority (`/agentpass/*`) stays dark unless `VAULT_AGENTPASS=1`.
+`ci.yml` runs lint, typecheck, gitleaks, `npm audit` (root and `site/`), migrations twice against Postgres 16, and the suite with an 80 percent line-coverage gate. `deploy-staging.yml` deploys the SHA that `ci` just passed on `dev`. `deploy-prod.yml` is `workflow_dispatch` behind the `production` environment (required reviewer) and refuses a `staging_sha` that is not on `dev` or that has no successful `deploy-staging` run. `backup-prod.yml` (`0 4 * * *` UTC plus `workflow_dispatch`) dumps via `DATABASE_URL_DIRECT` with PGDG `pg_dump` 16, encrypts with `BACKUP_KEY` (not the vault KEK), uploads to R2, then a `backup-verify` job downloads and decrypts the object. GitHub only runs `schedule` and `workflow_dispatch` from the default branch; that branch must be `dev`, and `ci` fails on `dev` pushes until it is ([docs/ops/default-branch.md](docs/ops/default-branch.md)). Alerts: [docs/ops/alerts.md](docs/ops/alerts.md).
 
 ## Documentation
 
@@ -228,7 +230,7 @@ npm run lint
 | `npm run site:build` | Astro build plus Pagefind into `site/dist` |
 | `npm run migrate` | Apply `migrations/` to `DATABASE_URL_DIRECT` or `DATABASE_URL` |
 | `npm run dev` | Local `vault serve` with `--watch` |
-| `npm run hosted` | Hosted process (`VAULT_MODE=hosted` env required) |
+| `npm run hosted` | Hosted process (`VAULT_MODE=hosted` env required; exits 78 without it) |
 
 ## Layout
 

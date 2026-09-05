@@ -1,19 +1,21 @@
 /**
  * Item operations for the hosted kernel: create, rotate, update, delete, list, decrypt (the
- * AAD open with migrate-on-read), and the public projection. Functions take an `ItemHost` with
- * the kernel's store, clock, and helpers, like `kernel-grants.ts`. `HostedKernel` keeps its
- * public method names and delegates here.
+ * AAD open), the boot-time rebind of legacy envelopes, and the public projection. Functions
+ * take an `ItemHost` with the kernel's store, clock, and helpers, like `kernel-grants.ts`.
+ * `HostedKernel` keeps its public method names and delegates here.
  */
 import { randomUUID } from "node:crypto";
-import { decrypt, encrypt } from "../crypto.ts";
-import { last4, normalizeSecretName } from "../ids.ts";
+import { decrypt, encrypt, zeroKey } from "../crypto.ts";
+import { last4, normalizeSecretName, nowIso } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { ClientRecord, EnvironmentRecord, HostedGrantRecord, ItemKind, ItemPublic, ItemRecord, VaultEnvName } from "../hosted-types.ts";
-import type { VaultStore } from "../store/types.ts";
+import { ITEM_AAD_VERSION } from "../store/rows.ts";
+import type { LegacyAadCursor, VaultStore } from "../store/types.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
 import { HttpError, type NeedItemError } from "./errors.ts";
 import { itemAad, legacyItemAad } from "./item-aad.ts";
 import type { ConnectorCall } from "./kernel-grant-scope.ts";
+import { logVaultEvent } from "./observe.ts";
 import type { PlanLimitKind } from "./plan-limits.ts";
 import { assertAllowedHostname } from "./ssrf.ts";
 import { itemStoresLoginPayload, storedItemUsername } from "./store-form-fields.ts";
@@ -24,6 +26,8 @@ export type ItemHost = {
   store: VaultStore;
   now: () => Date;
   deployPlane: "staging" | "production";
+  /** 404 when this deploy plane may not serve the environment (production items on staging). */
+  assertPlane: (name: VaultEnvName) => void;
   envFor: (orgId: string, name: VaultEnvName) => Promise<EnvironmentRecord>;
   dekForOrg: (orgId: string) => Promise<Buffer>;
   assertPlanLimit: (orgId: string, kind: PlanLimitKind) => Promise<void>;
@@ -104,10 +108,6 @@ type PublicItemSource = Pick<
   "id" | "name" | "kind" | "last4" | "username" | "inject" | "allowedHostsJson" | "folderId" | "createdAt" | "updatedAt"
 >;
 
-function nowIso(d: Date): string {
-  return d.toISOString();
-}
-
 /** Item names from clients are user input; a bad name is a 400, not a 500. */
 export function normalizeItemName(raw: string): string {
   try {
@@ -125,11 +125,16 @@ export function parseHosts(json: string): string[] {
   return v as string[];
 }
 
-export function assertHosts(hosts: string[]): void {
+/** Validates and returns the hosts as stored: trimmed, lowercase, deduplicated, in order. */
+export function assertHosts(hosts: string[]): string[] {
   if (hosts.length === 0) throw new HttpError(400, "allowed_hosts is required");
-  for (const h of hosts) {
+  const out: string[] = [];
+  for (const raw of hosts) {
+    const h = raw.trim().toLowerCase();
     assertAllowedHostname(h, [h]);
+    if (!out.includes(h)) out.push(h);
   }
+  return out;
 }
 
 export function publicItem(environment: VaultEnvName, item: PublicItemSource): ItemPublic {
@@ -156,22 +161,28 @@ export async function assertItemOrg(host: ItemHost, orgId: string, vaultId: stri
   if (!vaults.some((v) => v.id === vaultId)) throw new HttpError(404, "Unknown item");
 }
 
+/** The item by id, when it belongs to this org and its environment is served by this plane. */
 async function itemInOrg(host: ItemHost, orgId: string, itemId: string): Promise<{ item: ItemRecord; env: EnvironmentRecord }> {
   const item = await host.store.getItem(itemId);
   if (!item) throw new HttpError(404, "Unknown item");
   const env = await host.store.getEnvironment(item.environmentId);
   if (!env) throw new HttpError(404, "Unknown environment");
   await assertItemOrg(host, orgId, env.vaultId);
+  host.assertPlane(env.name);
   return { item, env };
 }
 
-export async function createItem(host: ItemHost, input: CreateItemInput): Promise<ItemPublic> {
-  assertHosts(input.allowedHosts);
-  const name = normalizeItemName(input.name);
-  if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
-  if (Buffer.byteLength(input.value, "utf8") > MAX_ITEM_BYTES) {
+function assertValueSize(value: string): void {
+  if (Buffer.byteLength(value, "utf8") > MAX_ITEM_BYTES) {
     throw new HttpError(400, "Value exceeds 64KiB");
   }
+}
+
+export async function createItem(host: ItemHost, input: CreateItemInput): Promise<ItemPublic> {
+  const allowedHosts = assertHosts(input.allowedHosts);
+  const name = normalizeItemName(input.name);
+  if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
+  assertValueSize(input.value);
   if (input.kind === "login" && !input.username) {
     throw new HttpError(400, "login items require username");
   }
@@ -199,7 +210,7 @@ export async function createItem(host: ItemHost, input: CreateItemInput): Promis
       : input.value;
   const at = nowIso(host.now());
   const itemId = `itm_${randomUUID()}`;
-  const allowedHostsJson = JSON.stringify(input.allowedHosts);
+  const allowedHostsJson = JSON.stringify(allowedHosts);
   const envelope = encrypt(
     payload,
     dek,
@@ -229,7 +240,7 @@ export async function createItem(host: ItemHost, input: CreateItemInput): Promis
     last4: last4(input.value),
     username,
     inject: input.inject,
-    allowedHostsJson: JSON.stringify(input.allowedHosts),
+    allowedHostsJson,
     folderId,
     createdAt: at,
     updatedAt: at,
@@ -239,6 +250,7 @@ export async function createItem(host: ItemHost, input: CreateItemInput): Promis
 export async function rotateItem(host: ItemHost, input: RotateItemInput): Promise<ItemPublic> {
   const { item, env } = await itemInOrg(host, input.orgId, input.itemId);
   if (input.value.length === 0) throw new HttpError(400, "Value must not be empty");
+  assertValueSize(input.value);
   const dek = await host.dekForOrg(input.orgId);
   const payload =
     item.kind === "login"
@@ -297,7 +309,7 @@ export async function updateItem(host: ItemHost, input: UpdateItemInput): Promis
   const nextKind = input.kind ?? item.kind;
   const inject = input.inject ?? item.inject;
   const nextUsernameRaw = input.username !== undefined ? input.username : item.username;
-  if (input.allowedHosts) assertHosts(input.allowedHosts);
+  const allowedHosts = input.allowedHosts ? assertHosts(input.allowedHosts) : undefined;
   if (nextKind === "login" && !storedItemUsername(nextKind, inject, nextUsernameRaw)) {
     throw new HttpError(400, "login items require username");
   }
@@ -325,18 +337,23 @@ export async function updateItem(host: ItemHost, input: UpdateItemInput): Promis
     environmentId: nextEnv.id,
     inject,
     username: storedItemUsername(nextKind, inject, nextUsernameRaw),
-    allowedHostsJson: input.allowedHosts ? JSON.stringify(input.allowedHosts) : item.allowedHostsJson,
+    allowedHostsJson: allowedHosts ? JSON.stringify(allowedHosts) : item.allowedHostsJson,
     updatedAt: nowIso(host.now()),
   };
   const newValue = input.value !== undefined && input.value.length > 0 ? input.value : undefined;
   const loginShapeChanged = itemStoresLoginPayload(item.kind) !== itemStoresLoginPayload(nextKind);
   const aadChanged = next.allowedHostsJson !== item.allowedHostsJson || next.inject !== item.inject;
+  const meta = {
+    name: next.name,
+    kind: next.kind,
+    environmentId: next.environmentId,
+    username: next.username,
+    inject: next.inject,
+    allowedHostsJson: next.allowedHostsJson,
+    updatedAt: next.updatedAt,
+  };
   if (newValue !== undefined || loginShapeChanged || aadChanged) {
-    if (newValue !== undefined) {
-      if (Buffer.byteLength(newValue, "utf8") > MAX_ITEM_BYTES) {
-        throw new HttpError(400, "Value exceeds 64KiB");
-      }
-    }
+    if (newValue !== undefined) assertValueSize(newValue);
     const secret = newValue ?? (await decryptItem(host, input.orgId, item.id)).secret;
     const payload = itemStoresLoginPayload(nextKind)
       ? JSON.stringify({ username: next.username, password: secret })
@@ -352,23 +369,18 @@ export async function updateItem(host: ItemHost, input: UpdateItemInput): Promis
         inject: next.inject,
       }),
     );
-    await host.store.updateItemEnvelope(item.id, {
+    // One statement: the envelope is bound to allowed_hosts_json and inject, so neither half
+    // may land without the other.
+    await host.store.updateItemEnvelopeAndMeta(item.id, {
       iv: envelope.iv,
       ciphertext: envelope.ciphertext,
       tag: envelope.tag,
       last4: last4(secret),
-      updatedAt: next.updatedAt,
+      ...meta,
     });
+  } else {
+    await host.store.updateItemMeta(item.id, meta);
   }
-  await host.store.updateItemMeta(item.id, {
-    name: next.name,
-    kind: next.kind,
-    environmentId: next.environmentId,
-    username: next.username,
-    inject: next.inject,
-    allowedHostsJson: next.allowedHostsJson,
-    updatedAt: next.updatedAt,
-  });
   await host.audit(input.orgId, "store", input.actor, next.name, null);
   const saved = await host.store.getItem(item.id);
   if (!saved) throw new HttpError(500, "Update failed");
@@ -379,7 +391,7 @@ export async function decryptItem(host: ItemHost, orgId: string, itemId: string)
   const item = await host.store.getItem(itemId);
   if (!item) throw new HttpError(404, "Unknown item");
   const dek = await host.dekForOrg(orgId);
-  const plain = await openItemEnvelope(host, orgId, item, dek);
+  const plain = openItemEnvelope(orgId, item, dek);
   const base = {
     username: item.username,
     last4: item.last4,
@@ -459,10 +471,10 @@ export async function prepareConnector(host: ItemHost, input: PrepareConnectorIn
 }
 
 /**
- * Decrypts with the item-bound AAD. Rows written before binding decrypt under the legacy
- * `orgId` AAD and are re-encrypted in place (migrate-on-read) without touching `updated_at`.
+ * Decrypts with the item-bound AAD only. Rows written before binding are re-encrypted once at
+ * boot by `rebindLegacyItems`; the inject path never falls back to the legacy `orgId` AAD.
  */
-async function openItemEnvelope(host: ItemHost, orgId: string, item: ItemRecord, dek: Buffer): Promise<string> {
+function openItemEnvelope(orgId: string, item: ItemRecord, dek: Buffer): string {
   const envelope = { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag };
   const aad = itemAad({
     orgId,
@@ -470,12 +482,109 @@ async function openItemEnvelope(host: ItemHost, orgId: string, item: ItemRecord,
     allowedHostsJson: item.allowedHostsJson,
     inject: item.inject,
   });
-  try {
-    return decrypt(envelope, dek, aad);
-  } catch {
-    // fall through to the legacy binding
+  return decrypt(envelope, dek, aad);
+}
+
+/** Rows one rebind batch reads, opens, and writes before the next page is queried. */
+export const REBIND_BATCH_SIZE = 200;
+
+export type RebindCounts = {
+  /** Envelopes re-encrypted from the legacy `orgId` AAD to the item-bound AAD. */
+  rebound: number;
+  /** Envelopes already under the item-bound AAD whose `aad_version` was only unrecorded. */
+  verified: number;
+  /** Envelopes that opened under neither AAD; left at version 0 and reported, never deleted. */
+  unreadable: number;
+};
+
+export type RebindResult = RebindCounts & {
+  /** Pages read from the store (a page is one SELECT plus its rows' UPDATEs). */
+  batches: number;
+  /** True when `shouldStop` ended the run at a batch boundary with rows still legacy. */
+  stopped: boolean;
+};
+
+/** Cumulative counts after one batch, handed to `onBatch`. */
+export type RebindProgress = RebindCounts & { batch: number; rows: number };
+
+export type RebindOptions = {
+  /** Rows per page; default `REBIND_BATCH_SIZE`. */
+  batchSize?: number;
+  /** Read between batches; true ends the run before the next page is queried. */
+  shouldStop?: () => boolean;
+  /** Called after every batch with the cumulative counts. */
+  onBatch?: (progress: RebindProgress) => void;
+};
+
+/**
+ * Boot-time one-shot (G5): every item whose `aad_version` predates the binding is opened
+ * under the item-bound AAD (then only marked) or the legacy `orgId` AAD (then re-encrypted in
+ * place without touching `updated_at`). Idempotent: a second run finds nothing to do.
+ *
+ * Rows are read one page at a time (`batchSize`, keyset on `(org_id, id)`), so memory is bounded
+ * by the page whatever the table size, an unreadable row that stays at version 0 is visited once,
+ * and a stop request (SIGTERM) takes effect at the next page boundary with every row of the
+ * finished pages committed. Runs after the server listens; see `serveHosted`.
+ */
+export async function rebindLegacyItems(host: ItemHost, opts: RebindOptions = {}): Promise<RebindResult> {
+  const result: RebindResult = { rebound: 0, verified: 0, unreadable: 0, batches: 0, stopped: false };
+  const limit = Math.max(1, Math.floor(opts.batchSize ?? REBIND_BATCH_SIZE));
+  let after: LegacyAadCursor | undefined;
+  for (;;) {
+    if (opts.shouldStop?.()) {
+      result.stopped = true;
+      return result;
+    }
+    const page = await host.store.listItemsWithLegacyAad({ limit, after });
+    if (page.length === 0) return result;
+    result.batches += 1;
+    // One DEK unwrap per org per page: the page is ordered by org, so this stays small and is
+    // zeroed before the next page is read.
+    const deks = new Map<string, Buffer>();
+    try {
+      for (const { item, orgId } of page) {
+        let dek = deks.get(orgId);
+        if (!dek) {
+          dek = await host.dekForOrg(orgId);
+          deks.set(orgId, dek);
+        }
+        await rebindOne(host, orgId, item, dek, result);
+      }
+    } finally {
+      for (const dek of deks.values()) zeroKey(dek);
+    }
+    const last = page[page.length - 1];
+    if (last) after = { orgId: last.orgId, itemId: last.item.id };
+    opts.onBatch?.({
+      batch: result.batches,
+      rows: page.length,
+      rebound: result.rebound,
+      verified: result.verified,
+      unreadable: result.unreadable,
+    });
+    if (page.length < limit) return result;
   }
-  const plain = decrypt(envelope, dek, legacyItemAad(orgId));
+}
+
+async function rebindOne(host: ItemHost, orgId: string, item: ItemRecord, dek: Buffer, counts: RebindCounts): Promise<void> {
+  const envelope = { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag };
+  const aad = itemAad({ orgId, itemId: item.id, allowedHostsJson: item.allowedHostsJson, inject: item.inject });
+  try {
+    decrypt(envelope, dek, aad);
+    await host.store.setItemAadVersion(item.id, ITEM_AAD_VERSION);
+    counts.verified += 1;
+    return;
+  } catch {
+    // not bound yet
+  }
+  let plain: string;
+  try {
+    plain = decrypt(envelope, dek, legacyItemAad(orgId));
+  } catch {
+    counts.unreadable += 1;
+    logVaultEvent("aad_rebind_unreadable", { orgId, itemId: item.id });
+    return;
+  }
   const rebound = encrypt(plain, dek, aad);
   await host.store.updateItemEnvelope(item.id, {
     iv: rebound.iv,
@@ -484,5 +593,5 @@ async function openItemEnvelope(host: ItemHost, orgId: string, item: ItemRecord,
     last4: item.last4,
     updatedAt: item.updatedAt,
   });
-  return plain;
+  counts.rebound += 1;
 }

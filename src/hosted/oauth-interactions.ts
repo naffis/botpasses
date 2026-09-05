@@ -1,12 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type Provider from "oidc-provider";
-import type { InteractionDetails } from "oidc-provider";
+import type { InteractionDetails, InteractionResult } from "oidc-provider";
 import type { OperatorPrincipal, Principal } from "./auth.ts";
 import { requireOperator } from "./auth.ts";
 import { HttpError } from "./errors.ts";
 import { kernelForProvider, redirectHosts } from "./oauth-as.ts";
+import { orgScope } from "./oauth-clients.ts";
 import { consentExpiredHtml, consentHtml, type ConsentView } from "./oauth-pages.ts";
-import { sendHtml } from "./http-auth-routes.ts";
+import { sendHtml } from "./http-util.ts";
 import { needsTotpVerify } from "./identity.ts";
 import { bindSecurityHeaders } from "./security-headers.ts";
 
@@ -58,13 +59,38 @@ export async function handleConsentGet(
   try {
     details = await provider.interactionDetails(req, res);
   } catch {
-    res.writeHead(400, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...htmlHeaders });
-    res.end(consentExpiredHtml());
+    sendHtml(res, 400, consentExpiredHtml(), htmlHeaders);
     return true;
   }
   const { name, view } = await consentView(provider, principal, clientIdOf(details));
-  sendHtml(res, consentHtml(name, details.uid, view), htmlHeaders);
+  sendHtml(res, 200, consentHtml(name, details.uid, view), htmlHeaders);
   return true;
+}
+
+/** The consent page's script asks for JSON; a plain form submit or a Node client does not. */
+function wantsJson(req: IncomingMessage): boolean {
+  const accept = typeof req.headers.accept === "string" ? req.headers.accept : "";
+  return accept.split(",").some((part) => (part.split(";")[0] ?? "").trim().toLowerCase() === "application/json");
+}
+
+/**
+ * Hand the decision to the OAuth provider and send the browser on to the resume URL.
+ * A `fetch` cannot read the Location of a 303 (browsers hide redirects from scripts), so a
+ * JSON caller gets `200 { location }` and navigates itself; everyone else gets the 303.
+ */
+async function finishInteraction(
+  provider: Provider,
+  req: IncomingMessage,
+  res: ServerResponse,
+  result: InteractionResult,
+): Promise<void> {
+  if (!wantsJson(req)) {
+    await provider.interactionFinished(req, res, result);
+    return;
+  }
+  const location = await provider.interactionResult(req, res, result);
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.end(JSON.stringify({ location }));
 }
 
 /**
@@ -82,7 +108,7 @@ export async function handleConsentPost(
   bindSecurityHeaders(res);
   const op = requireOperator(principal);
   if (body.decision !== "allow") {
-    await provider.interactionFinished(req, res, { error: "access_denied", error_description: "denied" });
+    await finishInteraction(provider, req, res, { error: "access_denied", error_description: "denied" });
     return;
   }
   const details = await provider.interactionDetails(req, res);
@@ -97,10 +123,13 @@ export async function handleConsentPost(
   const requested = typeof details.params.scope === "string" ? details.params.scope.split(/\s+/) : [];
   const granted = requested.filter((s) => GRANTABLE_SCOPES.has(s));
   grant.addOIDCScope((granted.length > 0 ? granted : ["openid"]).join(" "));
-  grant.addResourceScope(audience, "mcp");
+  // The org this operator session acts in is bound into the Grant. Every token issued
+  // under it carries that org, and /mcp checks the account is still a member; the org is
+  // never inferred from the account's first membership at verification time.
+  grant.addResourceScope(audience, `mcp ${orgScope(op.orgId)}`);
   const grantId = await grant.save();
   // remember: false keeps the OP login transient; Botpasses owns the durable session.
-  await provider.interactionFinished(req, res, {
+  await finishInteraction(provider, req, res, {
     login: { accountId: op.userId, remember: false },
     consent: { grantId },
   });
