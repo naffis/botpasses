@@ -100,6 +100,9 @@ export function hostedAuthResolver(
 ): AuthResolver {
   const bootstrap = env.VAULT_BOOTSTRAP_TOKEN?.trim() ?? "";
   const enabled = bootstrapTokenEnabled(env);
+  if (bootstrap.length >= 32 && !enabled) {
+    logVaultEvent("bootstrap_token_ignored", { plane: env.VAULT_DEPLOY_PLANE ?? "local" });
+  }
   if (enabled) {
     // Boot-time warning: a static break-glass credential is live. Every use is logged below.
     logVaultEvent("bootstrap_token_enabled", {

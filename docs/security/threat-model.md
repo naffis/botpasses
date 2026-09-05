@@ -56,7 +56,7 @@ A hosted process refuses to start (exit 78) rather than run with a weaker config
 - `VAULT_DEPLOY_PLANE` must be `staging` or `production`; there is no default plane.
 - `VAULT_AUTH_MODE=test` is refused in every hosted boot. Header principals exist only in the test suite.
 - `VAULT_APPROVAL_HMAC` must be 64 hex characters when set.
-- `VAULT_BOOTSTRAP_TOKEN` is honoured on a plane only with `VAULT_BOOTSTRAP_ALLOW_PLANE=1`. A set token is logged at boot and every use writes an `auth_bootstrap_used` event with a token hash, address, method, and path. The intended end state is no bootstrap token on production.
+- `VAULT_BOOTSTRAP_TOKEN` is honoured on a plane only with `VAULT_BOOTSTRAP_ALLOW_PLANE=1`. A leftover token without that flag is ignored (`bootstrap_token_ignored`) and does not fail boot. A live token is logged at boot and every use writes an `auth_bootstrap_used` event with a token hash, address, method, and path. The intended end state is no bootstrap token on production.
 - `RESEND_API_KEY` without `VAULT_EMAIL_FROM`, a short session secret, a missing JWK, or an unreadable site directory are all refusals.
 
 The local plane splits its loopback bearers: `vault serve` prints an operator bearer for `/api` and a model bearer for `/mcp`; neither is accepted on the other surface.
