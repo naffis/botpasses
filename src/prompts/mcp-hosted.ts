@@ -14,6 +14,7 @@ export const MCP_INSTRUCTIONS_HOSTED = [
   "Botpasses finds the credential, asks the operator to grant if needed, and attaches it. Follow next.for_model. Retry with next.arguments when present.",
   "If the result has collect_url, tell the user to open that Botpasses page and enter the key there. Do not ask them to paste a secret into this chat. Then retry http_request.",
   "If the result has approval_code or grant status pending, tell them to approve in the Botpasses inbox. Then retry http_request with next.arguments.",
+  "If the result is user_connect_required, give the user connect_url (a Botpasses console link where they connect their account and allow you to use it), wait for them to confirm, then retry the same http_request once.",
   "There is no get_secret. Never put a secret in a tool argument.",
   "Botpasses mints and refreshes OAuth tokens for known providers (Spotify, GitHub, Google, Slack, Stripe); pass client_id when the credential is an OAuth client secret.",
   "Results carry origin_status (the API's HTTP status), a redacted body, and origin_headers (content-type, link, retry-after, rate-limit headers). Pass dry_run true to learn which item and approval a call would use without sending it.",

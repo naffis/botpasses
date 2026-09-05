@@ -67,6 +67,9 @@ test("sweepExpired deletes only rows nothing can read again (sqlite-hosted)", as
       expiresAt,
       createdAt,
       fulfilledAt: null,
+      kind: "secret" as const,
+      provider: null,
+      sourceItemId: null,
     });
     await store.insertPendingNeed(need("n_cancelled_old", "pending", iso(-3 * 24 * HOUR), iso(-2 * 24 * HOUR)));
     await store.cancelNeed("n_cancelled_old");

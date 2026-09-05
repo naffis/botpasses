@@ -5,7 +5,7 @@
  * `ConnectHost`; `HostedKernel` delegates here and keeps the KEK behind `sealState`/`openState`.
  */
 import { randomUUID } from "node:crypto";
-import { unscopedFields, type ClientRecord, type EnvironmentRecord, type ItemPublic, type VaultEnvName } from "../hosted-types.ts";
+import { unscopedFields, type ClientRecord, type EnvironmentRecord, type ItemPublic, type NeedItemRecord, type VaultEnvName } from "../hosted-types.ts";
 import type { VaultStore } from "../store/types.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import { HttpError } from "./errors.ts";
@@ -28,6 +28,10 @@ export type ConnectHost = {
   decryptItem: (orgId: string, itemId: string) => Promise<DecryptedItem>;
   createItem: (input: CreateItemInput) => Promise<ItemPublic>;
   updateItem: (input: UpdateItemInput) => Promise<ItemPublic>;
+  /** A pending `connect` need of this org, or undefined (unknown, another org's, settled, or a secret need). */
+  getPendingConnectNeed: (orgId: string, needId: string) => Promise<NeedItemRecord | undefined>;
+  /** Marks the connect need fulfilled by the stored refresh item; false when it was no longer pending. */
+  fulfillConnectNeed: (input: { orgId: string; actor: string; needId: string; itemId: string }) => Promise<boolean>;
   audit: (orgId: string, action: string, actor: string, itemName: string | null, clientId: string | null) => Promise<void>;
 };
 
@@ -41,6 +45,8 @@ export type StartConnectInput = {
   redirectUri?: string;
   /** The one model client that gets an `item_standing` policy on the refresh item after connect. */
   agentClientId?: string;
+  /** The inbox connect need this flow answers; the callback marks it fulfilled. */
+  needId?: string;
 };
 
 export type StartConnectResult = { authorize_url: string; redirect_uri: string; provider: ProviderId };
@@ -55,7 +61,13 @@ export type FinishConnectInput = {
   fetchImpl?: ConnectorFetch;
 };
 
-export type FinishConnectResult = { item_name: string; last4: string; provider: ProviderId };
+export type FinishConnectResult = {
+  item_name: string;
+  last4: string;
+  provider: ProviderId;
+  /** The agent that now holds a standing policy on the refresh item, when the connect named one. */
+  agent_client_id: string | null;
+};
 
 /** A registry provider with a user connect flow; 404 for unknown ids, 400 when it has no authorize URL. */
 function connectProvider(providerId: string): Provider {
@@ -85,6 +97,13 @@ export async function startProviderUserOauth(host: ConnectHost, input: StartConn
     const agent = await host.clientInOrg(input.orgId, agentClientId);
     if (agent.kind !== "model" || agent.revokedAt) throw new HttpError(400, "agent_client_id must be an active model client");
   }
+  const needId = input.needId?.trim() || undefined;
+  if (needId) {
+    // The need must be this org's, pending, a connect, and for this very item: a need id from
+    // elsewhere cannot mark someone else's request answered.
+    const need = await host.getPendingConnectNeed(input.orgId, needId);
+    if (!need || need.sourceItemId !== item.id) throw new HttpError(404, "Unknown need");
+  }
   const redirectUri = chooseRedirect(provider, host.publicUrl, input.redirectUri);
   const codeVerifier = pkceVerifier();
   const state = host.sealState({
@@ -99,6 +118,7 @@ export async function startProviderUserOauth(host: ConnectHost, input: StartConn
     codeVerifier,
     exp: host.now().getTime() + STATE_TTL_MS,
     ...(agentClientId ? { agentClientId } : {}),
+    ...(needId ? { needId } : {}),
   });
   return {
     authorize_url: authorizeUrl(provider, { clientId, redirectUri, state, codeVerifier }),
@@ -201,9 +221,11 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
     refreshId = created.id;
   }
   await host.audit(input.orgId, "provider_connected", input.userId, name, null);
+  let agentClientId: string | null = null;
   if (opened.agentClientId) {
     const agent = await host.clientInOrg(input.orgId, opened.agentClientId);
     const have = await host.store.findItemPolicy(input.orgId, agent.id, refreshId);
+    if (agent.kind === "model" && !agent.revokedAt) agentClientId = agent.id;
     if (agent.kind === "model" && !agent.revokedAt && !have) {
       await host.store.insertPolicy({
         id: `pol_${randomUUID()}`,
@@ -220,5 +242,8 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
       await host.audit(input.orgId, "grant", input.userId, name, agent.id);
     }
   }
-  return { item_name: name, last4: last, provider: provider.id };
+  if (opened.needId) {
+    await host.fulfillConnectNeed({ orgId: input.orgId, actor: input.userId, needId: opened.needId, itemId: refreshId });
+  }
+  return { item_name: name, last4: last, provider: provider.id, agent_client_id: agentClientId };
 }

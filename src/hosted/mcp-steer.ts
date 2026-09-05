@@ -70,6 +70,13 @@ function nextBase(payload: PublicRecord): McpNext | undefined {
       tool: "http_request",
     };
   }
+  if (status === "user_connect_required") {
+    return {
+      for_model:
+        "This API path answers only for a connected user account, and Botpasses holds only the app credential. Nothing was sent and no approval was spent. Give the user connect_url (a Botpasses console link) and ask them to connect their account there; the dialog also allows this agent to use it. Do not retry until they confirm the connect. Then call http_request once with next.arguments. Do not ask for a token.",
+      tool: "http_request",
+    };
+  }
   if (status === "scope_denied") {
     return {
       for_model:

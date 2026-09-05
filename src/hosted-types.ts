@@ -285,7 +285,14 @@ export type HostedAuditRecord = {
   at: string;
 };
 
-export type NeedItemStatus = "pending" | "fulfilled" | "cancelled";
+export type NeedItemStatus = "pending" | "fulfilled" | "cancelled" | "denied";
+
+/**
+ * `secret`: the operator types a value on the collect page. `connect`: the operator connects a
+ * provider user account for `sourceItemId` (the app's client secret) in the console; the
+ * refresh token the callback stores as `suggestedName` (`<ITEM>_REFRESH`) fulfils the need.
+ */
+export type NeedItemKind = "secret" | "connect";
 
 export type NeedItemRecord = {
   id: string;
@@ -301,6 +308,11 @@ export type NeedItemRecord = {
   expiresAt: string;
   createdAt: string;
   fulfilledAt: string | null;
+  kind: NeedItemKind;
+  /** Registry provider id of a `connect` need; null for a `secret` need. */
+  provider: string | null;
+  /** The client-secret item a `connect` need belongs to; null for a `secret` need. */
+  sourceItemId: string | null;
 };
 
 export type PersistFulfillInput = {
@@ -313,12 +325,19 @@ export type PersistFulfillInput = {
 
 export type NeedPublic = {
   id: string;
+  kind: NeedItemKind;
   suggested_name: string;
   host: string;
   client_id: string;
   client_name: string;
   task_description: string | null;
-  collect_path: string;
+  /** Path of the collect page for a `secret` need; null for a `connect` need (nothing is typed in). */
+  collect_path: string | null;
+  /** `connect` needs only: the provider and the client-secret item the account is connected for. */
+  provider: string | null;
+  source_item_id: string | null;
+  source_item_name: string | null;
+  created_at: string;
   expires_at: string;
   status: NeedItemStatus;
 };

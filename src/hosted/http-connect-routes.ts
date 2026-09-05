@@ -50,7 +50,7 @@ export async function handleConnectCallback(
     return true;
   }
   try {
-    await kernel.finishProviderUserOauth({
+    const done = await kernel.finishProviderUserOauth({
       providerId,
       orgId: principal.orgId,
       userId: principal.userId,
@@ -58,7 +58,9 @@ export async function handleConnectCallback(
       code,
       fetchImpl,
     });
-    redirect(res, `/console#vault?connected=${encodeURIComponent(providerId)}`);
+    // `agent` tells the console the named agent can retry its call now (it holds the policy).
+    const agent = done.agent_client_id ? `&agent=${encodeURIComponent(done.agent_client_id)}` : "";
+    redirect(res, `/console#vault?connected=${encodeURIComponent(providerId)}${agent}`);
   } catch (err) {
     redirect(res, connectErrorLocation(providerId, connectErrorReason(err)));
   }

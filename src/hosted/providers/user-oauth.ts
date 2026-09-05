@@ -24,6 +24,8 @@ export type ProviderOauthState = {
   exp: number;
   /** Botpasses model client that gets an `item_standing` policy on the refresh item after connect. */
   agentClientId?: string;
+  /** The inbox connect need this flow answers, fulfilled by the callback. */
+  needId?: string;
 };
 
 export function pkceVerifier(): string {

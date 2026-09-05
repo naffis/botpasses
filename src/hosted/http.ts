@@ -361,6 +361,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
     if (method === "GET" && collect) {
       const needId = decodePathSegment(collect[1] ?? "");
       const found = await opts.kernel.getNeed(needId);
+      if (found?.need.kind === "connect") {
+        // Nothing is typed in for a connect need: the inbox card starts the provider connect.
+        res.writeHead(302, { location: "/console#inbox" });
+        res.end();
+        return;
+      }
       if (!found) {
         const nonce = newCspNonce();
         res.writeHead(404, {

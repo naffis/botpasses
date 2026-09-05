@@ -465,7 +465,7 @@ test("user connect for a second provider (GitHub, no PKCE) and the narrowed auto
     assert.equal(started.json.redirect_uri, "http://127.0.0.1:8888/callback");
 
     const done = await callback(ctx, "github", { code: "c0de", state: started.state });
-    assert.equal(done.location, "/console#vault?connected=github");
+    assert.equal(done.location, `/console#vault?connected=github&agent=${ctx.model.id}`, "the landing flash can say the agent may retry");
     const refresh = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "GITHUB_APP_REFRESH");
     assert.ok(refresh);
     assert.deepEqual(refresh.allowedHosts, ["api.github.com", "github.com"]);
@@ -591,7 +591,12 @@ test("Spotify token mint uses Basic + form body and redacts the access token", a
   }
 });
 
-test("minted app token calls /v1/search; /v1/me explains user OAuth", async () => {
+async function inboxOf(ctx: Ctx) {
+  const res = await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op });
+  return (await res.json()) as { grants: { item_name: string }[]; needs: Record<string, unknown>[] };
+}
+
+test("INF-49: a user-only path with only the app credential is refused before dialing: user_connect_required, no send, approval handed back, one inbox need", async () => {
   const ctx = await setup(async (url) => {
     if (url.includes("accounts.spotify.com/api/token")) return tokenJson();
     if (url.includes("/v1/search")) {
@@ -603,18 +608,94 @@ test("minted app token calls /v1/search; /v1/me explains user OAuth", async () =
     return new Response("nope", { status: 404 });
   });
   try {
+    const secret = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "SPOTIFY_SECRET");
+    assert.ok(secret);
     const grantId = await approve(ctx);
-    const me = await call(ctx, {
-      item_name: "SPOTIFY_SECRET",
-      method: "GET",
-      path: "https://api.spotify.com/v1/me",
-      client_id: CLIENT_ID,
-    });
-    assert.equal(me.payload.origin_status, 401);
-    assert.match(String(me.payload.hint ?? ""), /user OAuth|\/v1\/me|Client credentials|Connect a Spotify user/i);
-    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "consumed", "the origin answered, so the one-call approval is spent");
-    await approve(ctx);
+    const me = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me", client_id: CLIENT_ID, task_description: "Show my profile" });
+    assert.equal(me.payload.status, "user_connect_required", JSON.stringify(me.payload));
+    assert.equal(me.payload.origin_status, undefined, "no origin answer: the doomed app-token call was not sent");
+    assert.equal(ctx.hits.length, 0, "fetchImpl was never called: neither the token mint nor /v1/me");
+    assert.equal((await ctx.kernel.store.getGrant(grantId))?.status, "active", "the one-call approval comes back: nothing left the process");
+    assert.equal(me.payload.provider, "spotify");
+    assert.equal(me.payload.item_name, "SPOTIFY_SECRET");
+    assert.equal(me.payload.refresh_item_name, "SPOTIFY_REFRESH");
+    const needId = String(me.payload.need_id);
+    assert.match(needId, /^nid_/);
+    assert.equal(
+      me.payload.connect_url,
+      `http://127.0.0.1:8788/console#credentials/item/${secret.id}?connect=spotify&agent=${ctx.model.id}&need=${needId}`,
+      "a console deep link on the plane's public origin, carrying the agent and the need",
+    );
+    assert.match(String(me.payload.hint), /connect_url/);
+    assert.match(String(me.payload.hint), /retry the same call once/);
+    const next = me.payload.next as { for_model: string; tool: string; arguments: Record<string, string> };
+    assert.equal(next.tool, "http_request");
+    assert.match(next.for_model, /connect_url/);
+    assert.match(next.for_model, /Do not retry until/);
+    assert.deepEqual(next.arguments, { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET", client_id: CLIENT_ID });
+    assert.doesNotMatch(JSON.stringify(me.payload), new RegExp(CLIENT_SECRET));
 
+    // Repeats reuse the pending row: the same need id and link, one inbox card, one audit row.
+    const again = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me", client_id: CLIENT_ID });
+    assert.equal(again.payload.status, "user_connect_required");
+    assert.equal(again.payload.need_id, needId, "the same need id");
+    assert.equal(again.payload.connect_url, me.payload.connect_url);
+    assert.equal(ctx.hits.length, 0);
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 100);
+    assert.equal(audit.filter((a) => a.action === "connect_requested").length, 1, "connect_requested is audited once per row");
+    assert.ok(audit.some((a) => a.action === "connect_requested" && a.itemName === "SPOTIFY_REFRESH" && a.clientId === ctx.model.id));
+    assert.equal(audit.filter((a) => a.action === "inject_denied" && a.itemName === "SPOTIFY_SECRET").length, 2, "each refusal is audited inject_denied, never inject");
+
+    // Dry run reports the same reason and creates nothing.
+    const cancelled = await ctx.kernel.store.denyNeed(needId);
+    assert.equal(cancelled, true);
+    const dry = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me", dry_run: true });
+    assert.equal(dry.payload.dry_run, true);
+    assert.equal(dry.payload.would_send, false);
+    assert.equal(dry.payload.reason, "user_connect_required");
+    assert.equal(dry.payload.provider, "spotify");
+    assert.equal(dry.payload.grant_status, "active");
+    assert.deepEqual((await inboxOf(ctx)).needs, [], "a dry run creates no inbox need");
+    assert.equal((await ctx.kernel.store.getNeed(needId))?.status, "denied");
+
+    // The inbox lists the connect need with what the card needs.
+    const fresh = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(fresh.payload.status, "user_connect_required");
+    assert.notEqual(fresh.payload.need_id, needId, "a denied need is not reused");
+    const inbox = await inboxOf(ctx);
+    assert.equal(inbox.needs.length, 1);
+    const card = inbox.needs[0];
+    assert.ok(card);
+    assert.equal(card.id, fresh.payload.need_id);
+    assert.equal(card.kind, "connect");
+    assert.equal(card.provider, "spotify");
+    assert.equal(card.source_item_id, secret.id);
+    assert.equal(card.source_item_name, "SPOTIFY_SECRET");
+    assert.equal(card.suggested_name, "SPOTIFY_REFRESH");
+    assert.equal(card.client_id, ctx.model.id);
+    assert.equal(card.client_name, "grok");
+    assert.equal(card.host, "api.spotify.com");
+    assert.equal(card.collect_path, null, "nothing is typed in for a connect");
+    assert.equal(typeof card.expires_at, "string");
+    assert.equal(typeof card.created_at, "string");
+
+    // The collect page refuses a connect need: the HTML route sends the operator to the inbox and fulfil is 409.
+    const page = await fetch(`${ctx.base}/collect/${String(card.id)}`, { headers: ctx.op, redirect: "manual" });
+    assert.equal(page.status, 302);
+    assert.equal(page.headers.get("location"), "/console#inbox");
+    const needApi = await (await fetch(`${ctx.base}/api/need-items/${String(card.id)}`, { headers: ctx.op })).json() as Record<string, unknown>;
+    assert.equal(needApi.kind, "connect");
+    assert.equal(needApi.provider, "spotify");
+    const typed = await fetch(`${ctx.base}/api/need-items/${String(card.id)}/fulfill`, {
+      method: "POST",
+      headers: ctx.op,
+      body: JSON.stringify({ value: "typed_token_CANARY", allowed_hosts: ["api.spotify.com"] }),
+    });
+    assert.equal(typed.status, 409);
+    assert.match(((await typed.json()) as { error: string }).error, /connect/i);
+    assert.equal((await ctx.kernel.listItems(ctx.orgId, "staging")).length, 1, "nothing was stored");
+
+    // A public path still works with the app token.
     const search = await call(ctx, {
       item_name: "SPOTIFY_SECRET",
       method: "GET",
@@ -626,6 +707,129 @@ test("minted app token calls /v1/search; /v1/me explains user OAuth", async () =
     assert.doesNotMatch(JSON.stringify(search.payload), new RegExp(CLIENT_SECRET));
     const searchAuth = ctx.hits.find((h) => h.url.includes("/v1/search"))?.auth ?? "";
     assert.equal(searchAuth, `Bearer ${ACCESS}`);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("INF-49: a plain user token stored for the API host is still sent as before (the refusal is for app credentials only)", async () => {
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("/v1/me")) return new Response(JSON.stringify({ id: auth === `Bearer ${ACCESS}` ? "user1" : "no" }), { status: 200 });
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "SPOTIFY_USER_TOKEN",
+      value: ACCESS,
+      allowedHosts: ["api.spotify.com"],
+      inject: "bearer",
+    });
+    await approve(ctx, "SPOTIFY_USER_TOKEN");
+    const me = await call(ctx, { item_name: "SPOTIFY_USER_TOKEN", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(me.payload.origin_status, 200, JSON.stringify(me.payload));
+    assert.equal(ctx.hits.length, 1);
+    assert.deepEqual((await inboxOf(ctx)).needs, []);
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("INF-49: connecting from the inbox card fulfils the need and grants the agent, whose retry then succeeds with a user token and no new card", async () => {
+  const ctx = await setup(async (url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    if (url.includes("accounts.spotify.com/api/token")) {
+      const form = new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+      if (form.get("grant_type") === "authorization_code") return tokenJson({ refresh_token: REFRESH, scope: "user-read-email" });
+      if (form.get("grant_type") === "refresh_token") return tokenJson();
+      return new Response("", { status: 400 });
+    }
+    if (url.includes("/v1/me")) {
+      return auth === `Bearer ${ACCESS}` ? new Response(JSON.stringify({ id: "user1" }), { status: 200 }) : new Response("", { status: 401 });
+    }
+    return new Response("nope", { status: 404 });
+  });
+  try {
+    const me = { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" };
+    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    const refused = await call(ctx, me);
+    assert.equal(refused.payload.status, "user_connect_required", JSON.stringify(refused.payload));
+    const needId = String(refused.payload.need_id);
+    const link = new URL(String(refused.payload.connect_url));
+    const q = new URLSearchParams(link.hash.split("?")[1] ?? "");
+    assert.equal(q.get("need"), needId);
+    assert.equal(q.get("agent"), ctx.model.id);
+
+    // The console posts what the dialog carries: the item, the agent (checkbox on), and the need.
+    const started = await startConnect(ctx, "spotify", {
+      item_name: "SPOTIFY_SECRET",
+      environment: "staging",
+      agent_client_id: q.get("agent"),
+      need_id: needId,
+    });
+    assert.equal(started.res.status, 200, JSON.stringify(started.json));
+    // A need id that is not this org's pending connect need for this item is refused.
+    const wrong = await startConnect(ctx, "spotify", { item_name: "SPOTIFY_SECRET", environment: "staging", need_id: "nid_nope" });
+    assert.equal(wrong.res.status, 404);
+
+    const done = await callback(ctx, "spotify", { code: "c0de", state: started.state });
+    assert.equal(done.location, `/console#vault?connected=spotify&agent=${ctx.model.id}`);
+    const need = await ctx.kernel.store.getNeed(needId);
+    assert.equal(need?.status, "fulfilled");
+    const refresh = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "SPOTIFY_REFRESH");
+    assert.ok(refresh);
+    assert.equal(need?.itemId, refresh.id, "the need points at the stored refresh item");
+    assert.equal((await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, refresh.id))?.kind, "item_standing");
+    assert.deepEqual((await inboxOf(ctx)).needs, [], "the card is gone");
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 100);
+    assert.ok(audit.some((a) => a.action === "need_fulfilled" && a.itemName === "SPOTIFY_REFRESH" && a.clientId === ctx.model.id));
+
+    // The agent's retry goes through the user-token path: exchange, then the call, no inbox card.
+    const retry = await call(ctx, me);
+    assert.equal(retry.payload.origin_status, 200, JSON.stringify(retry.payload));
+    assert.equal(retry.payload.user_token, true);
+    assert.equal(retry.payload.status, 200);
+    assert.deepEqual((await inboxOf(ctx)).needs, []);
+    assert.equal((await inboxOf(ctx)).grants.filter((g) => g.item_name === "SPOTIFY_REFRESH").length, 0, "no pending refresh approval");
+    const again = await call(ctx, me);
+    assert.equal(again.payload.user_token, true, "the cached user token serves the next call");
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 2, "one code exchange and one refresh");
+    const bodies = JSON.stringify([refused.payload, retry.payload, again.payload]);
+    assert.doesNotMatch(bodies, new RegExp(CLIENT_SECRET));
+    assert.doesNotMatch(bodies, new RegExp(REFRESH));
+    assert.doesNotMatch(bodies, new RegExp(ACCESS));
+  } finally {
+    await teardown(ctx);
+  }
+});
+
+test("INF-49: Deny on the connect card settles the need, audits need_denied, and a second deny is 409", async () => {
+  const ctx = await setup(async () => new Response("nope", { status: 404 }));
+  try {
+    await approve(ctx);
+    const refused = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
+    assert.equal(refused.payload.status, "user_connect_required");
+    const needId = String(refused.payload.need_id);
+    const other = await ctx.kernel.createOrg("other", "user_other");
+    const foreign = await fetch(`${ctx.base}/api/need-items/${needId}/deny`, {
+      method: "POST",
+      headers: { ...ctx.op, "x-test-user": "user_other", "x-test-org": other.orgId },
+      body: "{}",
+    });
+    assert.equal(foreign.status, 404, "another org's need reads as unknown");
+    const denied = await fetch(`${ctx.base}/api/need-items/${needId}/deny`, { method: "POST", headers: ctx.op, body: "{}" });
+    assert.equal(denied.status, 200);
+    assert.equal((await ctx.kernel.store.getNeed(needId))?.status, "denied");
+    assert.deepEqual((await inboxOf(ctx)).needs, []);
+    const audit = await ctx.kernel.store.listAudit(ctx.orgId, 100);
+    assert.ok(audit.some((a) => a.action === "need_denied" && a.actor === "user_owner" && a.itemName === "SPOTIFY_REFRESH" && a.clientId === ctx.model.id));
+    const twice = await fetch(`${ctx.base}/api/need-items/${needId}/deny`, { method: "POST", headers: ctx.op, body: "{}" });
+    assert.equal(twice.status, 409);
+    assert.equal(ctx.hits.length, 0);
   } finally {
     await teardown(ctx);
   }

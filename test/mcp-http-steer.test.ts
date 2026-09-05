@@ -121,6 +121,26 @@ test("dry_run reports steer to a real call or to fixing the target, and never to
   assert.doesNotMatch(no?.for_model ?? "", /paste/i);
 });
 
+test("INF-49: user_connect_required steers the model to hand over connect_url, wait for the operator, then retry once", () => {
+  const next = nextForPayload({
+    status: "user_connect_required",
+    provider: "spotify",
+    item_name: "SPOTIFY_SECRET",
+    refresh_item_name: "SPOTIFY_REFRESH",
+    connect_url: "https://botpasses.com/console#credentials/item/itm_1?connect=spotify&agent=cli_1&need=nid_1",
+    need_id: "nid_1",
+    hint: "x",
+    retry: { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET" },
+  });
+  assert.ok(next);
+  assert.equal(next.tool, "http_request");
+  assert.match(next.for_model, /connect_url/);
+  assert.match(next.for_model, /Do not retry until/);
+  assert.match(next.for_model, /once/);
+  assert.doesNotMatch(next.for_model, /paste/);
+  assert.deepEqual(next.arguments, { method: "GET", path: "/v1/me", host: "api.spotify.com", item_name: "SPOTIFY_SECRET" });
+});
+
 test("pending grant next.arguments merges retry with item_name", () => {
   const next = nextForPayload({
     grant_id: "grt_1",
