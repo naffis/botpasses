@@ -29,11 +29,14 @@ The agent can also pass a public `client_id` argument on `http_request` if the c
 
 An app token can call endpoints that are not about a person, for example `GET /v1/search`. Endpoints about the signed-in user, such as `GET /v1/me` or private playlist writes, need a **user token** obtained with Authorization Code and PKCE.
 
-When an agent hits one of those with an app token, the tool result says so instead of failing silently. To fix it:
+When an agent hits one of those with only the app credential, Botpasses does not send the call (Spotify would answer 401 and the approval would be spent). The agent gets `user_connect_required` with a link, and you get a card in the **Inbox**: "<agent> needs a Spotify account for SPOTIFY_SECRET". To fix it:
 
-1. Open the credential in **Credentials** and choose **Connect Spotify account**.
+1. Open the link the agent gives you, or press **Connect Spotify** on the Inbox card. Either opens the connect dialog for `SPOTIFY_SECRET` with the Client ID filled in from the credential and **Also allow <agent> to use the connected account** checked. Leave it checked so the agent's next call goes through without another approval; uncheck it to approve the agent by hand later. **Deny** on the card refuses the request.
 2. Add the redirect URI to your Spotify app: `https://botpasses.com/integrations/spotify/callback` (or `http://127.0.0.1:8888/callback` for a local setup).
-3. Approve in the Spotify consent screen. Botpasses stores the refresh token in the vault as `SPOTIFY_REFRESH` (next to `SPOTIFY_SECRET`) and uses it on later calls. The refresh token and the access tokens stay out of the model.
+3. Approve in the Spotify consent screen. Botpasses stores the refresh token in the vault as `SPOTIFY_REFRESH` (next to `SPOTIFY_SECRET`), closes the Inbox card, and tells you the agent can retry. The refresh token and the access tokens stay out of the model.
+4. Tell the agent you are done. It retries the same call once and gets the user's data.
+
+The same request repeated by the agent reuses the one Inbox card; it expires like an approval link if nobody acts on it. On the local CLI there is no connect flow: the agent's hint names the `vault set SPOTIFY_REFRESH --inject refresh` command to store a refresh token you obtained yourself.
 
 ## Refresh through the token endpoint directly
 

@@ -459,3 +459,21 @@ ALTER TABLE access_events ADD COLUMN IF NOT EXISTS grant_id TEXT;
 export const HOSTED_SCHEMA_LEDGER_GRANT_INDEXES = `
 CREATE INDEX IF NOT EXISTS access_events_grant ON access_events (grant_id) WHERE grant_id IS NOT NULL;
 `;
+
+/**
+ * Migration 013. `need_items.kind` is `secret` (typed on the collect page) or `connect` (a
+ * provider user account connected in the console); `provider` and `source_item_id` name the
+ * registry provider and the client-secret item of a `connect` need. Expand-only; mirrored by
+ * migrations/013_need_items_connect.sql. SQLite splits on ";" and tolerates "duplicate column".
+ */
+export const HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE = `
+ALTER TABLE need_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'secret';
+ALTER TABLE need_items ADD COLUMN provider TEXT;
+ALTER TABLE need_items ADD COLUMN source_item_id TEXT;
+`;
+
+export const HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG = `
+ALTER TABLE need_items ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'secret';
+ALTER TABLE need_items ADD COLUMN IF NOT EXISTS provider TEXT;
+ALTER TABLE need_items ADD COLUMN IF NOT EXISTS source_item_id TEXT;
+`;

@@ -88,6 +88,15 @@ async function loadNeed(): Promise<void> {
       return;
     }
     const need = r.body;
+    if (need.kind === "connect") {
+      // A connect need has nothing to type in: the operator connects the account from the inbox card.
+      render(
+        details,
+        html`<div class="banner">${str(need.client_name, "An agent")} needs a connected account, not a typed secret</div>
+        <p>Open the <a href="/console#inbox">Botpasses inbox</a> and use Connect on its card. Never paste a token here.</p>`,
+      );
+      return;
+    }
     const pending = need.status === "pending";
     const heading = pending ? `${str(need.client_name, "An agent")} needs a credential` : "This request is no longer pending";
     const task = str(need.task_description);

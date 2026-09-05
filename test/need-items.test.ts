@@ -46,6 +46,9 @@ test("insertPendingNeed reuses the unique pending row (AC-17)", async () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       createdAt: new Date().toISOString(),
       fulfilledAt: null,
+      kind: "secret" as const,
+      provider: null,
+      sourceItemId: null,
     };
     const first = await ctx.store.insertPendingNeed(row);
     const second = await ctx.store.insertPendingNeed({ ...row, id: "nid_b" });

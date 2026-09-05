@@ -36,7 +36,7 @@ import {
 } from "./providers/oauth.ts";
 import { isApiHost, isTokenPath, providerForHost, userPathHint } from "./providers/registry.ts";
 import { cachedMint, storeMint } from "./providers/token-cache.ts";
-import type { Provider } from "./providers/types.ts";
+import type { Provider, ProviderId } from "./providers/types.ts";
 import { injectModeOf } from "./store-form-fields.ts";
 
 export type ConnectorCallDeps = {
@@ -61,6 +61,22 @@ export type ConnectorTarget = {
 };
 
 type ScopeDeniedPayload = Record<string, unknown> & { status: "scope_denied"; item_name: string; hint: string };
+
+/**
+ * A user-only path called with the app credential and no `<ITEM>_REFRESH` to exchange: refused
+ * before dialing (the origin would answer 401 and spend the approval). `connect_url` is the
+ * console deep link that opens the connect dialog for `item_name` with this agent and the inbox
+ * need carried along, so the operator's connect also grants the agent the refresh item.
+ */
+export type UserConnectRequired = {
+  status: "user_connect_required";
+  provider: ProviderId;
+  item_name: string;
+  refresh_item_name: string;
+  connect_url: string;
+  need_id: string;
+  hint: string;
+};
 
 type GrantHalt = {
   grant_id: string;
@@ -353,6 +369,11 @@ async function dispatchConnector(
   if (provider && hint) {
     const user = await tryUserToken(deps, provider, item, target, args, environment, host, hint.message);
     if (user) return user;
+    // No `<ITEM>_REFRESH` (or no client id) and the item is the app credential: the app token
+    // cannot answer this path, so nothing is sent and the operator gets a connect request.
+    if (shouldMintClientCredentials(provider, host, item, target)) {
+      return userConnectRequired(deps, provider, item, target, environment, host);
+    }
   }
 
   if (provider && shouldMintClientCredentials(provider, host, item, target)) {
@@ -639,6 +660,61 @@ async function persistRotatedRefresh(
   await deps.kernel.writeAudit(deps.principal.orgId, "refresh_rotated", "provider", refreshName, deps.principal.clientId);
 }
 
+/** Does a user-only path on `provider` lack the `<ITEM>_REFRESH` that could answer it? True when the app credential is all there is. */
+export function userConnectNeeded(
+  provider: Provider,
+  host: string,
+  path: string,
+  item: { name: string; inject: string; kind: string },
+  siblings: ReadonlyArray<{ name: string }>,
+): boolean {
+  if (!userPathHint(provider, host, path)) return false;
+  if (!isClientSecretShaped(item)) return false;
+  const refreshName = refreshItemName(item.name);
+  return !siblings.some((i) => i.name === refreshName);
+}
+
+/**
+ * The structured refusal for a user-only path with only the app credential. Persists the inbox
+ * connect need (repeats reuse it) and returns the console deep link. Nothing is sent, so the
+ * caller hands a one-call approval back the way it does for any other pre-dial refusal.
+ */
+async function userConnectRequired(
+  deps: ConnectorCallDeps,
+  provider: Provider,
+  item: ConnectorItem,
+  target: ConnectorTarget,
+  environment: VaultEnvName,
+  host: string,
+): Promise<UserConnectRequired> {
+  const refreshName = refreshItemName(item.name);
+  const sourceItemId = item.itemId ?? (await deps.kernel.findStoredItem(deps.principal.orgId, environment, item.name))?.id;
+  if (!sourceItemId) throw new HttpError(404, `Unknown item ${item.name}`);
+  const need = await deps.kernel.ensureConnectNeed({
+    orgId: deps.principal.orgId,
+    clientId: deps.principal.clientId,
+    environment,
+    providerId: provider.id,
+    sourceItemId,
+    refreshItemName: refreshName,
+    apiHost: host,
+    taskDescription: target.taskDescription,
+  });
+  return {
+    status: "user_connect_required",
+    provider: provider.id,
+    item_name: item.name,
+    refresh_item_name: refreshName,
+    connect_url: need.connect_url,
+    need_id: need.need_id,
+    hint:
+      `${item.name} is the ${provider.displayName} app credential; ${target.method} ${target.path} answers only for a connected user account, ` +
+      `so nothing was sent and no approval was spent. Give the operator connect_url: it opens the Botpasses console, where they connect a ` +
+      `${provider.displayName} account for ${item.name} and allow this agent to use it (stored as ${refreshName}). ` +
+      "Do not retry until they confirm; then retry the same call once.",
+  };
+}
+
 /** The refresh item exists but this client has no active grant for it: ask, and say so. */
 async function refreshGrantHalt(
   deps: ConnectorCallDeps,
@@ -759,6 +835,8 @@ async function dryRun(deps: ConnectorCallDeps, target: ConnectorTarget, environm
     const denial = scopeDenialReason(grant.scope, { host, method: target.method, path: target.path });
     if (denial) reason = "scope_denied";
   }
+  // The same pre-dial refusal a real call makes, reported without creating the inbox need.
+  if (item && !reason && provider && userConnectNeeded(provider, host, target.path, item, items)) reason = "user_connect_required";
   return {
     dry_run: true,
     item_name: item?.name ?? target.itemName ?? null,

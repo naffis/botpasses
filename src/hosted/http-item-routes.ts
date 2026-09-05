@@ -72,6 +72,8 @@ export async function handleItemRoutes(
     }
     json(res, 200, {
       id: found.need.id,
+      kind: found.need.kind,
+      provider: found.need.provider,
       client_name: found.need.client_name,
       suggested_name: found.need.suggested_name,
       host: found.need.host,
@@ -132,8 +134,16 @@ export async function handleItemRoutes(
       clientId: optional(body.client_id ?? body.clientId),
       redirectUri: optional(body.redirect_uri ?? body.redirectUri),
       agentClientId: optional(body.agent_client_id ?? body.agentClientId),
+      needId: optional(body.need_id ?? body.needId),
     });
     json(res, 200, started);
+    return true;
+  }
+  const denyNeed = /^\/api\/need-items\/([^/]+)\/deny$/.exec(path);
+  if (method === "POST" && denyNeed) {
+    const op = requireOperator(principal);
+    await kernel.denyNeed({ orgId: op.orgId, actor: op.userId, needId: decodeURIComponent(denyNeed[1] ?? "") });
+    json(res, 200, { ok: true });
     return true;
   }
   const rotate = /^\/api\/items\/([^/]+)\/rotate$/.exec(path);

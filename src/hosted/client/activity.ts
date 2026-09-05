@@ -41,6 +41,12 @@ export function describeActivity(row: ActivityInput, names: ActivityNames): stri
       return cred ? `${who} asked for ${cred} to be stored` : `${who} asked for a credential to be stored`;
     case "need_fulfilled":
       return cred ? `Stored ${cred} for ${agent || "an agent"}` : "Stored a requested credential";
+    case "need_denied":
+      return cred ? `Denied ${who}'s request for ${cred}` : `Denied ${who}'s request`;
+    case "connect_requested":
+      return cred ? `${who} asked for an account to be connected as ${cred}` : `${who} asked for an account to be connected`;
+    case "provider_connected":
+      return cred ? `Connected an account as ${cred}` : "Connected an account";
     case "token_issued":
       return agent ? `Token issued to ${agent}` : "Token issued";
     case "client_rotate":

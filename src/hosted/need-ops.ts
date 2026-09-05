@@ -10,6 +10,7 @@ import {
   type ItemKind,
   type ItemPublic,
   type ItemRecord,
+  type NeedItemRecord,
   type NeedPublic,
   type PolicyRecord,
   type VaultEnvName,
@@ -187,9 +188,108 @@ export async function ensureNeedItem(
     expiresAt: ttl,
     createdAt: nowIso(host.now()),
     fulfilledAt: null,
+    kind: "secret",
+    provider: null,
+    sourceItemId: null,
   });
   await host.audit(input.orgId, "need_created", client.id, suggestedName || null, client.id);
   return needPayload(host, row.id, suggestedName, itemHost, client.name);
+}
+
+export type ConnectNeedInput = {
+  orgId: string;
+  clientId: string;
+  environment: VaultEnvName;
+  /** Registry provider id (`spotify`). */
+  providerId: string;
+  /** The client-secret item the agent called with; the account is connected for it. */
+  sourceItemId: string;
+  /** `<ITEM>_REFRESH`: the item the connect callback stores, and the need's `suggested_name`. */
+  refreshItemName: string;
+  /** The provider API host the call was for. */
+  apiHost: string;
+  taskDescription?: string;
+};
+
+/** Console deep link that opens the connect dialog for the item with the agent and need carried along. */
+export function connectUrl(publicUrl: string, input: { sourceItemId: string; providerId: string; clientId: string; needId: string }): string {
+  const q = new URLSearchParams({ connect: input.providerId, agent: input.clientId, need: input.needId });
+  return `${publicUrl.replace(/\/$/, "")}/console#credentials/item/${encodeURIComponent(input.sourceItemId)}?${q.toString()}`;
+}
+
+/**
+ * The inbox record behind a `user_connect_required` result: "<agent> needs a <provider> account
+ * for <ITEM>". Keyed like a secret need (client, environment, `<ITEM>_REFRESH`, API host), so an
+ * agent that keeps calling gets the same row and need id back until the operator connects or
+ * denies. No rate limiter: the agent already holds an approved grant on the client-secret item,
+ * and repeats reuse the row. Audited `connect_requested` once per row.
+ */
+export async function ensureConnectNeed(host: NeedHost, input: ConnectNeedInput): Promise<{ need_id: string; connect_url: string }> {
+  const client = await host.clientInOrg(input.orgId, input.clientId);
+  if (client.environment !== input.environment) {
+    throw new HttpError(403, "Client cannot access this environment");
+  }
+  const env = await host.envFor(input.orgId, input.environment);
+  const key = {
+    orgId: input.orgId,
+    clientId: client.id,
+    environmentId: env.id,
+    suggestedName: input.refreshItemName,
+    host: input.apiHost,
+  };
+  const ttl = new Date(host.now().getTime() + host.magicTtlMs).toISOString();
+  const existing = await host.store.getPendingNeed(key);
+  let needId: string;
+  if (existing && existing.kind === "connect" && existing.expiresAt >= nowIso(host.now())) {
+    await host.store.refreshNeedExpires(existing.id, ttl);
+    needId = existing.id;
+  } else {
+    if (existing) await host.store.cancelNeed(existing.id);
+    const row = await host.store.insertPendingNeed({
+      ...key,
+      id: `nid_${randomUUID()}`,
+      taskDescription: truncateTask(input.taskDescription),
+      status: "pending",
+      itemId: null,
+      grantId: null,
+      expiresAt: ttl,
+      createdAt: nowIso(host.now()),
+      fulfilledAt: null,
+      kind: "connect",
+      provider: input.providerId,
+      sourceItemId: input.sourceItemId,
+    });
+    needId = row.id;
+    await host.audit(input.orgId, "connect_requested", client.id, input.refreshItemName, client.id);
+  }
+  return {
+    need_id: needId,
+    connect_url: connectUrl(host.publicUrl, { sourceItemId: input.sourceItemId, providerId: input.providerId, clientId: client.id, needId }),
+  };
+}
+
+/** The operator refused the request from the inbox card. 404 for another org's need, 409 when it is not pending. */
+export async function denyNeed(host: NeedHost, input: { orgId: string; actor: string; needId: string }): Promise<void> {
+  const need = await host.store.getNeed(input.needId);
+  if (!need || need.orgId !== input.orgId) throw new HttpError(404, "Unknown need");
+  if (!(await host.store.denyNeed(need.id))) throw new HttpError(409, "Need is not pending");
+  await host.audit(input.orgId, "need_denied", input.actor, need.suggestedName || null, need.clientId);
+}
+
+/**
+ * The provider callback stored `<ITEM>_REFRESH` for the agent that asked: close the connect need
+ * it came from. A need that already expired, was denied, or belongs to another org is left alone
+ * (the connect itself succeeded either way), so this never fails the callback.
+ */
+export async function fulfillConnectNeed(
+  host: NeedHost,
+  input: { orgId: string; actor: string; needId: string; itemId: string },
+): Promise<boolean> {
+  const need = await host.store.getNeed(input.needId);
+  if (!need || need.orgId !== input.orgId || need.kind !== "connect") return false;
+  if (!(await host.store.fulfillNeedWithItem(need.id, input.itemId, nowIso(host.now())))) return false;
+  await host.audit(input.orgId, "need_fulfilled", input.actor, need.suggestedName || null, need.clientId);
+  return true;
 }
 
 export async function needItemError(
@@ -222,6 +322,8 @@ export async function getNeed(
 ): Promise<{
   need: {
     id: string;
+    kind: NeedItemRecord["kind"];
+    provider: string | null;
     suggested_name: string;
     host: string;
     client_name: string;
@@ -236,6 +338,8 @@ export async function getNeed(
   return {
     need: {
       id: row.id,
+      kind: row.kind,
+      provider: row.provider,
       suggested_name: row.suggestedName,
       host: row.host,
       client_name: client?.name ?? row.clientId,
@@ -251,14 +355,20 @@ export async function listInboxNeeds(host: NeedHost, orgId: string): Promise<Nee
   const out: NeedPublic[] = [];
   for (const row of rows) {
     const client = await host.store.getClient(row.clientId);
+    const source = row.sourceItemId ? await host.store.getItem(row.sourceItemId) : undefined;
     out.push({
       id: row.id,
+      kind: row.kind,
       suggested_name: row.suggestedName,
       host: row.host,
       client_id: row.clientId,
       client_name: client?.name ?? row.clientId,
       task_description: row.taskDescription,
-      collect_path: `/collect/${row.id}`,
+      collect_path: row.kind === "secret" ? `/collect/${row.id}` : null,
+      provider: row.provider,
+      source_item_id: row.sourceItemId,
+      source_item_name: source?.name ?? null,
+      created_at: row.createdAt,
       expires_at: row.expiresAt,
       status: row.status,
     });
@@ -285,6 +395,12 @@ export async function fulfillNeed(
   if (!need || need.orgId !== input.orgId) throw new HttpError(404, "Unknown need");
   if (need.status !== "pending") throw new HttpError(409, "Need is not pending");
   if (need.expiresAt < nowIso(host.now())) throw new HttpError(410, "Need expired");
+  if (need.kind === "connect") {
+    // Nothing is typed in for a connect: the operator connects the account from the inbox card.
+    throw new HttpError(409, "This request is a provider connect, not a secret to type in. Use Connect on the inbox card.", {
+      kind: "connect",
+    });
+  }
   host.assertHosts(input.allowedHosts);
   await host.assertPlanLimit(input.orgId, "credentials");
   const kind = input.kind ?? "secret";

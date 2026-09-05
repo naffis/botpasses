@@ -10,7 +10,8 @@ import { executeConnector, hostAllowedBy, type ConnectorFetch, type ConnectorRes
 import { HttpError } from "./hosted/errors.ts";
 import type { DryRunReport } from "./hosted/mcp-http.ts";
 import { sendNeverLeft } from "./hosted/mcp-http.ts";
-import { providerForHost } from "./hosted/providers/registry.ts";
+import { refreshItemName } from "./hosted/providers/oauth.ts";
+import { providerForHost, userPathHint } from "./hosted/providers/registry.ts";
 import { assertAllowedHostname } from "./hosted/ssrf.ts";
 import { injectModeOf } from "./hosted/store-form-fields.ts";
 import { normalizeActorId, normalizeSecretName, suggestedNameFromHost } from "./ids.ts";
@@ -68,8 +69,18 @@ export type LocalOriginResult = {
   host: string;
 };
 
+/** Hosted parity: a user-only provider path called with only the app credential. Nothing was sent. */
+export type LocalUserConnectRequired = {
+  status: "user_connect_required";
+  provider: string;
+  item_name: string;
+  refresh_item_name: string;
+  hint: string;
+};
+
 export type LocalHttpResult =
   | { status: "need_item"; suggested_name: string; host: string; message: string }
+  | LocalUserConnectRequired
   | { status: "ambiguous"; items: LocalItemSummary[]; truncated: boolean }
   | (LocalGrantPublic & { message: string })
   | DryRunReport
@@ -210,6 +221,36 @@ function localDryRun(host: LocalHttpHost, input: LocalHttpInput, agentId: string
   };
 }
 
+/**
+ * A known provider's user-only path (Spotify `/v1/me`) called with a `client_credentials` item
+ * and no local `<ITEM>_REFRESH`: the origin would answer 401 and spend the grant. The local
+ * plane has no connect flow, so the hint says how to store the refresh token with `vault set`.
+ */
+function localUserConnectRequired(
+  host: LocalHttpHost,
+  item: LocalItemMeta,
+  hostname: string | undefined,
+  input: LocalHttpInput,
+): LocalUserConnectRequired | undefined {
+  const target = hostname ?? item.allowedHosts[0];
+  if (!target || injectModeOf(item.inject) !== "client_credentials") return undefined;
+  const provider = providerForHost(target);
+  if (!provider || !userPathHint(provider, target, input.path)) return undefined;
+  const refreshName = refreshItemName(item.name);
+  if (host.getItem(refreshName)) return undefined;
+  const hosts = [...new Set([...provider.apiHosts, provider.tokenHost])].join(",");
+  return {
+    status: "user_connect_required",
+    provider: provider.id,
+    item_name: item.name,
+    refresh_item_name: refreshName,
+    hint:
+      `${item.name} is the ${provider.displayName} app credential; ${input.method.toUpperCase()} ${input.path} answers only for a connected user account, ` +
+      `so nothing was sent and the grant was not spent. Ask the operator to obtain a refresh token for that account (Authorization Code flow) and store it with: ` +
+      `vault set ${refreshName} --host ${hosts} --inject refresh --username <client id>. Then retry the same call once. Do not ask them to paste the token here.`,
+  };
+}
+
 export async function localHttpRequest(host: LocalHttpHost, input: LocalHttpInput): Promise<LocalHttpResult> {
   const agentId = normalizeActorId(input.agentId, "agent");
   const toolId = normalizeActorId(input.toolId ?? HTTP_REQUEST_TOOL, "tool");
@@ -232,6 +273,12 @@ export async function localHttpRequest(host: LocalHttpHost, input: LocalHttpInpu
     host.audit("inject_denied", parts);
     const pending = grant ?? host.requestGrant({ ...parts, actor: agentId });
     return { ...publicLocalGrant(pending), message: approveHint(pending) };
+  }
+  const connect = localUserConnectRequired(host, item, hostname, input);
+  if (connect) {
+    // Like hosted: the app token cannot answer this path, so nothing is sent and the grant stays active.
+    host.audit("inject_denied", parts);
+    return connect;
   }
   const once = grant.scope === "once";
   if (once) host.setGrantStatus(grant.id, "consumed", host.now());

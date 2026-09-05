@@ -1,5 +1,7 @@
 /// <reference lib="dom" />
 /** Inbox panel: pending requests, approve (one click or with limits), deny, approve by code, 15 s polling. */
+import { providerById } from "../providers/registry.ts";
+import { connectHash } from "./routes.ts";
 import type { InboxGrant, InboxNeed } from "./types.ts";
 import {
   api,
@@ -99,7 +101,28 @@ export function describeScope(scope: ScopePublic | null | undefined, now: number
   return parts.join(" · ");
 }
 
+/** "<Agent> needs a <Provider> account for <ITEM>": Connect opens the item's connect dialog with the agent and need carried along. */
+function connectNeedCard(n: InboxNeed): SafeHtml {
+  const client = n.client_name || "An agent";
+  const providerName = providerById(n.provider ?? "")?.displayName ?? "provider";
+  const item = n.source_item_name || n.suggested_name.replace(/_REFRESH$/, "") || "this credential";
+  const detail = [n.host, n.task_description].filter(Boolean).join(" · ");
+  const link = n.source_item_id && n.provider ? connectHash(n.source_item_id, { provider: n.provider, agent: n.client_id, need: n.id }) : "";
+  return html`<article class="inbox-item" data-testid="inbox-connect-need">
+    <div class="inbox-copy">
+      <h2 class="inbox-title">${client} needs a ${providerName} account for ${item}</h2>
+      <p>${detail}</p>
+      <p class="inbox-meta">${n.created_at ? html`Asked ${timeHtml(n.created_at)} · ` : ""}${n.expires_at ? html`Request expires ${timeHtml(n.expires_at)} · ` : ""}The refresh token is stored as ${n.suggested_name}; the agent never sees it.</p>
+    </div>
+    <div class="inbox-actions">
+      ${link ? html`<a class="btn btn-primary" href="${link}" data-testid="inbox-connect">Connect ${providerName}</a>` : html`<span class="hint">The credential this request was for is gone.</span>`}
+      <button type="button" class="btn-ghost" data-deny-need="${n.id}" data-deny-label="${client}|${providerName}" data-testid="inbox-need-deny">Deny</button>
+    </div>
+  </article>`;
+}
+
 function needCard(n: InboxNeed): SafeHtml {
+  if (n.kind === "connect") return connectNeedCard(n);
   const detail = [n.host, n.task_description].filter(Boolean).join(" · ");
   return html`<article class="inbox-item" data-testid="inbox-need">
     <div class="inbox-copy">
@@ -276,6 +299,21 @@ async function deny(id: string, button: HTMLButtonElement): Promise<ActionResult
   });
 }
 
+async function denyNeed(id: string, button: HTMLButtonElement): Promise<ActionResult> {
+  return busy(button, async () => {
+    try {
+      const r = await api(`/api/need-items/${encodeURIComponent(id)}/deny`, { method: "POST", body: "{}" });
+      if (!r.ok) return { ok: false, message: errorMessage(r, "Deny failed") };
+    } catch (err) {
+      return { ok: false, message: loadErrorText(err, "Deny failed") };
+    }
+    flash("Denied. The agent is told nothing was connected.", true);
+    await loadInbox({ force: true });
+    listeners.onChanged();
+    return { ok: true, message: "" };
+  });
+}
+
 /** `force` re-renders even while a limits form is open (after an approve or deny). */
 export async function loadInbox(opts: { force?: boolean } = {}): Promise<void> {
   const el = byId("inbox");
@@ -331,6 +369,9 @@ export function bindInbox(on: InboxListeners): void {
     else if (t.dataset.deny) {
       const [client, name] = (t.dataset.denyLabel ?? "|").split("|");
       void requestDeny(t.dataset.deny, client ?? "the agent", name ?? "this credential", t);
+    } else if (t.dataset.denyNeed) {
+      const [client, provider] = (t.dataset.denyLabel ?? "|").split("|");
+      void denyNeedHandler(t.dataset.denyNeed, client ?? "the agent", provider ?? "the provider", t);
     }
   });
   el?.addEventListener("submit", (e) => {
@@ -374,4 +415,14 @@ export function onDeny(fn: (id: string, client: string, name: string, run: () =>
 
 async function requestDeny(id: string, client: string, name: string, button: HTMLButtonElement): Promise<void> {
   await denyHandler(id, client, name, button);
+}
+
+/** Deny on a connect card; the console wires the confirm dialog like `onDeny`. */
+let denyNeedHandler: (id: string, client: string, provider: string, button: HTMLButtonElement) => Promise<void> = async (id, _client, _provider, button) => {
+  const result = await denyNeed(id, button);
+  if (!result.ok) flash(result.message, false);
+};
+
+export function onDenyNeed(fn: (id: string, client: string, provider: string, run: () => Promise<ActionResult>) => Promise<void>): void {
+  denyNeedHandler = (id, client, provider, button) => fn(id, client, provider, () => denyNeed(id, button));
 }

@@ -267,7 +267,11 @@ export function bindCredentials(h: CredentialHandlers, onRevokeGrant: (id: strin
       act(item, button.dataset.act);
     }
   });
+  // Closing the drawer returns to the list only while the route still names this drawer's item.
+  // The close event is delivered a task later than the `open` attribute is removed, so a route
+  // set in between (another item, a deep link) must not be clobbered by this navigation.
   drawer?.addEventListener("close", () => {
-    if (location.hash.startsWith("#credentials/item/")) credHandlers?.navigate("#credentials");
+    const id = drawer.dataset.item;
+    if (id && location.hash === itemHash(id)) credHandlers?.navigate("#credentials");
   });
 }

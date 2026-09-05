@@ -508,6 +508,9 @@ for (const backend of backends) {
         expiresAt: "2026-01-01T01:00:00.000Z",
         createdAt: "2026-01-01T00:00:00.000Z",
         fulfilledAt: null,
+      kind: "secret" as const,
+      provider: null,
+      sourceItemId: null,
       });
       const pending = await store.getPendingNeed({
         orgId,
@@ -526,6 +529,46 @@ for (const backend of backends) {
       const swept = await store.sweepExpired("2026-01-03T00:00:00.000Z");
       assert.ok(swept.needItems >= 1);
       assert.equal(await store.getNeed(need.id), undefined);
+
+      // INF-49: connect needs carry kind, provider, and source item; deny and item-fulfil settle them.
+      const connect = await store.insertPendingNeed({
+        id: id("cneed"),
+        orgId,
+        clientId: client.id,
+        environmentId: env.id,
+        suggestedName: "SPOTIFY_REFRESH",
+        host: "api.spotify.com",
+        taskDescription: null,
+        status: "pending",
+        itemId: null,
+        grantId: null,
+        expiresAt: "2026-01-01T01:00:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        fulfilledAt: null,
+        kind: "connect",
+        provider: "spotify",
+        sourceItemId: "itm_source",
+      });
+      const readBack = await store.getNeed(connect.id);
+      assert.equal(readBack?.kind, "connect");
+      assert.equal(readBack?.provider, "spotify");
+      assert.equal(readBack?.sourceItemId, "itm_source");
+      assert.equal((await store.getNeed(need.id)) ?? undefined, undefined);
+      assert.equal(await store.fulfillNeedWithItem(connect.id, "itm_refresh", "2026-01-01T00:30:00.000Z"), true);
+      const fulfilled = await store.getNeed(connect.id);
+      assert.equal(fulfilled?.status, "fulfilled");
+      assert.equal(fulfilled?.itemId, "itm_refresh");
+      assert.equal(fulfilled?.fulfilledAt, "2026-01-01T00:30:00.000Z");
+      assert.equal(await store.fulfillNeedWithItem(connect.id, "itm_other", "2026-01-01T00:31:00.000Z"), false, "only a pending row is claimed");
+      assert.equal(await store.denyNeed(connect.id), false, "a fulfilled row cannot be denied");
+      const toDeny = await store.insertPendingNeed({ ...connect, id: id("dneed"), suggestedName: "GITHUB_REFRESH", host: "api.github.com", provider: "github" });
+      assert.equal(await store.denyNeed(toDeny.id), true);
+      assert.equal((await store.getNeed(toDeny.id))?.status, "denied");
+      assert.equal(await store.denyNeed(toDeny.id), false);
+      assert.deepEqual(await store.listPendingNeeds(orgId), [], "denied rows leave the inbox");
+      const sweptDenied = await store.sweepExpired("2026-01-03T00:00:00.000Z");
+      assert.ok(sweptDenied.needItems >= 1, "a day-old denied row is swept like a cancelled one");
+      assert.equal(await store.getNeed(toDeny.id), undefined);
 
       const window = "2026-01-01T00:00:00.000Z";
       assert.equal(await store.incrementRateHit(orgId, "grant", window), 1);

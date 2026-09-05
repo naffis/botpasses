@@ -53,9 +53,14 @@ test("MCP and HTTP reference docs name hosted tools and forbid get_secret", () =
   assert.match(publicHttp, /`\/approve\?token=/);
   assert.match(publicHttp, /integrations\/:provider\/callback/);
   assert.match(publicHttp, /integrations\/spotify\/callback/);
+  assert.match(mcp, /user_connect_required/, "the pre-dial refusal for a user-only path is documented");
+  assert.match(mcp, /connect_url/);
+  assert.match(http, /need-items\/:id\/deny/);
+  assert.match(http, /need_id/, "the connect start body takes the inbox need id");
   const publicMcp = read("site/src/content/docs/reference/mcp-tools.md");
   assert.match(publicMcp, /collect_url/);
   assert.match(publicMcp, /need_item/);
+  assert.match(publicMcp, /user_connect_required/);
   assert.match(publicMcp, /oauth-protected-resource\/mcp/);
   assert.match(publicMcp, /`kind`, `last4`, `allowed_hosts`, `inject`, `environment`/, "find_items found fields");
   assert.match(publicMcp, /Instructions the server sends to the model/);
