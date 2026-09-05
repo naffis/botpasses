@@ -11,7 +11,10 @@ import {
   installProcessGuards,
   parseOidcPrivateJwk,
   scheduleSweeps,
+  type ShutdownHttp,
+  type SweepStore,
 } from "./boot.ts";
+import type { RebindOptions, RebindResult } from "./kernel-items.ts";
 import { selectKekProvider, selectPreviousKekProvider, usedRawKekFallback } from "./kms.ts";
 import { logVaultEvent, packageVersion } from "./observe.ts";
 import { PostgresStore } from "../store/postgres.ts";
@@ -90,10 +93,6 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     approvalHmac: env.VAULT_APPROVAL_HMAC?.trim() ? Buffer.from(env.VAULT_APPROVAL_HMAC.trim(), "hex") : undefined,
     deployPlane,
   });
-  // One-shot: item envelopes written before AAD binding are rebound now, so the read path
-  // never needs the legacy `orgId` AAD again.
-  const rebind = await kernel.rebindLegacyItems();
-  if (rebind.rebound + rebind.verified + rebind.unreadable > 0) logVaultEvent("aad_rebind", { ...rebind });
   const host = env.VAULT_BIND_HOST ?? "0.0.0.0";
   const sessionSecret = env.VAULT_SESSION_SECRET ?? "";
   const identity = new OperatorIdentity({ store, sessionSecret, kek, previousKek, sendEmail });
@@ -133,32 +132,112 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     siteRoot: env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist"),
     deployPlane,
   });
-  const addr = await http.listen();
-  logVaultEvent("hosted_listening", {
-    host: addr.host,
-    port: addr.port,
-    plane: deployPlane,
-    version: packageVersion(),
-  });
-  console.error(`${PRODUCT_NAME} hosted on ${addr.host}:${addr.port} plane=${deployPlane}`);
-
-  // Signal handlers go in before the first sweep: a SIGTERM during a slow boot-time sweep
-  // must drain and zero the KEK, not kill the process with the default handler.
-  const sweeps = scheduleSweeps(store, { log: logVaultEvent });
-  const shutdown = createShutdown({
+  await serveHosted({
     http,
     store,
+    rebind: (opts) => kernel.rebindLegacyItems(opts),
     log: logVaultEvent,
+    onListening: (addr) => {
+      logVaultEvent("hosted_listening", {
+        host: addr.host,
+        port: addr.port,
+        plane: deployPlane,
+        version: packageVersion(),
+      });
+      console.error(`${PRODUCT_NAME} hosted on ${addr.host}:${addr.port} plane=${deployPlane}`);
+    },
     onDone: () => {
-      sweeps.stop();
       zeroKey(kek);
       if (previousKek) zeroKey(previousKek);
     },
   });
-  process.on("SIGINT", () => shutdown.stop("SIGINT"));
-  process.on("SIGTERM", () => shutdown.stop("SIGTERM"));
-  await sweeps.runOnce();
+}
+
+export type ServeHostedDeps = {
+  http: ShutdownHttp & { listen(): Promise<{ host: string; port: number }> };
+  store: { close(): Promise<void> } & SweepStore;
+  /** `HostedKernel.rebindLegacyItems`: the batched legacy AAD rebind. */
+  rebind: (opts: RebindOptions) => Promise<RebindResult>;
+  log: (event: string, fields: Record<string, unknown>) => void;
+  onListening: (addr: { host: string; port: number }) => void;
+  /** Runs after the store is closed (zero the KEK). */
+  onDone?: () => void;
+  /** Where the signal handlers go; the process by default. */
+  proc?: Pick<NodeJS.Process, "on">;
+  exit?: (code: number) => void;
+  drainMs?: number;
+  forceMarginMs?: number;
+};
+
+/**
+ * Everything after the kernel and server exist, in this order: listen (so `/health` and
+ * `/ready` answer inside the health-check grace period), install the signal handlers, run the
+ * legacy AAD rebind one batch at a time, run the first sweep, then wait for a signal.
+ *
+ * The rebind is a one-shot data migration over every item written before migration 010, so on
+ * a large table it can outlast the check's grace period; it must never gate readiness. A SIGTERM
+ * during it sets the stop flag, the run ends at the next batch boundary, and the drain waits for
+ * that before closing the store, so no batch is cut mid-statement. A rebind that throws is
+ * logged as `aad_rebind_failed` and the process keeps serving: rows still at `aad_version` 0
+ * fail closed on inject (no legacy fallback) and the next boot picks the run up again.
+ */
+export async function serveHosted(deps: ServeHostedDeps): Promise<void> {
+  const proc = deps.proc ?? process;
+  const addr = await deps.http.listen();
+  deps.onListening(addr);
+
+  let stopping = false;
+  let rebindDone: Promise<void> = Promise.resolve();
+  const sweeps = scheduleSweeps(deps.store, { log: deps.log });
+  const shutdown = createShutdown({
+    http: deps.http,
+    store: {
+      close: async () => {
+        // The rebind checks `stopping` between batches; wait for the batch in flight.
+        await rebindDone;
+        await deps.store.close();
+      },
+    },
+    log: deps.log,
+    exit: deps.exit,
+    drainMs: deps.drainMs,
+    forceMarginMs: deps.forceMarginMs,
+    onDone: () => {
+      sweeps.stop();
+      deps.onDone?.();
+    },
+  });
+  // Signal handlers go in before the rebind and the first sweep: a SIGTERM during either must
+  // drain and zero the KEK, not kill the process with the default handler.
+  const onSignal = (signal: string): void => {
+    stopping = true;
+    shutdown.stop(signal);
+  };
+  proc.on("SIGINT", () => onSignal("SIGINT"));
+  proc.on("SIGTERM", () => onSignal("SIGTERM"));
+
+  rebindDone = runBootRebind(deps.rebind, deps.log, () => stopping);
+  await rebindDone;
+  if (!stopping) await sweeps.runOnce();
   await shutdown.done;
+}
+
+/** One-shot: item envelopes written before AAD binding are rebound, so the read path never needs the legacy `orgId` AAD again. */
+async function runBootRebind(
+  rebind: ServeHostedDeps["rebind"],
+  log: ServeHostedDeps["log"],
+  shouldStop: () => boolean,
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const result = await rebind({
+      shouldStop,
+      onBatch: (progress) => log("aad_rebind_progress", { ...progress, ms: Date.now() - startedAt }),
+    });
+    log("aad_rebind", { ...result, ms: Date.now() - startedAt });
+  } catch (err) {
+    log("aad_rebind_failed", { message: err instanceof Error ? err.message : String(err), ms: Date.now() - startedAt });
+  }
 }
 
 const isMain = process.argv[1]?.includes("hosted/main");
