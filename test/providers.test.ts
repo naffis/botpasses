@@ -251,10 +251,10 @@ test("a Slack user-scope token exchange is read from authed_user", () => {
   assert.equal(top.accessToken, "xoxb-bot-token-9999", "a top-level token still wins");
   // A Slack refresh (token rotation) answer carries the rotated user token at the top level and no authed_user.
   const refreshed = readMintedAccessToken(
-    JSON.stringify({ ok: true, access_token: "xoxe.xoxp-1-rotated-5678", refresh_token: "xoxe-1-rotated-refresh", token_type: "user", expires_in: 43200 }),
+    JSON.stringify({ ok: true, access_token: "test-rotated-access-5678", refresh_token: "test-rotated-refresh", token_type: "user", expires_in: 43200 }),
   );
-  assert.equal(refreshed.accessToken, "xoxe.xoxp-1-rotated-5678");
-  assert.equal(refreshed.refreshToken, "xoxe-1-rotated-refresh");
+  assert.equal(refreshed.accessToken, "test-rotated-access-5678");
+  assert.equal(refreshed.refreshToken, "test-rotated-refresh");
   assert.equal(refreshed.last4, "5678");
   assert.throws(() => readMintedAccessToken(JSON.stringify({ ok: true, authed_user: { id: "U1" } })), /did not return access_token/);
 });
