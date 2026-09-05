@@ -100,8 +100,6 @@ export type PostgresOpenOptions = {
   plane?: string;
   /** Override the pool size (default 10). */
   max?: number;
-  /** Per-statement timeout in ms (default 15 s). */
-  statementTimeoutMs?: number;
 };
 
 export class PostgresStore implements VaultStore {
@@ -110,8 +108,12 @@ export class PostgresStore implements VaultStore {
     this.#pool = pool;
   }
 
+  /**
+   * Client-side pool settings plus `application_name`. Do not put `statement_timeout` or
+   * `options` here: Neon's `-pooler` host is PgBouncer, which refuses those startup
+   * parameters, so `PostgresStore.open` never connects and the Machine never listens.
+   */
   static poolOptions(connectionString: string, opts: PostgresOpenOptions = {}): PoolConfig {
-    const statementTimeout = opts.statementTimeoutMs ?? 15_000;
     return {
       connectionString,
       max: opts.max ?? 10,
@@ -119,8 +121,6 @@ export class PostgresStore implements VaultStore {
       idleTimeoutMillis: 30_000,
       keepAlive: true,
       application_name: `botpasses-${opts.plane ?? "hosted"}`,
-      statement_timeout: statementTimeout,
-      options: `-c statement_timeout=${statementTimeout}`,
     };
   }
 
