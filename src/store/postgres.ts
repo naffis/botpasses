@@ -71,6 +71,7 @@ import {
   type IdentityKeyRecord,
   type InviteRecord,
   type LegacyAadItem,
+  type LegacyAadPage,
   type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
@@ -429,13 +430,21 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async listItemsWithLegacyAad(): Promise<LegacyAadItem[]> {
+  async listItemsWithLegacyAad(page: LegacyAadPage): Promise<LegacyAadItem[]> {
+    const limit = Math.max(1, Math.floor(page.limit));
+    const params: unknown[] = [ITEM_AAD_VERSION];
+    let where = "i.aad_version < $1";
+    if (page.after) {
+      params.push(page.after.orgId, page.after.itemId);
+      where += " AND (v.org_id > $2 OR (v.org_id = $2 AND i.id > $3))";
+    }
+    params.push(limit);
     const r = await this.#pool.query(
       `SELECT i.*, v.org_id AS org_id FROM items i
        JOIN environments e ON e.id = i.environment_id
        JOIN vaults v ON v.id = e.vault_id
-       WHERE i.aad_version < $1 ORDER BY v.org_id, i.id`,
-      [ITEM_AAD_VERSION],
+       WHERE ${where} ORDER BY v.org_id, i.id LIMIT $${params.length}`,
+      params,
     );
     return r.rows.map((row) => {
       const rec = asRecord(row);

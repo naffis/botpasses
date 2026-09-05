@@ -73,6 +73,7 @@ import {
   type IdentityKeyRecord,
   type InviteRecord,
   type LegacyAadItem,
+  type LegacyAadPage,
   type MemberRow,
   type OidcPayloadRow,
   type OperatorSessionRow,
@@ -381,15 +382,23 @@ export class SqliteHostedStore implements VaultStore {
       );
   }
 
-  async listItemsWithLegacyAad(): Promise<LegacyAadItem[]> {
+  async listItemsWithLegacyAad(page: LegacyAadPage): Promise<LegacyAadItem[]> {
+    const limit = Math.max(1, Math.floor(page.limit));
+    const params: (string | number)[] = [ITEM_AAD_VERSION];
+    let where = "i.aad_version < ?";
+    if (page.after) {
+      params.push(page.after.orgId, page.after.orgId, page.after.itemId);
+      where += " AND (v.org_id > ? OR (v.org_id = ? AND i.id > ?))";
+    }
+    params.push(limit);
     const rows = this.#db
       .prepare(
         `SELECT i.*, v.org_id AS org_id FROM items i
          JOIN environments e ON e.id = i.environment_id
          JOIN vaults v ON v.id = e.vault_id
-         WHERE i.aad_version < ? ORDER BY v.org_id, i.id`,
+         WHERE ${where} ORDER BY v.org_id, i.id LIMIT ?`,
       )
-      .all(ITEM_AAD_VERSION) as Record<string, unknown>[];
+      .all(...params) as Record<string, unknown>[];
     return rows.map((r) => ({ item: mapItem(r), orgId: String(r.org_id) }));
   }
 

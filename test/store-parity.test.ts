@@ -11,6 +11,7 @@ import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import type { AccessEventRecord, UserRecord } from "../src/hosted-types.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { PostgresStore } from "../src/store/postgres.ts";
+import { ITEM_AAD_VERSION } from "../src/store/rows.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import type { OperatorSessionRow, VaultStore } from "../src/store/types.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
@@ -581,14 +582,38 @@ for (const backend of backends) {
       const after = await store.getItem(item.id);
       assert.deepEqual([after?.name, after?.inject, after?.allowedHostsJson, after?.updatedAt], ["PAIR_2", "header:X-Key", '["api.two.example"]', "2026-02-01T00:00:00.000Z"]);
 
-      assert.deepEqual((await store.listItemsWithLegacyAad()).filter((x) => x.orgId === orgId), [], "fresh rows carry the current AAD version");
+      assert.deepEqual((await store.listItemsWithLegacyAad({ limit: 100 })).filter((x) => x.orgId === orgId), [], "fresh rows carry the current AAD version");
       await store.setItemAadVersion(item.id, 0);
-      const legacy = (await store.listItemsWithLegacyAad()).filter((x) => x.orgId === orgId);
+      const legacy = (await store.listItemsWithLegacyAad({ limit: 100 })).filter((x) => x.orgId === orgId);
       assert.deepEqual(legacy.map((x) => x.item.id), [item.id]);
       const legacyRow = legacy[0]?.item;
       assert.ok(legacyRow);
+
+      // Keyset paging (the boot rebind's loop): pages of one row walked by the last row seen. The
+      // walk starts at this org so legacy rows other tests left in other orgs cannot interleave.
+      const second = await kernel.createItem({
+        orgId,
+        actor: owner,
+        environment: "staging",
+        kind: "secret",
+        name: "PAIR_TWO",
+        value: CANARY,
+        allowedHosts: ["api.example.com"],
+        inject: "bearer",
+      });
+      await store.setItemAadVersion(second.id, 0);
+      const expected = [item.id, second.id].sort();
+      const page1 = await store.listItemsWithLegacyAad({ limit: 1, after: { orgId, itemId: "" } });
+      assert.deepEqual(page1.map((x) => [x.orgId, x.item.id]), [[orgId, expected[0]]], "the first page is the lowest item id of the org");
+      const page2 = await store.listItemsWithLegacyAad({ limit: 1, after: { orgId, itemId: expected[0] ?? "" } });
+      assert.deepEqual(page2.map((x) => [x.orgId, x.item.id]), [[orgId, expected[1]]], "the cursor skips the row already seen");
+      const page3 = await store.listItemsWithLegacyAad({ limit: 1, after: { orgId, itemId: expected[1] ?? "" } });
+      assert.deepEqual(page3.filter((x) => x.orgId === orgId), [], "past the last row of the org the page moves on");
+      assert.equal((await store.listItemsWithLegacyAad({ limit: 0, after: { orgId, itemId: "" } })).length, 1, "a limit under 1 reads one row");
+      await store.setItemAadVersion(second.id, ITEM_AAD_VERSION);
+
       await store.updateItemEnvelope(item.id, { ...legacyRow, updatedAt: legacyRow.updatedAt });
-      assert.deepEqual((await store.listItemsWithLegacyAad()).filter((x) => x.orgId === orgId), [], "an envelope write records the binding");
+      assert.deepEqual((await store.listItemsWithLegacyAad({ limit: 100 })).filter((x) => x.orgId === orgId), [], "an envelope write records the binding");
 
       const window = "2026-01-01T00:00:00.000Z";
       assert.equal(await store.incrementRateHit(orgId, "approve_code", window), 1);

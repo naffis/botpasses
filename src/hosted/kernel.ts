@@ -287,9 +287,9 @@ export class HostedKernel {
     return items.decryptItem(this.#itemHost(), orgId, itemId);
   }
 
-  /** Boot-time one-shot: binds every item envelope still under the legacy `orgId` AAD. See `kernel-items.ts`. */
-  async rebindLegacyItems(): Promise<items.RebindResult> {
-    return items.rebindLegacyItems(this.#itemHost());
+  /** Boot-time one-shot, batched: binds every item envelope still under the legacy `orgId` AAD. See `kernel-items.ts`. */
+  async rebindLegacyItems(opts: items.RebindOptions = {}): Promise<items.RebindResult> {
+    return items.rebindLegacyItems(this.#itemHost(), opts);
   }
 
   async findStoredItem(orgId: string, environment: VaultEnvName, itemName: string) {

@@ -5,12 +5,12 @@
  * `HostedKernel` keeps its public method names and delegates here.
  */
 import { randomUUID } from "node:crypto";
-import { decrypt, encrypt } from "../crypto.ts";
+import { decrypt, encrypt, zeroKey } from "../crypto.ts";
 import { last4, normalizeSecretName, nowIso } from "../ids.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type { ClientRecord, EnvironmentRecord, HostedGrantRecord, ItemKind, ItemPublic, ItemRecord, VaultEnvName } from "../hosted-types.ts";
 import { ITEM_AAD_VERSION } from "../store/rows.ts";
-import type { VaultStore } from "../store/types.ts";
+import type { LegacyAadCursor, VaultStore } from "../store/types.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
 import { HttpError, type NeedItemError } from "./errors.ts";
 import { itemAad, legacyItemAad } from "./item-aad.ts";
@@ -485,7 +485,10 @@ function openItemEnvelope(orgId: string, item: ItemRecord, dek: Buffer): string 
   return decrypt(envelope, dek, aad);
 }
 
-export type RebindResult = {
+/** Rows one rebind batch reads, opens, and writes before the next page is queried. */
+export const REBIND_BATCH_SIZE = 200;
+
+export type RebindCounts = {
   /** Envelopes re-encrypted from the legacy `orgId` AAD to the item-bound AAD. */
   rebound: number;
   /** Envelopes already under the item-bound AAD whose `aad_version` was only unrecorded. */
@@ -494,47 +497,101 @@ export type RebindResult = {
   unreadable: number;
 };
 
+export type RebindResult = RebindCounts & {
+  /** Pages read from the store (a page is one SELECT plus its rows' UPDATEs). */
+  batches: number;
+  /** True when `shouldStop` ended the run at a batch boundary with rows still legacy. */
+  stopped: boolean;
+};
+
+/** Cumulative counts after one batch, handed to `onBatch`. */
+export type RebindProgress = RebindCounts & { batch: number; rows: number };
+
+export type RebindOptions = {
+  /** Rows per page; default `REBIND_BATCH_SIZE`. */
+  batchSize?: number;
+  /** Read between batches; true ends the run before the next page is queried. */
+  shouldStop?: () => boolean;
+  /** Called after every batch with the cumulative counts. */
+  onBatch?: (progress: RebindProgress) => void;
+};
+
 /**
  * Boot-time one-shot (G5): every item whose `aad_version` predates the binding is opened
  * under the item-bound AAD (then only marked) or the legacy `orgId` AAD (then re-encrypted in
  * place without touching `updated_at`). Idempotent: a second run finds nothing to do.
+ *
+ * Rows are read one page at a time (`batchSize`, keyset on `(org_id, id)`), so memory is bounded
+ * by the page whatever the table size, an unreadable row that stays at version 0 is visited once,
+ * and a stop request (SIGTERM) takes effect at the next page boundary with every row of the
+ * finished pages committed. Runs after the server listens; see `serveHosted`.
  */
-export async function rebindLegacyItems(host: ItemHost): Promise<RebindResult> {
-  const result: RebindResult = { rebound: 0, verified: 0, unreadable: 0 };
-  const deks = new Map<string, Buffer>();
-  for (const { item, orgId } of await host.store.listItemsWithLegacyAad()) {
-    let dek = deks.get(orgId);
-    if (!dek) {
-      dek = await host.dekForOrg(orgId);
-      deks.set(orgId, dek);
+export async function rebindLegacyItems(host: ItemHost, opts: RebindOptions = {}): Promise<RebindResult> {
+  const result: RebindResult = { rebound: 0, verified: 0, unreadable: 0, batches: 0, stopped: false };
+  const limit = Math.max(1, Math.floor(opts.batchSize ?? REBIND_BATCH_SIZE));
+  let after: LegacyAadCursor | undefined;
+  for (;;) {
+    if (opts.shouldStop?.()) {
+      result.stopped = true;
+      return result;
     }
-    const envelope = { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag };
-    const aad = itemAad({ orgId, itemId: item.id, allowedHostsJson: item.allowedHostsJson, inject: item.inject });
+    const page = await host.store.listItemsWithLegacyAad({ limit, after });
+    if (page.length === 0) return result;
+    result.batches += 1;
+    // One DEK unwrap per org per page: the page is ordered by org, so this stays small and is
+    // zeroed before the next page is read.
+    const deks = new Map<string, Buffer>();
     try {
-      decrypt(envelope, dek, aad);
-      await host.store.setItemAadVersion(item.id, ITEM_AAD_VERSION);
-      result.verified += 1;
-      continue;
-    } catch {
-      // not bound yet
+      for (const { item, orgId } of page) {
+        let dek = deks.get(orgId);
+        if (!dek) {
+          dek = await host.dekForOrg(orgId);
+          deks.set(orgId, dek);
+        }
+        await rebindOne(host, orgId, item, dek, result);
+      }
+    } finally {
+      for (const dek of deks.values()) zeroKey(dek);
     }
-    let plain: string;
-    try {
-      plain = decrypt(envelope, dek, legacyItemAad(orgId));
-    } catch {
-      result.unreadable += 1;
-      logVaultEvent("aad_rebind_unreadable", { orgId, itemId: item.id });
-      continue;
-    }
-    const rebound = encrypt(plain, dek, aad);
-    await host.store.updateItemEnvelope(item.id, {
-      iv: rebound.iv,
-      ciphertext: rebound.ciphertext,
-      tag: rebound.tag,
-      last4: item.last4,
-      updatedAt: item.updatedAt,
+    const last = page[page.length - 1];
+    if (last) after = { orgId: last.orgId, itemId: last.item.id };
+    opts.onBatch?.({
+      batch: result.batches,
+      rows: page.length,
+      rebound: result.rebound,
+      verified: result.verified,
+      unreadable: result.unreadable,
     });
-    result.rebound += 1;
+    if (page.length < limit) return result;
   }
-  return result;
+}
+
+async function rebindOne(host: ItemHost, orgId: string, item: ItemRecord, dek: Buffer, counts: RebindCounts): Promise<void> {
+  const envelope = { iv: item.iv, ciphertext: item.ciphertext, tag: item.tag };
+  const aad = itemAad({ orgId, itemId: item.id, allowedHostsJson: item.allowedHostsJson, inject: item.inject });
+  try {
+    decrypt(envelope, dek, aad);
+    await host.store.setItemAadVersion(item.id, ITEM_AAD_VERSION);
+    counts.verified += 1;
+    return;
+  } catch {
+    // not bound yet
+  }
+  let plain: string;
+  try {
+    plain = decrypt(envelope, dek, legacyItemAad(orgId));
+  } catch {
+    counts.unreadable += 1;
+    logVaultEvent("aad_rebind_unreadable", { orgId, itemId: item.id });
+    return;
+  }
+  const rebound = encrypt(plain, dek, aad);
+  await host.store.updateItemEnvelope(item.id, {
+    iv: rebound.iv,
+    ciphertext: rebound.ciphertext,
+    tag: rebound.tag,
+    last4: item.last4,
+    updatedAt: item.updatedAt,
+  });
+  counts.rebound += 1;
 }

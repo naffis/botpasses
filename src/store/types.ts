@@ -43,6 +43,10 @@ export type SweepCounts = {
 
 /** An item still bound to the legacy `orgId` AAD (or unrecorded), with the org that owns it. */
 export type LegacyAadItem = { item: ItemRecord; orgId: string };
+/** Keyset position in the `(org_id, item id)` order of `listItemsWithLegacyAad`: the last row of the previous page. */
+export type LegacyAadCursor = { orgId: string; itemId: string };
+/** One page of rebind candidates: at most `limit` rows, strictly after `after` when set. */
+export type LegacyAadPage = { limit: number; after?: LegacyAadCursor };
 
 /** Rate limit buckets: `grant` and `need` share the hourly org budget; `approve_code` has its own. */
 export type RateHitKind = "grant" | "need" | "approve_code";
@@ -176,8 +180,13 @@ export type VaultStore = {
       | "updatedAt"
     >,
   ): Promise<void>;
-  /** Items whose `aad_version` is below the current binding, with their org. Boot rebind input. */
-  listItemsWithLegacyAad(): Promise<LegacyAadItem[]>;
+  /**
+   * Items whose `aad_version` is below the current binding, with their org, ordered by
+   * `(org_id, id)`. Boot rebind input, read one page at a time: `limit` bounds the rows held in
+   * memory and `after` (the last row of the previous page) keeps a row that stays legacy (an
+   * unreadable envelope) from being returned again.
+   */
+  listItemsWithLegacyAad(page: LegacyAadPage): Promise<LegacyAadItem[]>;
   /** Marks an envelope verified under the current binding without rewriting it. */
   setItemAadVersion(id: string, version: number): Promise<void>;
   deleteItem(id: string): Promise<void>;
