@@ -1636,8 +1636,12 @@ function bindCredentials(h                    , onRevokeGrant                   
       act(item, button.dataset.act);
     }
   });
+  // Closing the drawer returns to the list only while the route still names this drawer's item.
+  // The close event is delivered a task later than the \`open\` attribute is removed, so a route
+  // set in between (another item, a deep link) must not be clobbered by this navigation.
   drawer?.addEventListener("close", () => {
-    if (location.hash.startsWith("#credentials/item/")) credHandlers?.navigate("#credentials");
+    const id = drawer.dataset.item;
+    if (id && location.hash === itemHash(id)) credHandlers?.navigate("#credentials");
   });
 }
 
@@ -2744,9 +2748,13 @@ function bindConnect()       {
       }
     });
   });
-  // Closing a dialog a \`?connect=\` deep link opened returns to the list, so a reload does not reopen it.
+  // Closing a dialog a \`?connect=\` deep link opened returns to the list, so a reload does not
+  // reopen it. Only while the route still names the item this dialog was opened for: the close
+  // event lands a task after the dialog closes, and a newer route must not be clobbered.
   byId                   ("connect-dialog")?.addEventListener("close", () => {
-    if (parseRoute(location.hash).connect) navigate("#credentials");
+    const route = parseRoute(location.hash);
+    const name = (byId                 ("connect-provider")?.elements.namedItem("item_name")                           )?.value;
+    if (route.connect && route.itemId && name && findItem(route.itemId)?.name === name) navigate("#credentials");
   });
   // The callback lands on \`#vault?connected=<provider>\` or \`#vault?connect_error=<provider>\`.
   const q = parseRoute(location.hash).query;

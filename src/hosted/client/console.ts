@@ -423,9 +423,13 @@ function bindConnect(): void {
       }
     });
   });
-  // Closing a dialog a `?connect=` deep link opened returns to the list, so a reload does not reopen it.
+  // Closing a dialog a `?connect=` deep link opened returns to the list, so a reload does not
+  // reopen it. Only while the route still names the item this dialog was opened for: the close
+  // event lands a task after the dialog closes, and a newer route must not be clobbered.
   byId<HTMLDialogElement>("connect-dialog")?.addEventListener("close", () => {
-    if (parseRoute(location.hash).connect) navigate("#credentials");
+    const route = parseRoute(location.hash);
+    const name = (byId<HTMLFormElement>("connect-provider")?.elements.namedItem("item_name") as HTMLInputElement | null)?.value;
+    if (route.connect && route.itemId && name && findItem(route.itemId)?.name === name) navigate("#credentials");
   });
   // The callback lands on `#vault?connected=<provider>` or `#vault?connect_error=<provider>`.
   const q = parseRoute(location.hash).query;
