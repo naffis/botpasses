@@ -500,10 +500,14 @@ test("I2: the bootstrap token is refused on a plane without the opt-in and every
     socket: { remoteAddress: "127.0.0.1" },
   } as unknown as IncomingMessage;
   try {
-    const { result: onPlane } = await captureLog(() =>
+    const { result: onPlane, lines: ignoredLines } = await captureLog(() =>
       hostedAuthResolver({ VAULT_BOOTSTRAP_TOKEN: token, VAULT_DEPLOY_PLANE: "staging" }, fallback)(req, kernel),
     );
     assert.equal(onPlane, undefined, "ignored on a plane without VAULT_BOOTSTRAP_ALLOW_PLANE=1");
+    assert.ok(
+      ignoredLines.some((l) => l.event === "bootstrap_token_ignored"),
+      "leftover token on a plane logs bootstrap_token_ignored and still boots",
+    );
     const { result: local, lines } = await captureLog(async () => {
       const resolver = hostedAuthResolver({ VAULT_BOOTSTRAP_TOKEN: token }, fallback);
       return resolver(req, kernel);

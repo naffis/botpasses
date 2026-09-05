@@ -663,7 +663,7 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     }) ?? "",
     /VAULT_BOOTSTRAP_TOKEN/,
   );
-  // I2: a well-formed token on a plane is refused unless the deployer opts in for the break-glass window.
+  // A leftover token on a plane does not fail boot; auth ignores it unless ALLOW_PLANE=1.
   const planeBootstrap = {
     VAULT_MODE: "hosted",
     DATABASE_URL: "postgres://x",
@@ -671,9 +671,11 @@ test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
     VAULT_BOOTSTRAP_TOKEN: "b".repeat(40),
     VAULT_PUBLIC_URL: STAGING_ORIGIN,
     VAULT_DEPLOY_PLANE: "staging",
+    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+    VAULT_OIDC_PRIVATE_JWK: oidc,
   };
-  assert.match(hostedBootError(planeBootstrap) ?? "", /VAULT_BOOTSTRAP_ALLOW_PLANE=1/);
-  assert.doesNotMatch(hostedBootError({ ...planeBootstrap, VAULT_BOOTSTRAP_ALLOW_PLANE: "1" }) ?? "", /BOOTSTRAP/);
+  assert.equal(hostedBootError(planeBootstrap), undefined);
+  assert.equal(hostedBootError({ ...planeBootstrap, VAULT_BOOTSTRAP_ALLOW_PLANE: "1" }), undefined);
   assert.doesNotMatch(hostedBootError({ ...planeBootstrap, VAULT_DEPLOY_PLANE: undefined }) ?? "", /BOOTSTRAP/);
   assert.match(
     hostedBootError({

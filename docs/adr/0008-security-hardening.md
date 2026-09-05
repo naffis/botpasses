@@ -68,8 +68,9 @@ legacy items still verified against the old AAD (org id only) through a permanen
 
 - Deploys that omit `VAULT_DEPLOY_PLANE` or set `VAULT_AUTH_MODE=test` exit 78. The CI image
   job checks the refusal path on every build.
-- Operators with a bootstrap token on a plane must add `VAULT_BOOTSTRAP_ALLOW_PLANE=1` or
-  the process refuses to boot; the intended end state is no bootstrap token on production.
+- A leftover `VAULT_BOOTSTRAP_TOKEN` on a plane is ignored unless
+  `VAULT_BOOTSTRAP_ALLOW_PLANE=1`; boot logs `bootstrap_token_ignored` and keeps serving.
+  The intended end state is no bootstrap token on production.
 - Local users update their MCP client configuration to the model bearer printed by
   `vault serve`.
 - Existing prompt grants behave differently on a non-2xx origin response: the model is told

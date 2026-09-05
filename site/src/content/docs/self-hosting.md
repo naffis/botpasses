@@ -49,7 +49,7 @@ Hosted mode reads its listen address from `VAULT_BIND_HOST` and `PORT` (or `VAUL
 | `VAULT_OIDC_PREVIOUS_JWK` | Only during a key rotation: the JWK being retired. Published in JWKS and still verifies the tokens it signed; never signs new ones |
 | `VAULT_APPROVAL_HMAC` | Signs email approval links. 64 hex characters (32 bytes); any other shape is exit 78 |
 | `VAULT_BOOTSTRAP_TOKEN` | 32 characters or more. Break-glass operator token; keep it offline. Every use is logged as `auth_bootstrap_used` with a token hash |
-| `VAULT_BOOTSTRAP_ALLOW_PLANE` | Set to `1` only for the break-glass window. Staging and production refuse to boot with `VAULT_BOOTSTRAP_TOKEN` set unless this is `1`; unset both afterwards |
+| `VAULT_BOOTSTRAP_ALLOW_PLANE` | Set to `1` only for the break-glass window. Staging and production ignore `VAULT_BOOTSTRAP_TOKEN` unless this is `1`; unset both afterwards |
 | `VAULT_TRUST_PROXY` | Set to `1` when a proxy you control (nginx, Caddy) sits in front and appends `X-Forwarded-For`; only that last hop is then trusted. `Fly-Client-IP` is trusted only on Fly (`FLY_APP_NAME`), which also implies this setting. Otherwise the socket peer is the caller's address for rate limits and logs |
 | `RESEND_API_KEY` | Sending-access key scoped to your domain |
 | `VAULT_EMAIL_FROM` | For example `Botpasses <noreply@example.com>`. Required when `RESEND_API_KEY` is set |
