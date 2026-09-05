@@ -108,9 +108,13 @@ jobs:
         run: |
           set -e
           # No DATABASE_URL: the process must exit with the configuration code (78), not crash.
+          # The container's exit code is read from the pipeline (pipefail), not from tee.
+          set -o pipefail
+          code=0
           docker run --rm -e VAULT_MODE=hosted -e VAULT_DEPLOY_PLANE=production \
             -e VAULT_PUBLIC_URL=https://botpasses.com botpasses-ci 2>&1 | tee boot.log || code=$?
-          test "${code:-0}" -eq 78
+          echo "container exit code: $code"
+          test "$code" -eq 78
           grep -q "DATABASE_URL" boot.log
 
   audit:
