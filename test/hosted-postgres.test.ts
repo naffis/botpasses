@@ -89,14 +89,15 @@ test("PostgresStore.open rejects (does not exit) on an unreachable database", as
   await assert.rejects(PostgresStore.open(bad, { plane: "test" }));
 });
 
-test("pool options carry timeouts and an application_name per plane", () => {
+test("pool options carry client timeouts and an application_name, not PgBouncer-rejected startup params", () => {
   const opts = PostgresStore.poolOptions("postgres://u:p@h/db", { plane: "staging" });
   assert.equal(opts.connectionTimeoutMillis, 5000);
   assert.equal(opts.idleTimeoutMillis, 30000);
-  assert.equal(opts.statement_timeout, 15000);
-  assert.equal(opts.options, "-c statement_timeout=15000");
   assert.equal(opts.application_name, "botpasses-staging");
   assert.equal(opts.keepAlive, true);
+  // Neon -pooler (PgBouncer) refuses these startup parameters; sending them takes staging down.
+  assert.equal(opts.statement_timeout, undefined);
+  assert.equal(opts.options, undefined);
 });
 
 test("sweepExpired on Postgres deletes expired OTP, sessions, challenges, needs, rate hits, oidc payloads", async (t) => {

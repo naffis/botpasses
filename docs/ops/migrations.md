@@ -29,13 +29,13 @@ A release stuck on the advisory lock means another runner is mid-migration; wait
 
 ### Statement timeouts
 
-The runner connects with `statement_timeout = 60000` (60 s per statement); the app pool runs with 15 s. A single statement that takes longer than 60 s (a backfill over a large table, an index build without `CONCURRENTLY`) fails the release and the old image keeps serving. For such a step, either split the work into batches that each finish well under a minute, or raise the limit for that file only with `SET LOCAL statement_timeout = '10min';` as its first statement (it applies to the file's transaction and nothing else). Do not raise the pool's timeout for a migration.
+The runner connects with `statement_timeout = 60000` (60 s per statement) on the direct host. The app pool talks to the Neon `-pooler` host (PgBouncer) and must not send `statement_timeout` or `options` as startup parameters: PgBouncer refuses them, `PostgresStore.open` never connects, and the Machine never listens. A single migration statement that takes longer than 60 s (a backfill over a large table, an index build without `CONCURRENTLY`) fails the release and the old image keeps serving. For such a step, either split the work into batches that each finish well under a minute, or raise the limit for that file only with `SET LOCAL statement_timeout = '10min';` as its first statement (it applies to the file's transaction and nothing else).
 
 ## First boot after 010 (item AAD rebind)
 
 Migration 010 adds `items.aad_version` (0 for every existing row). The hosted process, not the release command, moves those rows to the item-bound AAD: on every boot it re-encrypts each row still at version 0 (`aad_rebind` in the changelog). This is a data pass, not DDL, so it runs in the app process after `/health` and `/ready` are answering and never gates readiness:
 
-1. The server listens and logs `hosted_listening`. The Fly check (`/ready`, 10 s grace period) passes from here on.
+1. The server listens and logs `hosted_listening`. The Fly check (`/ready`, 60 s grace period) passes from here on.
 2. The signal handlers are installed.
 3. The rebind reads legacy rows in pages of 200 (`REBIND_BATCH_SIZE`, ordered by org and item id, keyset on the last row), opens each under the item-bound AAD (then marks it) or the legacy `orgId` AAD (then re-encrypts it in place), and logs `aad_rebind_progress` after every page with `batch`, `rows`, and the cumulative `rebound`, `verified`, `unreadable`, `ms`. Memory is bounded by one page whatever the table size.
 4. `aad_rebind` logs the totals plus `batches`, `stopped`, and `ms`. Then the first expiry sweep runs.
