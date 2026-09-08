@@ -225,11 +225,21 @@ function isPreparedConnector(value: unknown): value is ConnectorItem {
 function originPayload(origin: ConnectorResult, extra: Record<string, unknown> = {}): OriginPayload {
   const given = typeof extra.hint === "string" ? extra.hint : undefined;
   const hint = given ?? (origin.body.trim() ? undefined : emptyOriginHint(origin.status));
+  const rewrite =
+    origin.path_rewritten === true && origin.requested_path && origin.rewritten_path
+      ? {
+          path_rewritten: true as const,
+          requested_path: origin.requested_path,
+          rewritten_path: origin.rewritten_path,
+          ...(origin.body_key_mapped ? { body_key_mapped: origin.body_key_mapped } : {}),
+        }
+      : {};
   return {
     origin_status: origin.status,
     status: origin.status,
     body: origin.body,
     origin_headers: origin.headers,
+    ...rewrite,
     ...extra,
     ...(hint ? { hint } : {}),
   };

@@ -49,7 +49,7 @@ Call a third-party API. Botpasses finds the credential by host or name, requests
 | `timeout_ms` | no | Origin deadline in ms, 1000 to 30000 (default 10000) |
 | `dry_run` | no | `true`: report which credential and approval would be used without calling the API. `reason` is `scope_denied` when the approval would not cover the call |
 
-The path must start with `/` and is sent exactly as validated: backslashes, percent-encoded `/` or `.` inside a segment, and `.` or `..` segments are refused, so the path the operator approved is the path the API receives. Botpasses connects on port 443 only; a URL with another port is refused with a hint.
+The path must start with `/` and is validated once: backslashes, percent-encoded `/` or `.` inside a segment, and `.` or `..` segments are refused. That validated path is what the operator approves. One exception on the wire: for `api.spotify.com`, playlist content calls on `/v1/playlists/{id}/tracks` (`GET`, `POST`, `PUT`, `DELETE`) are sent as `/v1/playlists/{id}/items` (Spotify February 2026 rename). Other `/tracks` paths are unchanged. A `DELETE` body that still uses the `tracks` key is sent with `items`. The result includes `path_rewritten` and `next.for_model` names the change. Botpasses connects on port 443 only; a URL with another port is refused with a hint.
 
 Request:
 

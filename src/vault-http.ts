@@ -67,6 +67,10 @@ export type LocalOriginResult = {
   origin_headers: Record<string, string>;
   item_name: string;
   host: string;
+  path_rewritten?: true;
+  requested_path?: string;
+  rewritten_path?: string;
+  body_key_mapped?: "tracks->items";
 };
 
 /** Hosted parity: a user-only provider path called with only the app credential. Nothing was sent. */
@@ -308,6 +312,14 @@ export async function localHttpRequest(host: LocalHttpHost, input: LocalHttpInpu
     origin_headers: origin.headers,
     item_name: item.name,
     host: hostname ?? item.allowedHosts[0] ?? "",
+    ...(origin.path_rewritten === true && origin.requested_path && origin.rewritten_path
+      ? {
+          path_rewritten: true as const,
+          requested_path: origin.requested_path,
+          rewritten_path: origin.rewritten_path,
+          ...(origin.body_key_mapped === "tracks->items" ? { body_key_mapped: "tracks->items" as const } : {}),
+        }
+      : {}),
   };
   assertSafePublicObject("httpRequest", result);
   return result;

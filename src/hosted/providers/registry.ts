@@ -35,6 +35,7 @@ export const PROVIDERS: readonly Provider[] = [
       },
     ],
     docsUrl: "https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow",
+    // Playlist content `/tracks` → `/items` is applied in spotify-playlist.ts (Feb 2026 rename).
   },
   {
     id: "github",

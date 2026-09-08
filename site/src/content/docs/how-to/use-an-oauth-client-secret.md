@@ -27,7 +27,7 @@ The agent can also pass a public `client_id` argument on `http_request` if the c
 
 ## App token or user token
 
-An app token can call endpoints that are not about a person, for example `GET /v1/search`. Endpoints about the signed-in user, such as `GET /v1/me` or private playlist writes, need a **user token** obtained with Authorization Code and PKCE.
+An app token can call endpoints that are not about a person, for example `GET /v1/search`. Endpoints about the signed-in user, such as `GET /v1/me` or private playlist writes, need a **user token** obtained with Authorization Code and PKCE. Add, list, reorder, or remove playlist contents with `/v1/playlists/{id}/items` (not `/tracks`). If an agent still calls the old `/tracks` path, Botpasses rewrites it to `/items` before Spotify sees it and says so on the result.
 
 When an agent hits one of those with only the app credential, Botpasses does not send the call (Spotify would answer 401 and the approval would be spent). The agent gets `user_connect_required` with a link, and you get a card in the **Inbox**: "<agent> needs a Spotify account for SPOTIFY_SECRET". To fix it:
 

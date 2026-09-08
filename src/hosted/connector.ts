@@ -10,6 +10,11 @@ import {
 import { redactOauthJson, redactSecrets, secretEncodings } from "../redact.ts";
 import { applyInject } from "./providers/inject.ts";
 import { isTokenPath, providerForHost } from "./providers/registry.ts";
+import {
+  playlistRewriteFields,
+  rewriteSpotifyPlaylistTracks,
+  type PlaylistRewritePublic,
+} from "./providers/spotify-playlist.ts";
 
 const RESPONSE_CAP = 256 * 1024;
 /** Raw bytes the connector reads from an origin before it gives up on the response. */
@@ -125,7 +130,7 @@ export type ConnectorResult = {
   body: string;
   /** Allowlisted origin response headers (`ORIGIN_HEADER_ALLOWLIST`), lowercase names. */
   headers: Record<string, string>;
-};
+} & Partial<PlaylistRewritePublic>;
 
 /**
  * What both network paths hand back: the origin status, its headers (lowercase names, repeated
@@ -308,9 +313,13 @@ export async function executeConnector(
   if (!ALLOWED_METHODS.has(method)) {
     throw new HttpError(400, "Unsupported method");
   }
-  const path = canonicalRequestPath(req.path);
+  const pathIn = canonicalRequestPath(req.path);
   const host = selectConnectorHost(item, req.host);
   assertAllowedHostname(host, item.allowedHosts);
+  const rewrite = rewriteSpotifyPlaylistTracks({ host, method, path: pathIn, body: req.body });
+  const path = rewrite ? canonicalRequestPath(rewrite.path) : pathIn;
+  const reqBody = rewrite ? rewrite.body : req.body;
+  const rewriteFields = playlistRewriteFields(rewrite) ?? {};
   const timeoutMs = clampTimeoutMs(opts.timeoutMs);
   const resolve = opts.resolveAddresses ?? resolvePublicAddresses;
   const addrs = await resolve(host);
@@ -321,8 +330,8 @@ export async function executeConnector(
   const tokenEndpoint = tokenEndpointFor(host, path);
   const contentType =
     req.contentType ??
-    (tokenEndpoint ? "application/x-www-form-urlencoded" : req.body !== undefined ? "application/json" : undefined);
-  const encoded = req.body === undefined ? undefined : encodeBody(req.body, contentType ?? "application/json");
+    (tokenEndpoint ? "application/x-www-form-urlencoded" : reqBody !== undefined ? "application/json" : undefined);
+  const encoded = reqBody === undefined ? undefined : encodeBody(reqBody, contentType ?? "application/json");
   const injected = applyInject(item, {
     host,
     method,
@@ -379,9 +388,10 @@ export async function executeConnector(
       // Headers are never the payload a caller needs verbatim: redact them for the item even
       // when the caller hand-redacts the body (token endpoints add the minted tokens too).
       headers: redactOriginHeaders(pickOriginHeaders(res.headers), item),
+      ...rewriteFields,
     };
   } catch (err) {
-    if (err instanceof OriginBodyTooLarge) return bodyTooLarge(err.headers, item);
+    if (err instanceof OriginBodyTooLarge) return bodyTooLarge(err.headers, item, rewriteFields);
     if (err instanceof HttpError) throw err;
     const aborted = ac.signal.aborted;
     throw new OriginUnreachableError(describeOriginFailure(err, host, aborted, timeoutMs), credentialSentBefore(err));
@@ -405,7 +415,11 @@ class OriginBodyTooLarge extends Error {
  * answered, so the credential was sent and a one-call approval is spent like any other status.
  * Its headers are redacted like any other answer's: a `Link` after a `query:` inject echoes the key.
  */
-function bodyTooLarge(headers: Record<string, string>, item: Pick<ConnectorItem, "secret" | "username">): ConnectorResult {
+function bodyTooLarge(
+  headers: Record<string, string>,
+  item: Pick<ConnectorItem, "secret" | "username">,
+  rewriteFields: Partial<PlaylistRewritePublic> = {},
+): ConnectorResult {
   return {
     status: 502,
     body: JSON.stringify({
@@ -413,6 +427,7 @@ function bodyTooLarge(headers: Record<string, string>, item: Pick<ConnectorItem,
       hint: `The origin response exceeded ${RAW_RESPONSE_CAP} bytes and was discarded. Ask for a smaller page (limit, page size, or fields).`,
     }),
     headers: redactOriginHeaders(pickOriginHeaders(headers), item),
+    ...rewriteFields,
   };
 }
 

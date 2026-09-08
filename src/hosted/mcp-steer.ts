@@ -39,6 +39,17 @@ function withRetryArgs(next: McpNext, payload: PublicRecord): McpNext {
   return { ...next, arguments: { ...next.arguments, ...retry } };
 }
 
+/** Brief note when the connector rewrote a playlist `/tracks` path to `/items`. Names no vendor. */
+function rewriteNote(payload: PublicRecord): string {
+  if (payload.path_rewritten !== true) return "";
+  const from = typeof payload.requested_path === "string" ? payload.requested_path : "";
+  const to = typeof payload.rewritten_path === "string" ? payload.rewritten_path : "";
+  if (!from || !to) return "";
+  const body =
+    payload.body_key_mapped === "tracks->items" ? " The DELETE body key tracks was mapped to items." : "";
+  return ` The origin path was rewritten from ${from} to ${to}.${body}`;
+}
+
 function nextBase(payload: PublicRecord): McpNext | undefined {
   const status = payload.status;
   if (status === "need_item") {
@@ -153,7 +164,9 @@ export function nextForPayload(payload: unknown): McpNext | undefined {
   if (!isRecord(payload)) return undefined;
   const next = nextBase(payload);
   if (!next) return undefined;
-  return withRetryArgs(next, payload);
+  const note = rewriteNote(payload);
+  const withNote = note ? { ...next, for_model: `${next.for_model}${note}` } : next;
+  return withRetryArgs(withNote, payload);
 }
 
 export function attachMcpNext(payload: unknown): unknown {
