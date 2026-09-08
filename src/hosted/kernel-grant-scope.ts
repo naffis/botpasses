@@ -195,14 +195,30 @@ export function resolveApprovalScope(input: {
 export function scopeDenialReason(scope: GrantScope, call: ConnectorCall): ScopeDenial | undefined {
   if (scope.methods && !scope.methods.includes(call.method.toUpperCase())) return "method";
   if (scope.hosts && !scope.hosts.includes(call.host.toLowerCase())) return "host";
-  if (scope.pathPrefixes) {
-    const path = canonicalPrefix(call.path);
-    if (path === undefined) return "path";
-    const admitted = scope.pathPrefixes.some((prefix) => {
-      const canonical = canonicalPrefix(prefix);
-      return canonical !== undefined && pathWithinPrefix(path, canonical);
-    });
-    if (!admitted) return "path";
-  }
+  if (pathDenied(scope, call.path)) return "path";
   return undefined;
+}
+
+/**
+ * Whether an existing grant or standing policy satisfies a `request_grant` call. No stated
+ * request (the agent named only the item) is treated as covered, which is the pre-scope
+ * behaviour. Present host, method, and path dimensions must each fit; omitted ones are
+ * not checked.
+ */
+export function requestFitsGrant(scope: GrantScope, requested: RequestedScope | null): boolean {
+  if (!requested) return true;
+  if (requested.method && scope.methods && !scope.methods.includes(requested.method)) return false;
+  if (requested.host && scope.hosts && !scope.hosts.includes(requested.host)) return false;
+  if (requested.path && pathDenied(scope, requested.path)) return false;
+  return true;
+}
+
+function pathDenied(scope: GrantScope, path: string): boolean {
+  if (!scope.pathPrefixes) return false;
+  const canonical = canonicalPrefix(path);
+  if (canonical === undefined) return true;
+  return !scope.pathPrefixes.some((prefix) => {
+    const admitted = canonicalPrefix(prefix);
+    return admitted !== undefined && pathWithinPrefix(canonical, admitted);
+  });
 }

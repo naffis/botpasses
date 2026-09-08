@@ -14,7 +14,7 @@ import {
 } from "./connector.ts";
 import { HttpError, isHttpError, isInjectDenied, isNeedItemError, isScopeDenied, type NeedItemPayload } from "./errors.ts";
 import type { HostedKernel, InjectOutcome } from "./kernel.ts";
-import { scopeDenialReason } from "./kernel-grant-scope.ts";
+import { requestFitsGrant, scopeDenialReason } from "./kernel-grant-scope.ts";
 import { policyIsLive } from "./kernel-grants.ts";
 import type { ModelPrincipal } from "./auth.ts";
 import { canonicalRequestPath } from "./ssrf.ts";
@@ -826,7 +826,9 @@ async function dryRun(deps: ConnectorCallDeps, target: ConnectorTarget, environm
   const provider = host ? providerForHost(host) : undefined;
   const injectMode = item ? injectModeOf(item.inject) : null;
   if (item && !injectMode) reason ??= "inject_unsupported";
-  const grant = item ? await grantStatusFor(deps, item.id, item.name, environment) : { status: "none" as const };
+  const grant = item
+    ? await grantStatusFor(deps, item.id, item.name, environment, { host, method: target.method, path: target.path })
+    : { status: "none" as const };
   if (item && !reason && grant.status !== "standing" && grant.status !== "active") {
     reason = grant.status === "pending" ? "grant_pending" : "grant_required";
   }
@@ -861,9 +863,12 @@ async function grantStatusFor(
   itemId: string,
   itemName: string,
   environment: VaultEnvName,
+  call: { host: string; method: string; path: string },
 ): Promise<{ status: DryRunReport["grant_status"]; scope?: GrantScope }> {
   const { kernel, principal } = deps;
+  const requested = { host: call.host, method: call.method, path: call.path };
   const stored = await kernel.findStoredItem(principal.orgId, environment, itemName);
+  let standing: PolicyRecord | undefined;
   if (stored) {
     const now = kernel.now();
     const live = (p: PolicyRecord | undefined): PolicyRecord | undefined => (p && policyIsLive(p, now) ? p : undefined);
@@ -871,12 +876,18 @@ async function grantStatusFor(
     const folderPolicy = itemPolicy
       ? undefined
       : live(await kernel.store.findFolderPolicy(principal.orgId, principal.clientId, stored.folderId, stored.environmentId));
-    const standing = itemPolicy ?? folderPolicy;
-    if (standing) return { status: "standing", scope: scopeFromPolicy(standing) };
+    standing = itemPolicy ?? folderPolicy;
+    if (standing && requestFitsGrant(standing, requested)) return { status: "standing", scope: scopeFromPolicy(standing) };
   }
   const grants = (await kernel.listClientGrants(principal.orgId, principal.clientId)).filter((g) => g.itemId === itemId);
+  const covering = grants.find((g) => g.status === "active" && scopeDenialReason(g, call) === undefined);
+  if (covering) {
+    const standingPolicy = covering.policy === "item_standing" || covering.policy === "folder_standing";
+    return { status: standingPolicy ? "standing" : "active", scope: covering };
+  }
+  if (grants.some((g) => g.status === "pending")) return { status: "pending" };
+  if (standing) return { status: "standing", scope: scopeFromPolicy(standing) };
   const active = grants.find((g) => g.status === "active");
   if (active) return { status: "active", scope: active };
-  if (grants.some((g) => g.status === "pending")) return { status: "pending" };
   return { status: "none" };
 }

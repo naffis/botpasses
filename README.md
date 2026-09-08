@@ -58,7 +58,7 @@ npx vault mcp --user-jwt
 | --- | --- |
 | `prompt` | One connector call or resolve, then consumed |
 | `session` | Active until TTL (8h) or revoke |
-| `item_standing` | Later `request_grant` / `http_request` for that client+item is already active. Inbox **Always approve for this agent**. Clear anytime. |
+| `item_standing` | Later `request_grant` / `http_request` for that client+item is already active when the call fits the standing scope. Inbox **Always approve for this agent**. Clear anytime. |
 | `folder_standing` | Owner only. Requires `confirm_name`. Later requests in that folder/env auto-activate |
 
 Approve via the web inbox, the email sent to every org member (magic link), or the 8-digit code returned by `request_grant`. The MCP tool was named `http.request` before; that name is an alias for one release.
