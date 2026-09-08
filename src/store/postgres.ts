@@ -24,6 +24,7 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER_PG,
   HOSTED_SCHEMA_IDENTITY_ALTER2_PG,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
+  HOSTED_SCHEMA_AUDIT_HOST_ALTER_PG,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG,
   HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
   HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG,
@@ -170,6 +171,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
     await this.#pool.query(HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_AUDIT_HOST_ALTER_PG);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
@@ -790,8 +792,8 @@ export class PostgresStore implements VaultStore {
 
   async insertAudit(row: HostedAuditRecord): Promise<void> {
     await this.#pool.query(
-      "INSERT INTO audit (id, org_id, action, actor, item_name, client_id, at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [row.id, row.orgId, row.action, row.actor, row.itemName, row.clientId, row.at],
+      "INSERT INTO audit (id, org_id, action, actor, item_name, client_id, at, host) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [row.id, row.orgId, row.action, row.actor, row.itemName, row.clientId, row.at, row.host ?? null],
     );
   }
 
@@ -825,6 +827,7 @@ export class PostgresStore implements VaultStore {
         itemName: rec.item_name == null ? null : String(rec.item_name),
         clientId: rec.client_id == null ? null : String(rec.client_id),
         at: String(rec.at),
+        host: rec.host == null ? null : String(rec.host),
       };
     });
   }

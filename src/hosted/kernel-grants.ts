@@ -95,6 +95,7 @@ export type GrantHost = {
     actor: string,
     itemName: string | null,
     clientId: string | null,
+    host?: string | null,
   ) => Promise<void>;
 };
 
@@ -505,8 +506,10 @@ export async function listClientGrants(host: GrantHost, orgId: string, clientId:
  * the call or this is 403 `scope_denied` (payload: `grant_scope`, `reason`; never the secret).
  * Prompt grants are consumed. Grants with `max_calls` count one call atomically and become
  * `consumed` on the last one, taking the standing policy that made them with them so the
- * approval does not renew itself. Without `call` (trusted `/runtime/resolve`), scope is not
- * checked because there is no call to check it against.
+ * approval does not renew itself. A standing (`item_standing` / `folder_standing`) consume
+ * writes audit `auto_approved` with item name, client, and host (never values). Without
+ * `call` (trusted `/runtime/resolve`), scope is not checked because there is no call to
+ * check it against.
  */
 export async function consumeActiveGrant(
   host: GrantHost,
@@ -536,7 +539,10 @@ export async function consumeActiveGrant(
     if (!ok) throw new InjectDeniedError();
     return { ...match, status: "consumed", consumedAt: nowIso(at) };
   }
-  if (match.maxCalls === null) return match;
+  if (match.maxCalls === null) {
+    await auditAutoApproved(host, orgId, clientId, itemId, match.policy, call?.host);
+    return match;
+  }
   const ok = await host.store.recordGrantCall(match.id, nowIso(at));
   if (!ok) throw new InjectDeniedError();
   const used = match.callsUsed + 1;
@@ -546,11 +552,27 @@ export async function consumeActiveGrant(
     environmentId: match.environmentId,
   });
   if (standing) await host.store.recordPolicyCall(standing.id);
+  await auditAutoApproved(host, orgId, clientId, itemId, match.policy, call?.host);
   if (used < match.maxCalls) return { ...match, callsUsed: used };
   await dropPoliciesFor(host, match);
   const item = await host.store.getItem(itemId);
   await host.audit(orgId, "grant_exhausted", clientId, item?.name ?? null, clientId);
   return { ...match, callsUsed: used, status: "consumed", consumedAt: nowIso(at) };
+}
+
+/** Standing consume: item name, client, and host. Never a secret value. */
+async function auditAutoApproved(
+  host: GrantHost,
+  orgId: string,
+  clientId: string,
+  itemId: string,
+  policy: GrantPolicy,
+  hostName: string | undefined,
+): Promise<void> {
+  if (policy !== "item_standing" && policy !== "folder_standing") return;
+  const item = await host.store.getItem(itemId);
+  const hostNorm = hostName?.trim().toLowerCase() || null;
+  await host.audit(orgId, "auto_approved", clientId, item?.name ?? null, clientId, hostNorm);
 }
 
 /** A standing policy that can still activate a grant: neither expired nor spent (`max_calls`). */

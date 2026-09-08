@@ -556,11 +556,13 @@ document.addEventListener("DOMContentLoaded", () => {
       run,
     });
   });
-  const revokeGrant = (id: string, client: string, name: string): void =>
+  const revokeGrant = (id: string, client: string, name: string, standing = false): void =>
     openConfirm({
-      title: `Revoke ${client}'s approval for ${name}?`,
-      body: "The agent must ask again before it can use this credential.",
-      button: "Revoke approval",
+      title: standing ? `Clear standing approval for ${client} on ${name}?` : `Revoke ${client}'s approval for ${name}?`,
+      body: standing
+        ? `${client} will need Inbox approval the next time it uses ${name}.`
+        : "The agent must ask again before it can use this credential.",
+      button: standing ? "Clear standing approval" : "Revoke approval",
       run: () => postAction(`/api/grants/${encodeURIComponent(id)}/revoke`, "Revoke failed"),
     });
   bindCredentials(
@@ -614,7 +616,8 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         },
       }),
-    onRevokeGrant: (g) => revokeGrant(g.id, g.client_name, g.item_name || "this credential"),
+    onRevokeGrant: (g) =>
+      revokeGrant(g.id, g.client_name, g.item_name || "this credential", g.policy === "item_standing" || g.policy === "folder_standing"),
     onRevokeSession: (s) =>
       openConfirm({
         title: "Sign out that device?",
