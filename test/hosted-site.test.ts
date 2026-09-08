@@ -100,6 +100,8 @@ test("AC-06 robots staging allow and prod disallow console", async () => {
     assert.match(body, /Allow: \/docs/);
     assert.match(body, /Disallow: \/console/);
     assert.match(body, /Disallow: \/sign-in/);
+    assert.match(body, /llms\.txt/);
+    assert.match(body, /llms-full\.txt/);
   } finally {
     await prod.http.close();
     await prod.store.close();
@@ -191,6 +193,7 @@ test("site: hashed assets are immutable, sitemaps and text files are served, sit
       ["/sitemap-index.xml", /application\/xml/],
       ["/sitemap-0.xml", /application\/xml/],
       ["/llms.txt", /text\/plain/],
+      ["/llms-full.txt", /text\/plain/],
       ["/.well-known/security.txt", /text\/plain/],
       ["/og.png", /image\/png/],
     ] as const) {

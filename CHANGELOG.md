@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Changed: the Agents list groups standing approvals by credential. One Clear control ends the pair (every grant for that agent and credential), instead of repeating the same row for each grant. Hosts and last used stay on the grouped row.
+- Site: SEO and AIO/GEO. Every public page ships Organization and WebSite JSON-LD, `llms.txt` / `llms-full.txt` alternate links, and `index, follow`. The homepage defines Botpasses in the first sentence and adds FAQPage, HowTo, SoftwareApplication, and a grant-vault DefinedTerm. Docs pages add TechArticle (FAQ page also FAQPage). `llms.txt` is generated from the docs collection; `llms-full.txt` is every docs page in one file. Production `robots.txt` points AI crawlers at both. Sitemap entries carry `lastmod`.
 - Fixed: API hostnames must be DNS names (`api.example.com`). A host with spaces, shell characters, a path, or a port is refused at `assertAllowedHostname`, so local `setup`, `find_items`, and `http_request` cannot put `vault set --host api.example.com;…` in the result.
 - Docs: homepage, OG card, console, and docs copy now lead with a person and a concrete noun. Same promise: your agent can call an API and does not get the key.
 - Added: MCP `setup` walks Collect, optional user Connect, and Always-allow for Spotify, Stripe (secret key), GitHub, Google, and Slack. A miss on a recipe host now prefills Collect (`SPOTIFY_SECRET`, Client ID + secret, both Spotify hosts). Collect can write a standing grant when **Always allow this agent to use this credential** is checked (default off). After you connect MCP, ask "Set up Spotify so you can call the API for me."

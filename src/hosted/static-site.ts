@@ -36,6 +36,7 @@ const PUBLIC_STATIC = new Set([
   "/og.png",
   "/robots.txt",
   "/llms.txt",
+  "/llms-full.txt",
   "/.well-known/security.txt",
   "/sitemap-index.xml",
 ]);

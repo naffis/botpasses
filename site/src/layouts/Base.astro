@@ -2,6 +2,13 @@
 import "../styles/global.css";
 import fraunces700 from "@fontsource/fraunces/files/fraunces-latin-700-normal.woff2?url";
 import { BRAND_HEX, BRAND_HEX_LIGHT, cssVariables } from "../../../src/brand-visual.ts";
+import {
+  GITHUB,
+  PRODUCT_TAGLINE,
+  SITE_NAME,
+  organizationLd,
+  websiteLd,
+} from "../lib/site-meta.ts";
 
 interface Props {
   /** Bare page title. Base appends " · Botpasses". */
@@ -11,17 +18,37 @@ interface Props {
   noindex?: boolean;
   /** Full-width pages (the homepage) opt out of the running-text column. */
   wide?: boolean;
+  ogType?: "website" | "article";
+  /** Trail after Home, JSON-LD only. */
+  crumbs?: { href: string; label: string }[];
 }
 
-const { title, description, noindex = false, wide = false } = Astro.props;
-const SITE_NAME = "Botpasses";
+const { title, description, noindex = false, wide = false, ogType = "website", crumbs } = Astro.props;
 const fullTitle = `${title} · ${SITE_NAME}`;
 const path = Astro.url.pathname.replace(/\.html$/, "").replace(/^\/index$/, "/");
-const canonical = new URL(path, Astro.site).toString();
-const ogImage = new URL("/og.png", Astro.site).toString();
-const GITHUB = "https://github.com/naffis/botpasses";
+const site = Astro.site?.toString().replace(/\/$/, "") ?? "https://botpasses.com";
+const canonical = new URL(path, `${site}/`).toString();
+const ogImage = new URL("/og.png", `${site}/`).toString();
+const llms = new URL("/llms.txt", `${site}/`).toString();
+const llmsFull = new URL("/llms-full.txt", `${site}/`).toString();
 // One token source for site and console: src/brand-visual.ts.
 const tokens = cssVariables().replace(/\s+/g, " ");
+
+const breadcrumbLd = crumbs && crumbs.length > 0
+  ? {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { "@type": "ListItem", position: 1, name: "Home", item: `${site}/` },
+        ...crumbs.map((c, i) => ({
+          "@type": "ListItem",
+          position: i + 2,
+          name: c.label,
+          item: `${site}${c.href}`,
+        })),
+      ],
+    }
+  : undefined;
 ---
 <!doctype html>
 <html lang="en">
@@ -30,14 +57,18 @@ const tokens = cssVariables().replace(/\s+/g, " ");
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
+    <meta name="author" content={SITE_NAME} />
     <meta name="theme-color" content={BRAND_HEX.bg} media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content={BRAND_HEX_LIGHT.bg} media="(prefers-color-scheme: light)" />
-    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    <meta name="robots" content={noindex ? "noindex, nofollow" : "index, follow"} />
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="alternate" type="text/plain" href={llms} title="LLM-readable site index" />
+    <link rel="alternate" type="text/plain" href={llmsFull} title="LLM-readable full documentation" />
     <link rel="preload" href={fraunces700} as="font" type="font/woff2" crossorigin />
     <style set:html={tokens}></style>
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:site_name" content={SITE_NAME} />
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={fullTitle} />
@@ -45,11 +76,19 @@ const tokens = cssVariables().replace(/\s+/g, " ");
     <meta property="og:image" content={ogImage} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Botpasses. Your agent can call Stripe. It never gets the key." />
+    <meta property="og:image:alt" content={`Botpasses. ${PRODUCT_TAGLINE}`} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={`Botpasses. ${PRODUCT_TAGLINE}`} />
+    {noindex ? null : (
+      <>
+        <script type="application/ld+json" set:html={JSON.stringify(organizationLd())} />
+        <script type="application/ld+json" set:html={JSON.stringify(websiteLd())} />
+      </>
+    )}
+    {breadcrumbLd && <script type="application/ld+json" set:html={JSON.stringify(breadcrumbLd)} />}
     <slot name="head" />
   </head>
   <body>

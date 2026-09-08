@@ -2,6 +2,7 @@
 import { getCollection, render } from "astro:content";
 import Docs from "../../layouts/Docs.astro";
 import { docHref } from "../../lib/docs-nav.ts";
+import { faqFromMarkdown, faqPageLd } from "../../lib/site-meta.ts";
 
 export async function getStaticPaths() {
   const entries = await getCollection("docs");
@@ -11,8 +12,9 @@ export async function getStaticPaths() {
 const { entry } = Astro.props;
 const { Content } = await render(entry);
 const href = docHref(entry.id);
+const extraLd = entry.id === "faq" ? [faqPageLd(faqFromMarkdown(entry.body))] : [];
 ---
-<Docs title={entry.data.title} description={entry.data.description} href={href} label={entry.data.label}>
+<Docs title={entry.data.title} description={entry.data.description} href={href} label={entry.data.label} extraLd={extraLd}>
   <h1>{entry.data.title}</h1>
   <Content />
 </Docs>

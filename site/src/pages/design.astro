@@ -5,7 +5,7 @@ import { BRAND_FONTS, BRAND_HEX } from "../../../src/brand-visual.ts";
 const tokens = Object.entries(BRAND_HEX) as [keyof typeof BRAND_HEX, string][];
 const cssName = (key: string) => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}`;
 ---
-<Base title="Design" description="Botpasses visual tokens, type, and mark. One source of truth shared by the marketing site and the console.">
+<Base title="Design" description="Botpasses visual tokens, type, and mark. One source of truth shared by the marketing site and the console." crumbs={[{ href: "/design", label: "Design" }]}>
   <h1>Design</h1>
   <p>
     The living style guide. Tokens come from <code>src/brand-visual.ts</code> in the repository and are

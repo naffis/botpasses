@@ -22,7 +22,7 @@ test("isPublicSitePath accepts canonical, .html, and trailing-slash forms of sit
   for (const p of ["/", "/index.html", "/security", "/security.html", "/security/", "/docs", "/docs/", "/docs/start.html"]) {
     assert.equal(isPublicSitePath(p), true, p);
   }
-  for (const p of ["/llms.txt", "/.well-known/security.txt", "/sitemap-index.xml", "/sitemap-0.xml", "/_astro/x.css", "/pagefind/pagefind.js"]) {
+  for (const p of ["/llms.txt", "/llms-full.txt", "/.well-known/security.txt", "/sitemap-index.xml", "/sitemap-0.xml", "/_astro/x.css", "/pagefind/pagefind.js"]) {
     assert.equal(isPublicSitePath(p), true, p);
   }
   for (const p of ["/console", "/console/", "/sitemap.xml", "/api/items", "/mcp", "/sign-in", "/anything"]) {

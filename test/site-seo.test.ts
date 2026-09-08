@@ -67,6 +67,8 @@ test("sitemap-index and sitemap-0 exist and every listed URL is extensionless", 
   assert.ok(!existsSync(join(dist, "sitemap.xml")), "sitemap.xml is not emitted; the index is sitemap-index.xml");
   const urls = sitemapUrls();
   assert.ok(urls.size >= 25, `expected at least 25 sitemap URLs, got ${urls.size}`);
+  const xml = readFileSync(join(dist, "sitemap-0.xml"), "utf8");
+  assert.match(xml, /<lastmod>\d{4}-\d{2}-\d{2}T00:00:00\.000Z<\/lastmod>/);
   for (const u of urls) {
     assert.doesNotMatch(u, /\.html$/, u);
     if (u !== `${SITE}/`) assert.doesNotMatch(u, /\/$/, u);
@@ -134,6 +136,10 @@ test("social and theme meta tags are complete on every page", () => {
     assert.ok(attr(p.html, /<meta name="twitter:title" content="([^"]+)"/), `${p.url} twitter:title`);
     assert.ok(attr(p.html, /<meta name="twitter:description" content="([^"]+)"/), `${p.url} twitter:description`);
     assert.equal(attr(p.html, /<meta name="twitter:image" content="([^"]+)"/), `${SITE}/og.png`, p.url);
+    assert.ok(attr(p.html, /<meta name="twitter:image:alt" content="([^"]+)"/), `${p.url} twitter:image:alt`);
+    assert.equal(attr(p.html, /<meta property="og:locale" content="([^"]+)"/), "en_US", p.url);
+    assert.match(p.html, /<link rel="alternate" type="text\/plain" href="https:\/\/botpasses\.com\/llms\.txt"/, `${p.url} llms.txt`);
+    assert.match(p.html, /<link rel="alternate" type="text\/plain" href="https:\/\/botpasses\.com\/llms-full\.txt"/, `${p.url} llms-full.txt`);
     assert.equal(attr(p.html, /<meta name="theme-color" content="([^"]+)"/), "#0B0F0C", p.url);
     assert.match(p.html, /<link rel="preload" href="\/_astro\/fraunces-latin-700-normal\.[^"]+\.woff2" as="font"/, `${p.url} preload`);
     assert.match(p.html, /:root \{ color-scheme: light dark; --bg: #F4F7F4;/, `${p.url} inline tokens`);
@@ -195,16 +201,50 @@ test("every internal link resolves to a dist file or a known server route", () =
   assert.deepEqual(missing, []);
 });
 
+test("indexable pages ship Organization and WebSite JSON-LD; the homepage and docs add extractable types", () => {
+  const all = pages().filter((p) => !p.redirect);
+  for (const p of all) {
+    if (p.url === "/404") {
+      assert.doesNotMatch(p.html, /"@type":"Organization"/, "404 stays out of the knowledge graph");
+      continue;
+    }
+    assert.match(p.html, /"@type":"Organization"/, `${p.url} Organization`);
+    assert.match(p.html, /"@type":"WebSite"/, `${p.url} WebSite`);
+  }
+  const home = all.find((p) => p.url === "/")?.html ?? "";
+  for (const type of ["FAQPage", "HowTo", "SoftwareApplication", "DefinedTerm"]) {
+    assert.match(home, new RegExp(`"@type":"${type}"`), `homepage ${type}`);
+  }
+  assert.match(home, /"name":"grant-vault"/);
+  const docs = all.filter((p) => p.url === "/docs" || p.url.startsWith("/docs/"));
+  for (const p of docs) {
+    if (p.redirect) continue;
+    assert.match(p.html, /"@type":"TechArticle"/, `${p.url} TechArticle`);
+    assert.equal(attr(p.html, /<meta property="og:type" content="([^"]+)"/), "article", p.url);
+  }
+  const faq = all.find((p) => p.url === "/docs/faq")?.html ?? "";
+  assert.match(faq, /"@type":"FAQPage"/);
+  assert.match(faq, /What is Botpasses\?/);
+});
+
 test("llms.txt and security.txt ship with the site", () => {
   const llms = readFileSync(join(dist, "llms.txt"), "utf8");
   assert.match(llms, /^# Botpasses/);
   assert.match(llms, /http_request/);
+  assert.match(llms, /grant-vault/);
+  assert.match(llms, /guided-setup/);
+  assert.match(llms, /llms-full\.txt/);
   for (const link of llms.matchAll(/\]\((https:\/\/botpasses\.com[^)]*)\)/g)) {
     const path = (link[1] ?? "").replace(SITE, "");
     if (SERVER_ROUTES.some((r) => path.startsWith(r))) continue;
     const rel = path.slice(1);
     assert.ok(existsSync(join(dist, rel)) || existsSync(join(dist, `${rel}.html`)), `llms.txt link ${path}`);
   }
+  const full = readFileSync(join(dist, "llms-full.txt"), "utf8");
+  assert.match(full, /^# Botpasses/);
+  assert.match(full, /http_request/);
+  assert.match(full, /Guided setup/);
+  assert.match(full, /get_secret/);
   const sec = readFileSync(join(dist, ".well-known/security.txt"), "utf8");
   assert.match(sec, /^Contact: mailto:security@botpasses\.com$/m);
   assert.match(sec, /^Preferred-Languages: en$/m);

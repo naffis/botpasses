@@ -1,7 +1,13 @@
 ---
 import Base from "../layouts/Base.astro";
-
-const GITHUB = "https://github.com/naffis/botpasses";
+import {
+  GITHUB,
+  PRODUCT_DESCRIPTION,
+  definedTermLd,
+  faqPageLd,
+  howToLd,
+  softwareApplicationLd,
+} from "../lib/site-meta.ts";
 
 const request = `{
   "method": "tools/call",
@@ -42,6 +48,10 @@ const works = ["Claude", "Claude Code", "Cursor", "ChatGPT", "Grok", "Any MCP cl
 
 const faq = [
   {
+    q: "What is Botpasses?",
+    a: "Botpasses is a grant-vault for AI agents. You store an API key once. An agent (Claude, Cursor, ChatGPT, Grok, or any MCP client) asks to call an API. You approve. Botpasses attaches the key inside the vault, makes the call, and returns a redacted result. The model never sees the value. There is no get_secret.",
+  },
+  {
     q: "Is this a password manager?",
     a: "No. Password managers hold secrets for people and fill them into browsers. Botpasses holds credentials for agents and attaches them to API calls the agent asks for. Nothing reads a value back out, and there is no browser autofill or sharing.",
   },
@@ -65,36 +75,43 @@ const faq = [
     q: "Can Botpasses staff read my keys?",
     a: "Not without both the AWS KMS role and the database. The hosted process decrypts only at inject, in memory, to attach the value to your API call. There is no support tool that reveals a value. This is a grant-vault, not zero-knowledge, and we say so.",
   },
+  {
+    q: "How is this different from putting keys in .env or the system prompt?",
+    a: "A key in .env or a prompt is visible to the model, the transcript, and anyone who can read the chat or the repo. Botpasses never returns a value to the model. The agent asks for a call by host; you approve; the vault attaches the key on the way out.",
+  },
+  {
+    q: "How is this different from Composio or Arcade?",
+    a: "Those products give the agent a catalog of tools and hold the tokens themselves. Botpasses is the opposite shape: you keep the credential, the agent keeps MCP http_request, and Botpasses attaches the key only after you approve. We do not wrap Stripe or GitHub as first-party tools.",
+  },
 ];
 ---
 <Base
   title="Your agent can call Stripe"
-  description="Store an API key once. Your agent calls the API through Botpasses over MCP; the key is attached inside the vault and never enters the model, the chat, or the logs."
+  description={PRODUCT_DESCRIPTION}
   wide
 >
   <Fragment slot="head">
-    <script type="application/ld+json" set:html={JSON.stringify({
-      "@context": "https://schema.org",
-      "@type": "Organization",
-      name: "Botpasses",
-      url: "https://botpasses.com",
-      email: "support@botpasses.com",
-      sameAs: [GITHUB],
-    })} />
-    <script type="application/ld+json" set:html={JSON.stringify({
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      name: "Botpasses",
-      url: "https://botpasses.com",
-    })} />
+    <script type="application/ld+json" set:html={JSON.stringify(softwareApplicationLd())} />
+    <script type="application/ld+json" set:html={JSON.stringify(definedTermLd())} />
+    <script type="application/ld+json" set:html={JSON.stringify(faqPageLd(faq))} />
+    <script type="application/ld+json" set:html={JSON.stringify(howToLd({
+      name: "Call an API with an agent without giving it the key",
+      description: "Store a credential once, let the agent ask for the call, approve, and Botpasses attaches the key inside the vault.",
+      steps: [
+        { name: "Store a credential once", text: "In the console, give it a name, the value, and the hosts it may be sent to. It is encrypted at rest and never shown again." },
+        { name: "The agent asks for the call", text: "The agent calls http_request with the URL. If it has no approval yet, Botpasses returns a pending request and an 8-digit code." },
+        { name: "You approve. Botpasses makes the call", text: "Approve in the inbox or with the code. The key is attached inside the vault, the request goes to the allowed host only, and the body comes back redacted." },
+      ],
+    }))} />
   </Fragment>
 
   <section class="hero">
     <h1>Your agent can call Stripe. It never gets the key.</h1>
     <p class="lede">
-      Store an API key once. Your agent (Claude, Cursor, ChatGPT, Grok) asks to call the API over MCP.
-      You approve. Botpasses attaches the key inside the vault, makes the call, and returns a redacted
-      result. Chat, logs, and the transcript do not get the key.
+      Botpasses is a grant-vault for AI agents. Store an API key once. Your agent (Claude, Cursor,
+      ChatGPT, Grok) asks to call the API over MCP. You approve. Botpasses attaches the key inside
+      the vault, makes the call, and returns a redacted result. Chat, logs, and the transcript do
+      not get the key.
     </p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="/sign-up">Create account</a>

@@ -1,4 +1,4 @@
-/** Docs sidebar order and helpers shared by the docs index, the docs layout, and llms.txt. */
+/** Docs sidebar order and helpers shared by the docs index, the docs layout, and generated llms.txt. */
 
 export const DOC_SECTIONS = ["start", "how-to", "connect", "reference", "explanation", "help"] as const;
 

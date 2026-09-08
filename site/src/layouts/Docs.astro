@@ -2,6 +2,7 @@
 import { getCollection } from "astro:content";
 import Base from "./Base.astro";
 import { SECTION_LABELS, groupBySection, neighbours, toNavItems } from "../lib/docs-nav.ts";
+import { breadcrumbLd, techArticleLd, type JsonLd } from "../lib/site-meta.ts";
 
 interface Props {
   title: string;
@@ -10,9 +11,10 @@ interface Props {
   href: string;
   /** Short breadcrumb label. Defaults to the title. */
   label?: string;
+  extraLd?: JsonLd[];
 }
 
-const { title, description, href, label = title } = Astro.props;
+const { title, description, href, label = title, extraLd = [] } = Astro.props;
 const items = toNavItems(await getCollection("docs"));
 const groups = groupBySection(items);
 const current = items.find((i) => i.href === href);
@@ -26,18 +28,18 @@ if (!isIndex && current && SECTION_LABELS[current.section] !== label) {
 if (!isIndex) crumbs.push({ href, label });
 
 const site = Astro.site?.toString().replace(/\/$/, "") ?? "https://botpasses.com";
-const breadcrumbLd = {
-  "@context": "https://schema.org",
-  "@type": "BreadcrumbList",
-  itemListElement: crumbs
-    .filter((c) => !c.href.startsWith("#"))
-    .map((c, i) => ({ "@type": "ListItem", position: i + 1, name: c.label, item: `${site}${c.href}` })),
-};
+const breadcrumb = breadcrumbLd([
+  { href: "/", label: "Home" },
+  ...crumbs.filter((c) => !c.href.startsWith("#")),
+]);
+const article = techArticleLd({ title, description, url: `${site}${href}` });
 ---
-<Base title={title} description={description} wide>
+<Base title={title} description={description} wide ogType="article">
   <Fragment slot="head">
     <link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
-    <script type="application/ld+json" set:html={JSON.stringify(breadcrumbLd)} />
+    <script type="application/ld+json" set:html={JSON.stringify(breadcrumb)} />
+    <script type="application/ld+json" set:html={JSON.stringify(article)} />
+    {extraLd.map((ld) => <script type="application/ld+json" set:html={JSON.stringify(ld)} />)}
   </Fragment>
   <div class="docs-shell">
     <aside class="docs-side">

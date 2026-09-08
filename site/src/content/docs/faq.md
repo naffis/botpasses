@@ -1,9 +1,13 @@
 ---
 title: FAQ
-description: Short answers. Is Botpasses a password manager, what happens under prompt injection, what is logged, how revoke works, staging vs production, whether staff can read keys.
+description: What Botpasses is, how it differs from a password manager, .env keys, and Composio, plus prompt injection, logs, revoke, staging, and whether staff can read keys.
 section: help
 order: 2
 ---
+
+## What is Botpasses?
+
+Botpasses is a grant-vault for AI agents. You store an API key once. An agent asks to call an API. You approve. Botpasses attaches the key inside the vault, makes the call, and returns a redacted result. The model never sees the value. There is no `get_secret`.
 
 ## Is this a password manager?
 
@@ -36,6 +40,14 @@ Free while in beta. The software is MIT licensed and you can [self-host](/docs/s
 ## Which agents work?
 
 Claude (web, desktop, and Claude Code), Cursor, ChatGPT, Grok, and any MCP client that supports remote servers over HTTP. See [Connect an agent](/docs#list-connect).
+
+## How is this different from putting keys in .env or the system prompt?
+
+A key in `.env` or a prompt is visible to the model, the transcript, and anyone who can read the chat or the repo. Botpasses never returns a value to the model. The agent asks for a call by host; you approve; the vault attaches the key on the way out.
+
+## How is this different from Composio or Arcade?
+
+Those products give the agent a catalog of tools and hold the tokens themselves. Botpasses is the opposite shape: you keep the credential, the agent keeps MCP `http_request`, and Botpasses attaches the key only after you approve. We do not wrap Stripe or GitHub as first-party tools.
 
 ## Where is the source?
 

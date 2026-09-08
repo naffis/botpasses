@@ -7,9 +7,19 @@
  */
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+
+function npmGlobalPlaywrightPkg(): string | undefined {
+  const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim();
+  if (!root) return undefined;
+  const pkg = join(root, "playwright/package.json");
+  return existsSync(pkg) ? pkg : undefined;
+}
 
 const PLAYWRIGHT_CANDIDATES = [
   process.env.BOTPASSES_PLAYWRIGHT_PKG,
+  npmGlobalPlaywrightPkg(),
   "/opt/node22/lib/node_modules/playwright/package.json",
   "/usr/local/lib/node_modules/playwright/package.json",
   "/usr/lib/node_modules/playwright/package.json",

@@ -27,6 +27,9 @@ export default defineConfig({
     sitemap({
       // Redirect stubs are not canonical pages.
       filter: (page) => !Object.keys(redirects).some((from) => page === `https://botpasses.com${from}`),
+      serialize(item) {
+        return { ...item, lastmod: new Date().toISOString().slice(0, 10) };
+      },
     }),
   ],
   vite: {

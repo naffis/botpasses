@@ -78,7 +78,11 @@ test("homepage sells the product and links the right places", () => {
   assert.match(home, /Who cannot/);
   assert.match(home, /github\.com\/naffis\/botpasses/);
   assert.match(home, /Free while in beta/);
+  assert.match(home, /Botpasses is a grant-vault for AI agents/);
+  assert.match(home, /What is Botpasses\?/);
   assert.match(home, /Is this a password manager\?/);
+  assert.match(home, /Composio/);
+  assert.match(home, /"@type":"FAQPage"/);
   assert.match(home, /prompt-injected/);
   assert.match(home, /mailto:support@botpasses\.com/);
   assert.match(home, /mailto:security@botpasses\.com/);
@@ -161,7 +165,7 @@ test("docs pages keep their tested content", () => {
   assert.match(mcp, /task_id/);
   assert.match(mcp, /<summary>Instructions the server sends to the model<\/summary>/);
   const httpApi = page("docs/reference/http-api.html");
-  for (const route of ["/api/access", "/oauth/revoke", "/runtime/resolve", "X-CSRF-Token", "/api/folders", "/api/orgs", "/approve", "/integrations/spotify/callback", "GET /mcp"]) {
+  for (const route of ["/api/access", "/oauth/revoke", "/runtime/resolve", "X-CSRF-Token", "/api/folders", "/api/orgs", "/approve", "/integrations/spotify/callback", "GET /mcp", "/llms.txt", "/llms-full.txt"]) {
     assert.match(httpApi, new RegExp(route.replace(/\//g, "\\/")), route);
   }
   const trouble = page("docs/troubleshooting.html");

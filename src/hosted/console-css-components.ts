@@ -110,7 +110,39 @@ td.actions .row-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .inbox-meta, .access-meta { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }
 .inbox-actions, .access-row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 .access-row-main { flex: 1 1 16rem; min-width: 0; }
+.access-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+}
 .access-row-title { color: var(--fg); display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.access-row-name { font-weight: 600; color: var(--fg); }
+.standing-list { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.85rem 0 0; }
+.standing-heading {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.standing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+}
+.standing-row-main { min-width: 0; flex: 1 1 10rem; }
+.access-row .standing-name { margin: 0; color: var(--fg); }
+.standing-row .access-meta { margin: 0.15rem 0 0; }
+.standing-list + .inline-select { margin-top: 0.85rem; }
 .activity-row { align-items: center; }
 .activity-row .access-meta { margin: 0; white-space: nowrap; }
 .access-log-link {

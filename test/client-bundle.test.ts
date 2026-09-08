@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { moduleToScript, renderBundleModule, topLevelNames } from "../scripts/build-client.ts";
-import { pageAfterFilter } from "../src/hosted/client/access.ts";
+import { agentRow, groupStandingApprovals, pageAfterFilter, type ScopedAccessGrant } from "../src/hosted/client/access.ts";
+import type { AccessClient } from "../src/hosted/client/types.ts";
 import { describeActivity, pageOf } from "../src/hosted/client/activity.ts";
 import { filterItems } from "../src/hosted/client/credentials.ts";
 import { agentsHash, itemHash, parseRoute, routeHash } from "../src/hosted/client/routes.ts";
@@ -175,4 +176,71 @@ test("store body builder and name normalisation are shared with the server", () 
   const fresh = storeRequestBody({ name: "X", kind: "secret", inject: "bearer", username: "u", allowedHosts: "a.com", value: "v" }, { editing: false });
   assert.equal(fresh.username, undefined);
   assert.equal(fresh.value, "v");
+});
+
+function standingGrant(id: string, item: string, extras: Partial<ScopedAccessGrant> = {}): ScopedAccessGrant {
+  return {
+    id,
+    item_name: item,
+    client_id: "cli_1",
+    client_name: "botpasses-vp-dogfood",
+    status: "active",
+    policy: "item_standing",
+    created_at: "2026-09-08T08:00:00Z",
+    first_access_at: "2026-09-08T08:30:00Z",
+    last_access_at: "2026-09-08T12:00:00Z",
+    approved_at: "2026-09-08T08:00:00Z",
+    fetched: [],
+    ...extras,
+  };
+}
+
+const dogfoodAgent: AccessClient = {
+  id: "cli_1",
+  name: "botpasses-vp-dogfood",
+  kind: "model",
+  environment: "staging",
+  status: "active",
+  created_at: "2026-09-08T08:00:00Z",
+  first_access_at: "2026-09-08T08:30:00Z",
+  last_access_at: "2026-09-08T12:00:00Z",
+  last_token_at: null,
+  last_seen_at: null,
+  fetched: ["SPOTIFY_SECRET", "SPOTIFY_REFRESH"],
+  last4: "c089",
+  consented_by_email: null,
+};
+
+test("agent row groups standing approvals by credential and keeps one clear control", () => {
+  const standing = [
+    standingGrant("g1", "SPOTIFY_SECRET", { last_access_at: "2026-09-08T09:00:00Z", grant_scope: { methods: null, path_prefixes: null, hosts: ["api.spotify.com"], max_calls: null, calls_used: 0, expires_at: null } }),
+    standingGrant("g2", "SPOTIFY_SECRET", { last_access_at: "2026-09-08T12:00:00Z", grant_scope: { methods: null, path_prefixes: null, hosts: ["accounts.spotify.com"], max_calls: null, calls_used: 0, expires_at: null } }),
+    standingGrant("g3", "SPOTIFY_SECRET"),
+    standingGrant("g4", "SPOTIFY_SECRET"),
+    standingGrant("g5", "SPOTIFY_SECRET"),
+    standingGrant("g6", "SPOTIFY_REFRESH", { last_access_at: "2026-09-08T11:00:00Z" }),
+    standingGrant("g7", "SPOTIFY_REFRESH"),
+  ];
+  const groups = groupStandingApprovals(standing);
+  assert.deepEqual(
+    groups.map((g) => ({ itemName: g.itemName, grantId: g.grantId, lastAccessAt: g.lastAccessAt, hosts: g.hosts })),
+    [
+      { itemName: "SPOTIFY_SECRET", grantId: "g1", lastAccessAt: "2026-09-08T12:00:00Z", hosts: ["api.spotify.com", "accounts.spotify.com"] },
+      { itemName: "SPOTIFY_REFRESH", grantId: "g6", lastAccessAt: "2026-09-08T12:00:00Z", hosts: [] },
+    ],
+  );
+  const markup = agentRow(dogfoodAgent, ["staging", "production"], standing).html;
+  assert.equal(markup.match(/data-testid="standing-approval"/g)?.length, 2);
+  assert.equal(markup.match(/data-testid="clear-standing"/g)?.length, 2);
+  assert.match(markup, /data-grant-revoke="g1"/);
+  assert.match(markup, /data-grant-revoke="g6"/);
+  assert.doesNotMatch(markup, /Always approved for/);
+  assert.doesNotMatch(markup, /Used SPOTIFY_SECRET/);
+  assert.match(markup, /api\.spotify\.com, accounts\.spotify\.com/);
+  assert.match(markup, /aria-label="Clear standing approval for SPOTIFY_SECRET"/);
+  assert.match(markup, /<span class="access-row-name">botpasses-vp-dogfood<\/span>/);
+  const escaped = agentRow({ ...dogfoodAgent, name: `<img src=x>` }, ["staging"], [standingGrant("gx", `<script>alert(1)</script>`)]).html;
+  assert.match(escaped, /&lt;img src=x&gt;/);
+  assert.match(escaped, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(agentRow(dogfoodAgent, ["staging"], []).html, /standing-list/);
 });

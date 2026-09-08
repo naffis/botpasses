@@ -1742,24 +1742,101 @@ function statusPill(status        )           {
   return html\`<span class="pill \${cls}">\${status}</span>\`;
 }
 
+/** Approvals rows carry the grant's policy and limits (3.1); older servers omit them. */
+
+function latestIso(values                                  )                {
+  let best                = null;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const v of values) {
+    if (!v) continue;
+    const ms = Date.parse(v);
+    if (!Number.isNaN(ms) && ms >= bestMs) {
+      best = v;
+      bestMs = ms;
+    }
+  }
+  return best;
+}
+
+function uniqueHosts(grants                     )           {
+  const seen = new Set        ();
+  const hosts           = [];
+  for (const g of grants) {
+    for (const h of g.grant_scope?.hosts ?? []) {
+      if (h && !seen.has(h)) {
+        seen.add(h);
+        hosts.push(h);
+      }
+    }
+  }
+  return hosts;
+}
+
+/** One group per credential. Revoking any grant in the group ends the (client, item) pair. */
+function groupStandingApprovals(grants                     )                  {
+  const order           = [];
+  const byItem = new Map                             ();
+  for (const g of grants) {
+    const itemName = g.item_name || "credential";
+    const list = byItem.get(itemName);
+    if (list) list.push(g);
+    else {
+      byItem.set(itemName, [g]);
+      order.push(itemName);
+    }
+  }
+  return order.map((itemName) => {
+    const list = byItem.get(itemName) ?? [];
+    return {
+      itemName,
+      grantId: list[0]?.id ?? "",
+      lastAccessAt: latestIso(list.map((g) => g.last_access_at)),
+      hosts: uniqueHosts(list),
+    };
+  });
+}
+
+function standingList(standing                     )           {
+  const groups = groupStandingApprovals(standing);
+  if (!groups.length) return html\`\`;
+  return html\`<div class="standing-list">
+    <p class="standing-heading">Standing approvals</p>
+    \${groups.map((g) => {
+      const detail = meta([g.hosts.join(", "), when("Last used", g.lastAccessAt)]);
+      return html\`<div class="standing-row" data-testid="standing-approval">
+        <div class="standing-row-main">
+          <p class="standing-name"><span class="mono">\${g.itemName}</span></p>
+          \${detail.html ? html\`<p class="access-meta">\${detail}</p>\` : ""}
+        </div>
+        <button type="button" class="btn-ghost btn-small" data-grant-revoke="\${g.grantId}" data-testid="clear-standing" aria-label="Clear standing approval for \${g.itemName}">Clear standing approval</button>
+      </div>\`;
+    })}
+  </div>\`;
+}
+
 function agentRow(c              , environments          , standing                     )           {
   const canRotate = c.status === "active" && c.kind !== "oauth";
   const kind = c.kind === "oauth" ? "OAuth" : c.kind === "model" ? "token" : c.kind;
+  const standingNames = new Set(standing.map((g) => g.item_name).filter(Boolean));
+  const usedOther = c.fetched.filter((n) => !standingNames.has(n));
   return html\`<div class="access-row" data-testid="agent-row" data-client="\${c.id}">
     <div class="access-row-main">
-      <p class="access-row-title">\${c.name} <span class="pill">\${kind}</span> \${statusPill(c.status)}</p>
+      <div class="access-row-head">
+        <p class="access-row-title"><span class="access-row-name">\${c.name}</span> <span class="pill">\${kind}</span> \${statusPill(c.status)}</p>
+        <div class="access-row-actions">
+          \${canRotate ? html\`<button type="button" class="btn-ghost btn-small" data-client-rotate="\${c.id}">Rotate token</button>\` : ""}
+          \${c.status === "active" ? html\`<button type="button" class="btn-danger btn-small" data-client-revoke="\${c.id}" data-testid="agent-revoke">Revoke</button>\` : ""}
+          <a class="access-log-link" href="\${agentsHash("activity", { agent: c.id })}">Activity</a>
+        </div>
+      </div>
       <p class="access-meta">\${meta([
         c.last4 ? \`Token ••••\${c.last4}\` : "",
         when("Created", c.created_at),
         when("First used", c.first_access_at),
         when("Last used", c.last_access_at),
-        c.fetched.length ? \`Used \${c.fetched.join(", ")}\` : "",
+        usedOther.length ? \`Used \${usedOther.join(", ")}\` : "",
       ])}</p>
-      \${standing.map(
-        (g) => html\`<p class="access-meta" data-testid="standing-approval">Always approved for <span class="mono">\${g.item_name || "credential"}</span>
-          <button type="button" class="btn-ghost btn-small" data-grant-revoke="\${g.id}" data-testid="clear-standing">Clear standing approval</button>
-        </p>\`,
-      )}
+      \${standingList(standing)}
       <label class="inline-select">Environment
         <select data-env-client="\${c.id}" aria-label="Environment for \${c.name}"\${c.status !== "active" ? " disabled" : ""}>
           \${environments.map((e) => html\`<option value="\${e}"\${e === c.environment ? " selected" : ""}>\${e}</option>\`)}
@@ -1767,15 +1844,8 @@ function agentRow(c              , environments          , standing             
       </label>
       <p class="hint env-note" data-env-note="\${c.id}" hidden></p>
     </div>
-    <div class="access-row-actions">
-      \${canRotate ? html\`<button type="button" class="btn-ghost btn-small" data-client-rotate="\${c.id}">Rotate token</button>\` : ""}
-      \${c.status === "active" ? html\`<button type="button" class="btn-danger btn-small" data-client-revoke="\${c.id}" data-testid="agent-revoke">Revoke</button>\` : ""}
-      <a class="access-log-link" href="\${agentsHash("activity", { agent: c.id })}">Activity</a>
-    </div>
   </div>\`;
 }
-
-/** Approvals rows carry the grant's policy and limits (3.1); older servers omit them. */
 
 function grantRow(g                   )           {
   const live = g.status === "active" || g.status === "pending";

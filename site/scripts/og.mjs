@@ -4,11 +4,13 @@
  *
  *   node site/scripts/og.mjs [path-to-chromium]
  *
- * Playwright is resolved from the global install used in CI and dev containers; pass a
- * different `PLAYWRIGHT_PKG` env var if yours lives elsewhere.
+ * Playwright is resolved from a project install, `npm root -g`, or the container
+ * paths CI uses. Override with `PLAYWRIGHT_PKG` / `BOTPASSES_PLAYWRIGHT_PKG` and
+ * `CHROMIUM_PATH` / `BOTPASSES_CHROMIUM`, or pass a Chromium binary as argv[2].
  */
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -17,9 +19,38 @@ const siteRoot = join(here, "..");
 const repoRoot = join(siteRoot, "..");
 const require = createRequire(import.meta.url);
 
-const pwPkg = process.env.PLAYWRIGHT_PKG ?? "/opt/node22/lib/node_modules/playwright/package.json";
-const pw = createRequire(pwPkg)("playwright");
-const executablePath = process.argv[2] ?? process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium";
+function npmGlobalPlaywrightPkg() {
+  const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim();
+  if (!root) return undefined;
+  const pkg = join(root, "playwright/package.json");
+  return existsSync(pkg) ? pkg : undefined;
+}
+
+function resolvePlaywrightPkg() {
+  const env = process.env.PLAYWRIGHT_PKG ?? process.env.BOTPASSES_PLAYWRIGHT_PKG;
+  if (env && existsSync(env)) return env;
+  try {
+    return createRequire(join(repoRoot, "package.json")).resolve("playwright/package.json");
+  } catch {
+    // Not a project dependency.
+  }
+  const candidates = [
+    npmGlobalPlaywrightPkg(),
+    "/opt/node22/lib/node_modules/playwright/package.json",
+    "/usr/local/lib/node_modules/playwright/package.json",
+    "/usr/lib/node_modules/playwright/package.json",
+  ];
+  const found = candidates.find((p) => typeof p === "string" && existsSync(p));
+  if (!found) {
+    throw new Error("Playwright not installed (npm i -g playwright, or set PLAYWRIGHT_PKG)");
+  }
+  return found;
+}
+
+const pw = createRequire(resolvePlaywrightPkg())("playwright");
+const pinnedChromium =
+  process.argv[2] ?? process.env.CHROMIUM_PATH ?? process.env.BOTPASSES_CHROMIUM ?? "/opt/pw-browsers/chromium";
+const executablePath = existsSync(pinnedChromium) ? pinnedChromium : pw.chromium.executablePath();
 
 // Brand tokens come from the same file the site and console use.
 const brand = readFileSync(join(repoRoot, "src/brand-visual.ts"), "utf8");
