@@ -17,7 +17,7 @@ import type { HostedKernel, InjectOutcome } from "./kernel.ts";
 import { requestFitsGrant, scopeDenialReason } from "./kernel-grant-scope.ts";
 import { policyIsLive } from "./kernel-grants.ts";
 import type { ModelPrincipal } from "./auth.ts";
-import { canonicalRequestPath } from "./ssrf.ts";
+import { assertAllowedHostname, canonicalRequestPath } from "./ssrf.ts";
 import {
   clientIdRequiredHint,
   clientSecretItemNames,
@@ -191,6 +191,7 @@ export function connectorTargetFromArgs(args: Record<string, unknown>): Connecto
     if (path === "/" && u.pathname && u.pathname !== "/") path = u.pathname + u.search;
   }
   if (host) host = host.toLowerCase();
+  if (host) assertAllowedHostname(host, [host]);
   if (!itemName && !host) {
     throw new HttpError(
       400,

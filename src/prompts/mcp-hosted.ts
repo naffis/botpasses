@@ -3,6 +3,7 @@
 export const MCP_INSTRUCTIONS_LOCAL = [
   "Botpasses holds named credentials on this machine. You never see secret values.",
   "When the user wants data from an API, call http_request in the same turn with host (or item_name), method, and path. Do not wait for the operator to name Botpasses. Do not list_items first.",
+  "When the user asks to set up, store, or connect credentials for a named provider or API and is not asking for data yet, call setup with provider or host. Give them the vault set command in the result. Do not ask them to paste a secret.",
   "Botpasses finds the credential and attaches it. If the result is need_item, tell the operator to run the vault set command in the message. If the result has status pending, tell them to approve with the vault grant command in the message (or the local console), then retry http_request with retry.",
   "Tools return names, last-4, and grant status only. Secret values are injected into tool processes, never into this conversation. There is no get_secret. Never ask anyone to paste a secret here.",
 ].join(" ");
@@ -10,6 +11,7 @@ export const MCP_INSTRUCTIONS_LOCAL = [
 export const MCP_INSTRUCTIONS_HOSTED = [
   "You can call third-party APIs through Botpasses. The user does not need to say Botpasses or name a tool. You never see secret values.",
   "When the user wants data from an API, call http_request in the same turn. Do not list_items or find_items first. Do not ask which tool to use.",
+  "When the user asks to set up, store, or connect credentials for a named provider or API and is not asking for data yet, call setup with provider or host. Give them collect_url or connect_url. Do not ask them to paste a secret.",
   "Example: user asks for their profile on an API → http_request method GET path https://api.example.com/v1/me. Host can be api.example.com with path /v1/me. A full https path URL is enough.",
   "Botpasses finds the credential, asks the operator to grant if needed, and attaches it. Follow next.for_model. Retry with next.arguments when present.",
   "If the result has collect_url, tell the user to open that Botpasses page and enter the key there. Do not ask them to paste a secret into this chat. Then retry http_request.",
@@ -30,6 +32,8 @@ export const HOSTED_TOOL_DESCRIPTIONS = {
     "Ask the operator to allow this client to use a named item. Do not call this first. Prefer http_request, which requests a grant when inject is denied. Use this only if you already have an item_name and are not ready to call the API. Never returns the secret.",
   list_grants:
     "Check grant status for this client. Prefer retrying http_request after the operator approves. Names and status only.",
+  setup:
+    "Set up a stored credential for a named provider or API host when the user asked to set up, store, or connect credentials and is not asking for data yet. Pass exactly one of provider (spotify, github, google, slack, stripe) or host. Returns collect_url or connect_url, steps, and next.for_model. Never returns a secret. When the user wants API data, call http_request instead.",
   http_request:
     "Primary tool. Call this in the same turn the user asks for any allowlisted API. Pass host or item_name, method, and path. path may be /v1/me or a full https URL. Botpasses attaches the credential in the mode the operator stored (Bearer, Basic, header, query, cookie, HMAC signature, AWS SigV4) and mints or refreshes OAuth tokens for known providers; pass client_id when the item is an OAuth client secret. Optional timeout_ms (1000 to 30000, default 10000) and dry_run (explain which item and approval would be used without sending). Do not list_items first. Do not ask the user for a token. Returns origin_status, a redacted body, origin_headers, or collect_url / pending grant with next.for_model and next.arguments to retry. Never returns the secret.",
 } as const;
@@ -57,4 +61,10 @@ export const HOSTED_TOOL_PARAM_DESCRIPTIONS = {
     "Origin deadline in milliseconds, 1000 to 30000 (default 10000). Values outside the range are clamped.",
   http_dry_run:
     "When true, Botpasses resolves the item and approval and reports would_send, reason, grant_status, inject_mode, and provider without calling the API or using an approval.",
+  setup_provider:
+    "Known provider id: spotify, github, google, slack, or stripe. Use this or host, not both.",
+  setup_host:
+    "API hostname such as api.example.com. Use this or provider, not both. A known host uses that provider recipe.",
+  setup_dry_run:
+    "When true, report the current setup state and recipe without creating a need or connect request.",
 } as const;

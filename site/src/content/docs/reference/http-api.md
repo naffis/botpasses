@@ -62,8 +62,8 @@ Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end 
 | POST | `/api/items/:id/rotate` | `{ "value" }`. Replaces the value only |
 | DELETE | `/api/items/:id` | Removes the credential and its approvals |
 | POST | `/api/folders` | `{ "environment", "name" }` |
-| GET | `/api/need-items/:id` | Operator only. Metadata of a pending collect request. Unauthenticated, or a request from another organization, is 404 |
-| POST | `/api/need-items/:id/fulfill` | `{ "value", "name?", "allowed_hosts?", "inject?", "kind?", "username?" }`. Stores the value from the collect page and activates the requesting agent's approval. A `connect` request (an agent needs a provider account) is 409: it is answered from the Inbox card, not typed in |
+| GET | `/api/need-items/:id` | Operator only. Metadata of a pending collect request, including `recipe` when the host matches a known provider. Unauthenticated, or a request from another organization, is 404 |
+| POST | `/api/need-items/:id/fulfill` | `{ "value", "name?", "allowed_hosts?", "inject?", "kind?", "username?", "always_allow?" }`. Stores the value from the collect page and activates the requesting agent's approval. `always_allow: true` writes a standing approval for that agent in the same transaction. A `connect` request (an agent needs a provider account) is 409: it is answered from the Inbox card, not typed in |
 | POST | `/api/need-items/:id/deny` | Denies a pending request from the Inbox |
 | GET | `/collect/:id` | HTML shell for the collect page. Details load only for a signed-in operator |
 | POST | `/api/integrations/:provider/start` | `:provider` is `spotify`, `github`, `google`, `slack`, or `stripe` (unknown is 404). `{ "item_name", "environment?", "client_id?", "redirect_uri?", "agent_client_id?", "need_id?" }`. Returns `authorize_url`, `redirect_uri`, and `provider` for a user connect. `agent_client_id` names one agent that gets a standing approval on the refresh credential after connect; `need_id` closes the Inbox request the connect answers |
@@ -139,7 +139,7 @@ Each MCP client gets its own session: `initialize` answers with an `Mcp-Session-
 | `POST /api/grants` | Approve (`scope` is `once` or `session`; `tool_id` is `http_request` for agent calls) |
 | `POST /api/grants/:id/revoke` | Revoke |
 | `GET /api/audit` | Events, no values |
-| `POST /mcp` | Local MCP JSON-RPC, the same five tools as hosted |
+| `POST /mcp` | Local MCP JSON-RPC, the same six tools as hosted |
 
 There is no OAuth, provider connect, item edit or rotate route, or Access panel on the local plane; `/api/items` only lists and stores.
 

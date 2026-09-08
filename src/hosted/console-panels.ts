@@ -53,7 +53,7 @@ function credentialsPanel(plane: VaultEnvName): string {
           <div id="items-error" class="error-box" role="alert" hidden data-testid="items-error"></div>
           <div id="items-empty" class="empty" hidden data-testid="items-empty">
             <strong>No credentials yet</strong>
-            Store a named credential. Agents request it, you approve, and the model never sees the value.
+            Ask a connected agent to set up a provider, or store a named credential here. Agents request it, you approve, and the key stays in the vault.
             <p class="toolbar"><button type="button" id="empty-store" class="btn-primary" data-testid="empty-store">Store credential</button></p>
           </div>
           <p id="items-none" class="empty" hidden data-testid="items-none">No credentials match these filters.</p>
@@ -121,7 +121,7 @@ function agentsPanel(plane: VaultEnvName, defaultEnv: VaultEnvName): string {
               <label class="filter"><span>Credential</span><select name="credential"><option value="">All credentials</option></select></label>
               <a href="#agents/activity" id="activity-clear" class="filter-clear" hidden>Show all activity</a>
             </form>
-            <p class="hint">Actions and credential names only. Values are never stored here.</p>
+            <p class="hint">Actions and credential names only. Secrets are not written to this log.</p>
             <div id="activity-list" class="access-list" data-testid="access-audit"></div>
             <p class="toolbar"><button type="button" id="activity-more" class="btn-ghost" hidden>Load more</button></p>
           </section>

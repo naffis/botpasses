@@ -917,6 +917,30 @@ export class PostgresStore implements VaultStore {
         itemValues(input.item),
       );
       await client.query(GRANT_INSERT_SQL, grantValues(input.grant));
+      if (input.policy) {
+        await client.query(
+          `INSERT INTO policies (
+            id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at,
+            methods, path_prefixes, hosts, max_calls, calls_used, expires_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          [
+            input.policy.id,
+            input.policy.orgId,
+            input.policy.clientId,
+            input.policy.itemId,
+            input.policy.folderId,
+            input.policy.environmentId,
+            input.policy.kind,
+            input.policy.createdAt,
+            scopeListJson(input.policy.methods),
+            scopeListJson(input.policy.pathPrefixes),
+            scopeListJson(input.policy.hosts),
+            input.policy.maxCalls,
+            input.policy.callsUsed,
+            input.policy.expiresAt,
+          ],
+        );
+      }
       const claimed = await client.query(
         `UPDATE need_items SET status='fulfilled', item_id=$1, grant_id=$2, fulfilled_at=$3
          WHERE id=$4 AND status='pending'`,

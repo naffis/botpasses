@@ -36,7 +36,12 @@ function connectorErrorCode(body: unknown): string | undefined {
 function withRetryArgs(next: McpNext, payload: PublicRecord): McpNext {
   const retry = stringMap(payload.retry);
   if (!retry) return next;
-  return { ...next, arguments: { ...next.arguments, ...retry } };
+  const args: Record<string, string> = { ...next.arguments };
+  for (const [key, value] of Object.entries(retry)) {
+    if (next.tool === "http_request" && key === "provider") continue;
+    args[key] = value;
+  }
+  return Object.keys(args).length > 0 ? { ...next, arguments: args } : next;
 }
 
 /** Brief note when the connector rewrote a playlist `/tracks` path to `/items`. Names no vendor. */
@@ -50,12 +55,37 @@ function rewriteNote(payload: PublicRecord): string {
   return ` The origin path was rewritten from ${from} to ${to}.${body}`;
 }
 
+function recipeHint(payload: PublicRecord): string {
+  const recipe = isRecord(payload.recipe) ? payload.recipe : undefined;
+  const hint = recipe && typeof recipe.hint === "string" ? recipe.hint.trim() : "";
+  return hint ? ` ${hint}` : "";
+}
+
+function isSetupResult(payload: PublicRecord): boolean {
+  return Array.isArray(payload.steps);
+}
+
 function nextBase(payload: PublicRecord): McpNext | undefined {
   const status = payload.status;
   if (status === "need_item") {
+    const hint = recipeHint(payload);
+    if (isSetupResult(payload)) {
+      if (typeof payload.collect_url === "string" && payload.collect_url.length > 0) {
+        return {
+          for_model:
+            `Tell the user to open collect_url in a browser and enter the credential on Botpasses.${hint} Do not ask them to paste the secret here. After they confirm it is stored, call setup again with the same provider or host.`,
+          tool: "setup",
+        };
+      }
+      return {
+        for_model:
+          `This credential is not stored yet.${hint} Call setup again without dry_run to get a collect_url, or give the user the vault set command in the message. Do not ask them to paste a secret.`,
+        tool: "setup",
+      };
+    }
     return {
       for_model:
-        "Tell the user to open collect_url in a browser and enter the credential on Botpasses. Do not ask them to paste the secret here. After they confirm it is stored, call http_request again with next.arguments (same host, method, and path).",
+        `Tell the user to open collect_url in a browser and enter the credential on Botpasses.${hint} Do not ask them to paste the secret here. After they confirm it is stored, call http_request again with next.arguments (same host, method, and path).`,
       tool: "http_request",
     };
   }
@@ -69,6 +99,13 @@ function nextBase(payload: PublicRecord): McpNext | undefined {
     };
   }
   if (status === "ambiguous") {
+    if (isSetupResult(payload)) {
+      return {
+        for_model:
+          "Multiple credentials match those hosts. Pick one item_name from items and call http_request with that name, method, and path. Do not ask the user for a token.",
+        tool: "http_request",
+      };
+    }
     return {
       for_model:
         "Multiple credentials match. Pick one item_name from items and call http_request with that name, method, and path. Do not ask the user for a token.",
@@ -82,9 +119,30 @@ function nextBase(payload: PublicRecord): McpNext | undefined {
     };
   }
   if (status === "user_connect_required") {
+    if (isSetupResult(payload)) {
+      return {
+        for_model:
+          "The app credential is stored. Give the user connect_url (a Botpasses console link) and ask them to connect their account there; the dialog also allows this agent to use it. Do not retry until they confirm the connect. Then call setup again with the same provider or host. Do not ask for a token.",
+        tool: "setup",
+      };
+    }
     return {
       for_model:
         "This API path answers only for a connected user account, and Botpasses holds only the app credential. Nothing was sent and no approval was spent. Give the user connect_url (a Botpasses console link) and ask them to connect their account there; the dialog also allows this agent to use it. Do not retry until they confirm the connect. Then call http_request once with next.arguments. Do not ask for a token.",
+      tool: "http_request",
+    };
+  }
+  if (status === "ready") {
+    return {
+      for_model:
+        "Setup is complete. Call http_request with next.arguments. Botpasses attaches the credential. Do not ask the user for a token.",
+      tool: "http_request",
+    };
+  }
+  if (status === "ready_prompt") {
+    return {
+      for_model:
+        "The credential is stored. Ask the operator to click Always-allow on this grant in the Botpasses Inbox so this agent can keep using it. Do not invent a second Collect URL. You may call http_request after they approve, or wait for Always-allow then call http_request with next.arguments.",
       tool: "http_request",
     };
   }

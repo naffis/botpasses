@@ -119,11 +119,11 @@ export function routeHash(route: Route): string {
 export const PANEL_COPY: Record<Panel, { title: string; lede: string }> = {
   inbox: {
     title: "Inbox",
-    lede: "Requests from your agents. Approve once; the model never sees the value.",
+    lede: "Requests from your agents. Approve once. The key stays in the vault.",
   },
   credentials: {
     title: "Credentials",
-    lede: "Named credentials your agents can use. Values are never shown, only the last four characters.",
+    lede: "Credentials your agents can use. You see the last four characters, not the secret.",
   },
   agents: {
     title: "Agents",

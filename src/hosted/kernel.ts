@@ -379,6 +379,7 @@ export class HostedKernel {
     inject: string;
     kind?: ItemKind;
     username?: string;
+    alwaysAllow?: boolean;
   }) {
     return needs.fulfillNeed(this.#needHost(), input);
   }

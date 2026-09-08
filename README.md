@@ -1,6 +1,6 @@
 # Botpasses
 
-Named credentials for **agents and tools**, injected into the **runtime** (child env, hosted connector, or trusted resolve). Never into the **model context or transcript**.
+You store a named credential once. Agents request it. The runtime (child env, hosted connector, or trusted resolve) gets the key. The chat does not.
 
 This is not a human password manager. It does not do browser autofill, TOTP, passkeys, or sharing secrets with other people. If the LLM can see a secret value, the product failed.
 
@@ -10,22 +10,22 @@ An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAU
 
 ## Product intent
 
-You store named credentials **once**. Agents request use. You authorize with a policy. The runtime gets the value. The model never does.
+You store named credentials **once**. Agents request use. You authorize with a policy. The runtime gets the key. The chat does not.
 
 Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault run`. Hosted (`VAULT_MODE=hosted`) is the multi-user product: first-party operator accounts (email OTP + TOTP), same-origin OAuth, Neon Postgres, Fly (one Machine), Cloudflare WAF.
 
 ## v1 local path
 
-1. `vault set NAME` — store encrypted at rest. Output is `NAME ••••last4`.
+1. `vault set NAME`: store encrypted at rest. Output is `NAME ••••last4`.
 2. Agent calls MCP `request_grant` for a named secret and named tool.
 3. Operator approves with `vault grant` (once or session) or the loopback console.
 4. `vault run --with NAME --agent AGENT --tool TOOL -- command` injects the value into the child env.
-5. `vault revoke` and `vault audit` — operator only. MCP does not revoke.
+5. `vault revoke` and `vault audit`: operator only. MCP does not revoke.
 6. Listen port is **8788** (not 8787; that port is reserved for Cursor MCP OAuth).
 
 ## Hosted path
 
-Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `http_request`. `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http_request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
+Operators create an account on this origin (email OTP, then TOTP) and store `secret` or `login` items per vault environment (`staging` | `production`). Model clients (Grok, Claude, ChatGPT, Cursor) use remote MCP: `find_items`, `list_items`, `request_grant`, `list_grants`, `setup`, `http_request`. Ask the agent to set up a provider, or call an API; `find_items` matches an exact `item_name` and/or exact API `host` (for example `api.spotify.com`). If nothing matches, MCP returns a path-only `collect_url` on Botpasses. Sign in there and type the secret. Never paste it into chat. Standing policies skip the inbox. Trusted apps call `POST /runtime/resolve` with an `avt_…` key. Model tokens cannot resolve. Connector `http_request` uses the item's exact `allowed_hosts`, rejects IP literals, DNS-pins to public addresses, and does not follow redirects. Revoke clients, grants, and sessions from the console Access panel.
 
 Connector display name for Claude: **Botpasses** (ASCII). MCP `serverInfo.name` is `botpasses`.
 
@@ -76,12 +76,12 @@ Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Deci
 
 | Surface | Sees secret value? |
 | --- | --- |
-| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `http_request`) | **No** — names, last-4, username, grant status, `collect_url`, redacted origin body |
-| Operator console / HTTP JSON (except trusted resolve) | **No** after submit — name + last-4 |
+| MCP tools (`find_items`, `list_items` / `list_secrets`, `request_grant`, `list_grants`, `setup`, `http_request`) | **No**. Names, last-4, username, grant status, `collect_url`, redacted origin body |
+| Operator console / HTTP JSON (except trusted resolve) | **No** after submit. Name + last-4 |
 | CLI `list` / `grant` / `audit` | **No** |
-| Audit table | **No** — no value column |
+| Audit table | **No**. No secret column |
 | Items table | Ciphertext only (AES-256-GCM) |
-| `vault run` child env / trusted `/runtime/resolve` / connector origin | **Yes** — that is the inject |
+| `vault run` child env / trusted `/runtime/resolve` / connector origin | **Yes**. That is the inject |
 | Hosted Fly process / KMS role (after unwrap) | **Yes** at inject. Required for `http_request`. |
 | Botpasses staff without KMS + DB | **No** |
 | Neon dump without the platform KEK / KMS | **No** |
@@ -98,7 +98,7 @@ Full table: [docs/security/threat-model.md](docs/security/threat-model.md). Deci
 ## Requirements
 
 - Node.js 22.14+
-- Local: `VAULT_MASTER_KEY` — 32 bytes as **64 hex characters** (preferred) or standard base64
+- Local: `VAULT_MASTER_KEY`: 32 bytes as **64 hex characters** (preferred) or standard base64
 - Hosted: Neon `DATABASE_URL` plus `VAULT_KEK_WRAPPED` (after cutover) or raw `VAULT_KEK` (pre-cutover fallback)
 
 ## How to run locally
@@ -124,10 +124,10 @@ Default home when `VAULT_HOME` is unset is `$HOME/.botpasses`.
 npx vault serve --host 127.0.0.1 --port 8788
 ```
 
-- Console: `http://127.0.0.1:8788/` — store, approve, revoke, audit.
+- Console: `http://127.0.0.1:8788/` (store, approve, revoke, audit).
 - JSON: `/api/secrets` (also as `/api/items`), `/api/grants`, `/api/audit`: metadata only.
 - MCP JSON-RPC: `POST /mcp`
-- `GET /health` — `{ ok, product: "botpasses" }` with **no** key fingerprint
+- `GET /health`: `{ ok, product: "botpasses" }` with **no** key fingerprint
 
 `vault serve` prints two loopback bearers, both HMACs of the master key with different labels. The **operator** bearer is the `Authorization` for `/api/*` and the console (paste it there). The **model** bearer is the `Authorization` for `POST /mcp` and is what `vault mcp --remote` sends. Neither opens the other surface: an MCP client holding the model bearer cannot approve its own grants through `/api`. The server answers only to a loopback `Host`. Each MCP client's `initialize` opens its own session (`Mcp-Session-Id`, echoed on later frames), so several clients on one `vault serve` keep separate agent ids and approvals.
 

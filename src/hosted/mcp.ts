@@ -21,7 +21,9 @@ import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { ModelPrincipal } from "./auth.ts";
 import { runHttpRequest } from "./mcp-http.ts";
+import { runHostedSetup } from "./mcp-setup.ts";
 import { attachMcpNext } from "./mcp-steer.ts";
+import { SETUP_PROVIDER_IDS } from "./providers/setup-recipes.ts";
 
 export const HOSTED_MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
@@ -35,6 +37,7 @@ export const HOSTED_MCP_TOOL_NAMES = [
   "find_items",
   "request_grant",
   "list_grants",
+  "setup",
   "http_request",
 ] as const;
 
@@ -137,6 +140,28 @@ export const HOSTED_MCP_TOOLS: HostedMcpTool[] = [
     inputSchema: {
       type: "object",
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setup",
+    description: HOSTED_TOOL_DESCRIPTIONS.setup,
+    annotations: { title: "Set up a credential for a provider or API host" },
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: {
+          type: "string",
+          enum: [...SETUP_PROVIDER_IDS],
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.setup_provider,
+        },
+        host: { type: "string", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.setup_host },
+        task_description: {
+          type: "string",
+          description: HOSTED_TOOL_PARAM_DESCRIPTIONS.find_task_description,
+        },
+        dry_run: { type: "boolean", description: HOSTED_TOOL_PARAM_DESCRIPTIONS.setup_dry_run },
+      },
       additionalProperties: false,
     },
   },
@@ -308,6 +333,9 @@ async function dispatch(
     case "list_grants": {
       const grants = await kernel.listClientGrants(principal.orgId, principal.clientId);
       return { grants: grants.map(publicGrant) };
+    }
+    case "setup": {
+      return runHostedSetup(deps, args);
     }
     case "http_request": {
       return runHttpRequest(deps, args, environment);

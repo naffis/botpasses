@@ -27,7 +27,7 @@ A **credential** is the stored thing: an API key, a token, or an OAuth client se
 
 ## When an agent asked first
 
-If an agent called an API and nothing was stored for that host, the tool result carries a `collect_url` and the request appears in your **Inbox** as *Store the credential*. Either open the Inbox card or the `collect_url`, sign in, and type the value on botpasses.com. Botpasses stores it and gives the requesting agent a one-time approval, so its retry succeeds.
+If you asked the agent to set up a provider, follow [Guided setup](/docs/how-to/guided-setup). If an agent called an API and nothing was stored for that host, the tool result carries a `collect_url` and the request appears in your **Inbox** as *Store the credential*. Either open the Inbox card or the `collect_url`, sign in, and type the value on botpasses.com. For a known API the form is prefilled (name, kind, hosts). Check **Always allow this agent to use this credential** if you want a standing approval. Left unchecked, Botpasses gives the requesting agent a one-time approval so its retry succeeds.
 
 Never paste a secret into the chat. The model does not need it and Botpasses never asks for it there.
 

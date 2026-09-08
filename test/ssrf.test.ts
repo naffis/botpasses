@@ -2,8 +2,30 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { executeConnector } from "../src/hosted/connector.ts";
 import { hostAllowed } from "../src/hosted/http.ts";
-import { isBlockedIp } from "../src/hosted/ssrf.ts";
+import { assertAllowedHostname, isBlockedIp } from "../src/hosted/ssrf.ts";
+import { HttpError } from "../src/hosted/errors.ts";
 import { CANARY } from "./helpers.ts";
+
+test("assertAllowedHostname rejects shell and URL characters in a hostname", () => {
+  const ok = (h: string) => assertAllowedHostname(h, [h]);
+  ok("api.example.com");
+  ok("accounts.spotify.com");
+  for (const host of [
+    "api.example.com;curl",
+    "api.example.com$(whoami)",
+    "api.example.com`id`",
+    "api.example.com\ncurl",
+    "api.example.com curl.evil.test",
+    "api.example.com/path",
+    "api.example.com:443",
+    "*.example.com",
+    "example",
+    "-bad.example.com",
+    "bad-.example.com",
+  ]) {
+    assert.throws(() => assertAllowedHostname(host, [host]), HttpError);
+  }
+});
 
 test("Host allowlist is exact, not a prefix; loopback only when allowed", () => {
   assert.equal(hostAllowed("vault.example.com", ["vault.example.com"]), true);

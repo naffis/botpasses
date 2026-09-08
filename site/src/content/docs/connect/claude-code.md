@@ -52,4 +52,4 @@ You can commit a project-scoped server entry in `.mcp.json` at the repo root. Ea
 
 ## Local vault instead
 
-If you want a local SQLite vault with no account, register the stdio server from [Install](/docs/install#local-mcp-server-stdio). It has the same five tools, `http_request` included; approvals come from `vault grant --secret NAME --agent AGENT --tool http_request` or the local console instead of the hosted Inbox.
+If you want a local SQLite vault with no account, register the stdio server from [Install](/docs/install#local-mcp-server-stdio). It has the same six tools, `setup` and `http_request` included; approvals come from `vault grant --secret NAME --agent AGENT --tool http_request` or the local console instead of the hosted Inbox.

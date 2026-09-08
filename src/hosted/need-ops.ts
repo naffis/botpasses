@@ -4,6 +4,7 @@ import { last4, normalizeSecretName, nowIso, suggestedNameFromHost } from "../id
 import { assertSafePublicObject } from "../redact.ts";
 import {
   scopeFromPolicy,
+  unscopedFields,
   type ClientRecord,
   type FindItemsResult,
   type HostedGrantRecord,
@@ -13,8 +14,10 @@ import {
   type NeedItemRecord,
   type NeedPublic,
   type PolicyRecord,
+  type SetupRecipePublic,
   type VaultEnvName,
 } from "../hosted-types.ts";
+import { publicRecipe, recipeByHost } from "./providers/setup-recipes.ts";
 import type { VaultStore } from "../store/types.ts";
 import { StoreConflictError } from "../store/conflict.ts";
 import { HttpError, NeedItemError, type NeedItemPayload } from "./errors.ts";
@@ -65,6 +68,11 @@ function collectUrl(host: NeedHost, needId: string): string {
   return `${host.publicUrl.replace(/\/$/, "")}/collect/${needId}`;
 }
 
+function recipeForNeedHost(itemHost: string): SetupRecipePublic | undefined {
+  const recipe = recipeByHost(itemHost);
+  return recipe ? publicRecipe(recipe) : undefined;
+}
+
 function needPayload(
   host: NeedHost,
   needId: string,
@@ -72,6 +80,7 @@ function needPayload(
   itemHost: string,
   clientName: string,
 ): NeedItemPayload {
+  const recipe = recipeForNeedHost(itemHost);
   const payload: NeedItemPayload = {
     status: "need_item",
     collect_url: collectUrl(host, needId),
@@ -80,6 +89,7 @@ function needPayload(
     client_name: clientName,
     need_id: needId,
     message: NEED_ITEM_MESSAGE,
+    ...(recipe ? { recipe } : {}),
   };
   assertSafePublicObject("needItem", payload);
   return payload;
@@ -156,8 +166,9 @@ export async function ensureNeedItem(
     throw new HttpError(403, "Client cannot access this environment");
   }
   const env = await host.envFor(input.orgId, input.environment);
-  const suggestedName = input.itemName ?? suggestedNameFromHost(input.host) ?? "";
-  const itemHost = input.host;
+  const recipe = recipeByHost(input.host);
+  const suggestedName = input.itemName ?? recipe?.suggestedName ?? suggestedNameFromHost(input.host) ?? "";
+  const itemHost = recipe?.primaryHost ?? input.host;
   const taskDescription = truncateTask(input.taskDescription);
   const existing = await host.store.getPendingNeed({
     orgId: input.orgId,
@@ -330,6 +341,7 @@ export async function getNeed(
     task_description: string | null;
     status: string;
     expires_at: string;
+    recipe?: SetupRecipePublic;
   };
 } | undefined> {
   const row = await host.store.getNeed(id);
@@ -346,6 +358,7 @@ export async function getNeed(
       task_description: row.taskDescription,
       status: row.status,
       expires_at: row.expiresAt,
+      recipe: recipeForNeedHost(row.host),
     },
   };
 }
@@ -371,6 +384,7 @@ export async function listInboxNeeds(host: NeedHost, orgId: string): Promise<Nee
       created_at: row.createdAt,
       expires_at: row.expiresAt,
       status: row.status,
+      recipe: recipeForNeedHost(row.host),
     });
   }
   assertSafePublicObject("listInboxNeeds", out);
@@ -389,6 +403,7 @@ export async function fulfillNeed(
     inject: string;
     kind?: ItemKind;
     username?: string;
+    alwaysAllow?: boolean;
   },
 ): Promise<{ item: ItemPublic; grant_status: string }> {
   const need = await host.store.getNeed(input.needId);
@@ -457,6 +472,23 @@ export async function fulfillNeed(
     updatedAt: at,
   };
   const standing = await host.standingFor(input.orgId, client.id, item);
+  const alwaysAllow = input.alwaysAllow === true;
+  const policy: PolicyRecord | undefined =
+    alwaysAllow && !standing
+      ? {
+          id: `pol_${randomUUID()}`,
+          orgId: input.orgId,
+          clientId: client.id,
+          itemId,
+          folderId: null,
+          environmentId: env.id,
+          kind: "item_standing",
+          createdAt: at,
+          expiresAt: null,
+          ...unscopedFields(),
+        }
+      : undefined;
+  const covering = standing ?? policy;
   const grant: HostedGrantRecord = {
     id: `grt_${randomUUID()}`,
     orgId: input.orgId,
@@ -464,7 +496,7 @@ export async function fulfillNeed(
     itemId,
     folderId: null,
     environmentId: env.id,
-    policy: standing ? standing.kind : "prompt",
+    policy: covering ? covering.kind : "prompt",
     status: "active",
     createdAt: at,
     approvedAt: at,
@@ -472,12 +504,13 @@ export async function fulfillNeed(
     taskId: null,
     taskDescription: need.taskDescription,
     requestedScope: null,
-    ...scopeFromPolicy(standing),
+    ...scopeFromPolicy(covering),
   };
   try {
     await host.store.persistFulfill({
       item,
       grant,
+      policy,
       needId: need.id,
       fulfilledAt: at,
       audit: {
@@ -495,6 +528,9 @@ export async function fulfillNeed(
       throw new HttpError(409, err.message);
     }
     throw err;
+  }
+  if (policy) {
+    await host.audit(input.orgId, "standing_created", input.actor, name, client.id);
   }
   const result = { item: host.publicItem(env.name, item), grant_status: grant.status };
   assertSafePublicObject("fulfillNeed", result);

@@ -42,7 +42,7 @@ export function operatorHtml(nonce = ""): string {
 <body>
   <main>
     <h1>${PRODUCT_NAME} local console</h1>
-    <p>Named credentials for agents and tools. Values are stored encrypted and attached by <code>http_request</code> or injected by <code>vault run</code>. They are never shown here after submit, and never returned to the model.</p>
+    <p>Store a credential once. Agents request it. The key is attached by <code>http_request</code> or injected by <code>vault run</code>. This page shows the name and last four after submit, not the secret.</p>
     <div class="banner">
       This is not a human password manager. No autofill, TOTP, passkeys, or sharing secrets with other people.
       Chat and this console show <strong>name, last four, and approval metadata</strong> only.
@@ -127,7 +127,7 @@ export function operatorHtml(nonce = ""): string {
     </table>
 
     <h2>Activity</h2>
-    <p>Who, which credential name, which tool and agent, when, approve or revoke. The value is never stored here.</p>
+    <p>Who, which credential name, which tool and agent, when, approve or revoke. Secrets are not written to this log.</p>
     <table>
       <thead><tr><th scope="col">When</th><th scope="col">Action</th><th scope="col">Actor</th><th scope="col">Credential</th><th scope="col">Agent</th><th scope="col">Tool</th></tr></thead>
       <tbody id="audit"></tbody>

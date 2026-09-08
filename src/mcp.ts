@@ -1,7 +1,7 @@
 /**
  * Local sqlite MCP JSON-RPC and tools. Public contract: docs/reference/mcp.md.
- * Same five tool names and argument shapes as hosted (3.8): `list_items`, `find_items`,
- * `request_grant`, `list_grants`, `http_request`. The agent id comes from the MCP client's
+ * Same six tool names and argument shapes as hosted: `list_items`, `find_items`,
+ * `request_grant`, `list_grants`, `setup`, `http_request`. The agent id comes from the MCP client's
  * `initialize` `clientInfo.name`; grants are keyed (item, agent, tool) with tool `http_request`.
  * Never returns secret values. There is no get_secret.
  */
@@ -9,12 +9,16 @@ import { randomBytes } from "node:crypto";
 import { MCP_INSTRUCTIONS_LOCAL, MCP_SERVER_NAME } from "./brand.ts";
 import type { ConnectorFetch } from "./hosted/connector.ts";
 import { isHttpError } from "./hosted/errors.ts";
+import { assertAllowedHostname } from "./hosted/ssrf.ts";
 import { connectorTargetFromArgs, retryFields } from "./hosted/mcp-http.ts";
 import { normalizeActorId, normalizeSecretName } from "./ids.ts";
 import { assertSafePublicObject } from "./redact.ts";
 import { hostAllowedBy } from "./hosted/connector.ts";
 import { HTTP_REQUEST_TOOL, publicLocalGrant, type Vault } from "./vault.ts";
 import type { LocalGrantScope } from "./types.ts";
+import { runLocalSetup } from "./hosted/mcp-setup.ts";
+import { attachMcpNext } from "./hosted/mcp-steer.ts";
+import { SETUP_PROVIDER_IDS } from "./hosted/providers/setup-recipes.ts";
 
 export const MCP_SERVER_INFO = {
   name: MCP_SERVER_NAME,
@@ -28,6 +32,7 @@ export const MCP_TOOL_NAMES = [
   "find_items",
   "request_grant",
   "list_grants",
+  "setup",
   "http_request",
 ] as const;
 
@@ -113,6 +118,26 @@ export const MCP_TOOLS: McpToolDefinition[] = [
       "Grant status for this agent (pending, active, revoked, consumed, expired). Names and metadata only, never secret values.",
     annotations: { title: "List grant status", readOnlyHint: true },
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "setup",
+    description:
+      "Set up a stored credential for a named provider or API host when the user asked to set up, store, or connect credentials and is not asking for data yet. Pass exactly one of provider or host. Returns a vault set command, never a collect_url or a secret. When the user wants API data, call http_request instead.",
+    annotations: { title: "Set up a credential for a provider or API host" },
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: {
+          type: "string",
+          enum: [...SETUP_PROVIDER_IDS],
+          description: "Known provider id: spotify, github, google, slack, or stripe. Use this or host, not both.",
+        },
+        host: { type: "string", description: "API hostname such as api.example.com. Use this or provider, not both." },
+        task_description: TASK_DESCRIPTION,
+        dry_run: { type: "boolean", description: "When true, report the current setup state without changing anything." },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "http_request",
@@ -301,6 +326,7 @@ function itemSummary(m: { name: string; last4: string; allowedHosts: string[]; i
 }
 
 function needItem(itemName: string | undefined, host: string | undefined): Record<string, unknown> {
+  if (host) assertAllowedHostname(host, [host]);
   const suggested = itemName ? normalizeSecretName(itemName) : "API_KEY";
   return {
     status: "need_item",
@@ -354,6 +380,8 @@ async function dispatch(vault: Vault, name: string, args: Record<string, unknown
       const grants = vault.listGrants().filter((g) => g.agentId === agentId);
       return { grants: grants.map(publicLocalGrant) };
     }
+    case "setup":
+      return attachMcpNext(runLocalSetup(vault, args));
     case "http_request": {
       const target = connectorTargetFromArgs(args);
       const result = await vault.httpRequest({

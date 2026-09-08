@@ -9,6 +9,7 @@ test("hosted initialize instructions tell the model to act without a ritual prom
   assert.match(MCP_INSTRUCTIONS_HOSTED, /http_request/);
   assert.match(MCP_INSTRUCTIONS_HOSTED, /same turn/);
   assert.match(MCP_INSTRUCTIONS_HOSTED, /Do not list_items or find_items first/);
+  assert.match(MCP_INSTRUCTIONS_HOSTED, /call setup with provider or host/);
   assert.match(MCP_INSTRUCTIONS_HOSTED, /user asks for their profile on an API/);
   assert.match(MCP_INSTRUCTIONS_HOSTED, /https:\/\/api\.example\.com\/v1\/me/);
   assert.doesNotMatch(MCP_INSTRUCTIONS_HOSTED, /spotify\.com/i);

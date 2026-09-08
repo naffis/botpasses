@@ -1,3 +1,5 @@
+import type { SetupRecipePublic } from "../hosted-types.ts";
+
 export class HttpError extends Error {
   readonly status: number;
   readonly extra: Record<string, unknown>;
@@ -17,6 +19,7 @@ export type NeedItemPayload = {
   client_name: string;
   need_id: string;
   message: string;
+  recipe?: SetupRecipePublic;
 };
 
 export class NeedItemError extends HttpError {

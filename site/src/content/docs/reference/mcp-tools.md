@@ -1,11 +1,11 @@
 ---
 title: MCP tools
-description: The five hosted MCP tools, their arguments and results, the JSON-RPC methods, auth, and the next steering field. There is no get_secret.
+description: The six hosted MCP tools, their arguments and results, the JSON-RPC methods, auth, and the next steering field. There is no get_secret.
 section: reference
 order: 1
 ---
 
-Hosted MCP is `POST https://botpasses.com/mcp` (staging: `https://staging.botpasses.com/mcp`). Protocol version `2024-11-05`, `serverInfo.name` is `botpasses`. The model never receives a secret value. There is no `get_secret`, `read_value`, `reveal_secret`, or `revoke_grant`.
+Hosted MCP is `POST https://botpasses.com/mcp` (staging: `https://staging.botpasses.com/mcp`). Protocol version `2024-11-05`, `serverInfo.name` is `botpasses`. No tool returns a secret. There is no `get_secret`, `read_value`, `reveal_secret`, or `revoke_grant`.
 
 The primary tool is `http_request`. The earlier name `http.request` is accepted as an alias for one release; new integrations should use `http_request`.
 
@@ -16,7 +16,7 @@ The primary tool is `http_request`. The earlier name `http.request` is accepted 
 | OAuth access token (JWT) | Client completes OAuth on botpasses.com (PKCE S256, dynamic client registration) | `aud` is exactly `https://botpasses.com/mcp`, lifetime 600 s, refresh rotation |
 | Model token `avm_...` | Issued once in the console Access panel | Sent as `Authorization: Bearer avm_...`. Sufficient for every method |
 
-Unauthenticated `initialize`, `ping`, `tools/list`, and `notifications/*` succeed, so a client with a preconfigured bearer never sees a connect card. Unauthenticated `tools/call` is 401 with `WWW-Authenticate` carrying `resource_metadata` for `/.well-known/oauth-protected-resource/mcp`. Trusted runtime tokens (`avt_...`) cannot call MCP.
+Unauthenticated `initialize`, `ping`, `tools/list`, and `notifications/*` succeed, so a client with a preconfigured bearer does not get a connect card. Unauthenticated `tools/call` is 401 with `WWW-Authenticate` carrying `resource_metadata` for `/.well-known/oauth-protected-resource/mcp`. Trusted runtime tokens (`avt_...`) cannot call MCP.
 
 Every agent is bound to one vault environment (`staging` or `production`) when it is issued or connected. Tools act in that environment; there is no environment argument.
 
@@ -26,7 +26,7 @@ Every agent is bound to one vault environment (`staging` or `production`) when i
 | --- | --- |
 | `initialize` | `protocolVersion`, `capabilities.tools`, `serverInfo`, and `instructions` (below) |
 | `ping` | `{}` |
-| `tools/list` | The five tools with JSON schemas |
+| `tools/list` | The six tools with JSON schemas |
 | `tools/call` | One `text` content item whose text is the JSON payload described per tool |
 | `notifications/*` | No body, HTTP 202 |
 
@@ -106,10 +106,24 @@ Look up a stored credential by exact `item_name` and/or exact API `host`. Prefer
 | --- | --- | --- |
 | `found` | `item`: `name`, `kind`, `last4`, `allowed_hosts`, `inject`, `environment` | no |
 | `ambiguous` | `items` (up to five, `truncated` when more) | no |
-| `need_item` | `collect_url`, `suggested_name`, `host`, `client_name`, `need_id`, `message` | no |
+| `need_item` | `collect_url`, `suggested_name`, `host`, `client_name`, `need_id`, `message`, optional `recipe` | no |
 | `host_mismatch` | `item` | yes |
 
 Calling with neither name nor host is not an error and does not dump the vault. New `need_item` rows share the 30 per hour limit with `request_grant`.
+
+## setup
+
+When the user asked to set up, store, or connect credentials for a provider or API and is not asking for data yet. Pass exactly one of `provider` (`spotify`, `github`, `google`, `slack`, `stripe`) or `host`. Both, even when they agree, is refused. Optional `task_description` and `dry_run`. Never a secret argument.
+
+| `status` | Meaning |
+| --- | --- |
+| `need_item` | Nothing stored. Open `collect_url` on botpasses.com. Not an MCP error |
+| `user_connect_required` | App secret stored; open `connect_url` to connect the user account |
+| `ready` | Standing approval (and Connect when the recipe needs it). Call `http_request` |
+| `ready_prompt` | Credential stored. Ask the operator to click Always-allow in Inbox. Do not invent a second Collect URL |
+| `ambiguous` | More than one stored credential matches those hosts |
+
+Results include a public `recipe` when the host is known, `steps[]`, and `next`. After Collect, call `setup` again. After `ready`, call `http_request`. A leftover host-named item (for example `API_SPOTIFY_COM` bearer) is reused as `ready` or `ready_prompt`; setup does not create `SPOTIFY_SECRET` beside it or start Connect.
 
 ## list_items
 
@@ -134,7 +148,7 @@ Most results include `next.for_model`, and often `next.tool` and `next.arguments
 
 The `initialize` response carries these instructions. They are written for the model, not for people, and are reproduced here so you know what your agent is told.
 
-> You can call third-party APIs (Spotify, Stripe, GitHub, and the rest) through Botpasses. The user does not need to say Botpasses or name a tool. You never see secret values. When the user wants data from an API, call http_request in the same turn. Do not list_items or find_items first. Do not ask which tool to use. Botpasses finds the credential, asks the operator to grant if needed, and attaches it. Follow next.for_model. Retry with next.arguments when present. If the result has collect_url, tell the user to open that Botpasses page and enter the key there. Do not ask them to paste a secret into this chat. Then retry http_request. If the result has approval_code or grant status pending, tell them to approve in the Botpasses inbox. Then retry http_request with next.arguments. There is no get_secret. Never put a secret in a tool argument. A Client Secret is not a user access token. On 4xx, fix the path, query, or body and retry http_request with next.arguments; on 5xx retry once, except body_too_large, which means the answer was over 1 MiB: narrow the call (pagination, a smaller page, a fields filter) before calling again. A one-call approval is spent by any answer from the API; if the retry returns a pending grant, tell the user to approve it.
+> You can call third-party APIs (Spotify, Stripe, GitHub, and the rest) through Botpasses. The user does not need to say Botpasses or name a tool. You never see secret values. When the user wants data from an API, call http_request in the same turn. Do not list_items or find_items first. Do not ask which tool to use. When the user asks to set up, store, or connect credentials and is not asking for data yet, call setup with provider or host. Give them collect_url or connect_url. Do not ask them to paste a secret. Botpasses finds the credential, asks the operator to grant if needed, and attaches it. Follow next.for_model. Retry with next.arguments when present. If the result has collect_url, tell the user to open that Botpasses page and enter the key there. Do not ask them to paste a secret into this chat. Then retry http_request. If the result has approval_code or grant status pending, tell them to approve in the Botpasses inbox. Then retry http_request with next.arguments. There is no get_secret. Never put a secret in a tool argument. A Client Secret is not a user access token. On 4xx, fix the path, query, or body and retry http_request with next.arguments; on 5xx retry once, except body_too_large, which means the answer was over 1 MiB: narrow the call (pagination, a smaller page, a fields filter) before calling again. A one-call approval is spent by any answer from the API; if the retry returns a pending grant, tell the user to approve it.
 
 </details>
 
@@ -146,7 +160,7 @@ The `initialize` response carries these instructions. They are written for the m
 
 ## Local MCP (SQLite)
 
-`npx vault mcp` (stdio, SQLite) exposes the same five tools as hosted with the same argument shapes: `list_items`, `find_items`, `request_grant`, `list_grants`, and `http_request`. `list_secrets` and `http.request` are accepted as aliases for one release. The agent id is the MCP client's name from `initialize`; an argument the tool does not define (such as `agent_id`) is refused with JSON-RPC error `-32602`. Over `POST /mcp` on `vault serve`, `initialize` opens a session (the `Mcp-Session-Id` response header, sent back on every later frame), so each connected client keeps its own agent id and approvals. `http_request` needs an active grant for that credential, agent, and tool (`vault grant --secret NAME --agent A --tool http_request`), decrypts in-process, and calls the same connector, so results are redacted the same way and `client_id`, `timeout_ms`, and `dry_run` work as on hosted. Store hosts, an inject mode (the same vocabulary as hosted), and a username with `vault set NAME --host api.example.com --inject basic --username svc`. A miss returns `need_item` with a message to run `vault set`; there is no `collect_url` locally. A provider user-only path called with a `client_credentials` item and no local `<ITEM>_REFRESH` is `user_connect_required` without `connect_url`; the hint names the `vault set <ITEM>_REFRESH --inject refresh` command.
+`npx vault mcp` (stdio, SQLite) exposes the same six tools as hosted with the same argument shapes: `list_items`, `find_items`, `request_grant`, `list_grants`, `setup`, and `http_request`. Local `setup` returns a `vault set` command instead of `collect_url`. `list_secrets` and `http.request` are accepted as aliases for one release. The agent id is the MCP client's name from `initialize`; an argument the tool does not define (such as `agent_id`) is refused with JSON-RPC error `-32602`. Over `POST /mcp` on `vault serve`, `initialize` opens a session (the `Mcp-Session-Id` response header, sent back on every later frame), so each connected client keeps its own agent id and approvals. `http_request` needs an active grant for that credential, agent, and tool (`vault grant --secret NAME --agent A --tool http_request`), decrypts in-process, and calls the same connector, so results are redacted the same way and `client_id`, `timeout_ms`, and `dry_run` work as on hosted. Store hosts, an inject mode (the same vocabulary as hosted), and a username with `vault set NAME --host api.example.com --inject basic --username svc`. A miss returns `need_item` with a message to run `vault set`; there is no `collect_url` locally. A provider user-only path called with a `client_credentials` item and no local `<ITEM>_REFRESH` is `user_connect_required` without `connect_url`; the hint names the `vault set <ITEM>_REFRESH --inject refresh` command.
 
 ## Result shape
 

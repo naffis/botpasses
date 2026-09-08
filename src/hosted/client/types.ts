@@ -16,12 +16,27 @@ export type ItemRow = {
   updatedAt?: string;
 };
 
+export type CollectRecipe = {
+  id?: string;
+  display_name?: string;
+  suggested_name?: string;
+  kind?: string;
+  inject?: string;
+  allowed_hosts?: string[];
+  primary_host?: string;
+  username_required?: boolean;
+  dashboard_url?: string;
+  hint?: string;
+  connect_after?: boolean;
+};
+
 export type InboxNeed = {
   id: string;
   /** `secret` (typed on the collect page) or `connect` (a provider account connected from the card). */
   kind?: string;
   suggested_name: string;
   host: string;
+  recipe?: CollectRecipe;
   client_id: string;
   client_name: string;
   task_description: string | null;

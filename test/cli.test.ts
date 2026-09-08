@@ -304,7 +304,7 @@ test("help mentions the loopback bearer for vault serve and the five MCP tools",
   assert.match(out, /Authorization/);
   assert.match(out, /--host api\.example\.com/);
   assert.match(out, /--inject bearer\|basic\|header:Name/);
-  assert.match(out, /list_items, find_items, request_grant, list_grants, http_request/);
+  assert.match(out, /list_items, find_items, request_grant, list_grants, setup, http_request/);
   assert.match(out, /--tool http_request/);
   assert.doesNotMatch(out, /—/);
 });

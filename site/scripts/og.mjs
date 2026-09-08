@@ -67,7 +67,7 @@ const html = `<!doctype html>
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="3" fill="${accent}"/><circle cx="8" cy="12" r="1.6" fill="${bg}"/><path d="M12 9h7v2h-7V9zm0 4h5v2h-5v-2z" fill="${bg}"/></svg>
       Botpasses
     </div>
-    <h1>Named credentials for agents.<br><span>The model never sees the value.</span></h1>
+    <h1>Your agent can call Stripe.<br><span>It never gets the key.</span></h1>
     <div class="bottom">
       <div class="tag">Store an API key once. Your agent calls the API through Botpasses over MCP. The key never enters the chat, the model, or the logs.</div>
       <div class="chip">STRIPE_SECRET_KEY <b>••••4k2p</b></div>

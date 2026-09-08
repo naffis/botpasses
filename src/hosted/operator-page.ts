@@ -118,7 +118,7 @@ export function hostedOperatorHtml(
       <header class="page-head">
         <div>
           <h1 id="page-title">Credentials</h1>
-          <p id="page-lede" class="lede">Named credentials your agents can use. Values are never shown, only the last four characters.</p>
+          <p id="page-lede" class="lede">Credentials your agents can use. You see the last four characters, not the secret.</p>
         </div>
         <div class="toolbar">
           <button type="button" id="open-store" class="btn-primary" data-testid="open-store">Store credential</button>

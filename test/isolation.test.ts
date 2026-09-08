@@ -318,8 +318,19 @@ test("hosted find then operator fulfill never leaks canary into MCP collect HTML
     chat.add("agent", used);
     const inbox = await (await fetch(`${base}/api/inbox`, { headers: op })).json();
     chat.add("operator", inbox);
+    const setupCall = await handleHostedMcpRpc(
+      { kernel, principal: { channel: "model", orgId, clientId: model.id, environment: "staging" } },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "setup", arguments: { provider: "spotify" } },
+      },
+    );
+    chat.add("agent", setupCall);
     const blob = chat.serialize() + collect + JSON.stringify(inbox);
     assert.equal(transcriptContainsSecret(blob, CANARY), false, blob);
+    assert.ok(!JSON.stringify(setupCall).includes(CANARY));
     const url = new URL(String(miss.collect_url));
     assert.equal(url.search, "");
   } finally {

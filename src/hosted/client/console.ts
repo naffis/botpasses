@@ -438,7 +438,7 @@ function bindConnect(): void {
   if (connected) {
     const name = providerById(connected)?.displayName ?? "Account";
     const forAgent = q.get("agent") ? " The agent can retry its call now." : "";
-    flash(`${name} account connected. The refresh token is stored; the model never sees it.${forAgent}`, true);
+    flash(`${name} account connected. The refresh token is stored. The agent does not get it.${forAgent}`, true);
   }
   if (failed) {
     const name = providerById(failed)?.displayName ?? "The provider";

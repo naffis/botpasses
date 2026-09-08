@@ -14,7 +14,7 @@ const groups = groupBySection(toNavItems(await getCollection("docs")));
   <p>
     Botpasses stores a named credential once. An agent (Claude, Cursor, ChatGPT, Grok, or any
     MCP client) asks to use it, you approve, and Botpasses makes the API call with the
-    credential attached. The model never receives the value. Start with the first section, then
+    credential attached. The key stays in the vault. Start with the first section, then
     connect your agent.
   </p>
   {groups.map((g) => (

@@ -161,7 +161,7 @@ test("HTTP operator API never returns secret values", async () => {
     ).json()) as { result: { tools: { name: string }[] } };
     assert.deepEqual(
       tools.result.tools.map((t) => t.name).sort(),
-      ["find_items", "http_request", "list_grants", "list_items", "request_grant"],
+      ["find_items", "http_request", "list_grants", "list_items", "request_grant", "setup"],
     );
 
     const audit = (await (await fetch(`${base}/api/audit`, { headers: auth })).json()) as {

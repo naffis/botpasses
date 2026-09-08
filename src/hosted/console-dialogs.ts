@@ -98,7 +98,7 @@ function tokenDialog(): string {
 function connectDialog(): string {
   return `<dialog id="connect-dialog" data-testid="connect-dialog" aria-labelledby="connect-title">
     <h2 id="connect-title">Connect account</h2>
-    <p class="hint">Authorization Code (with PKCE when the provider supports it). The redirect is this site's callback or <code>http://127.0.0.1:8888/callback</code>; add that URI on the <span id="connect-provider-name">provider</span> app. The refresh token is stored next to this credential and the model never sees it.</p>
+    <p class="hint">Authorization Code (with PKCE when the provider supports it). The redirect is this site's callback or <code>http://127.0.0.1:8888/callback</code>; add that URI on the <span id="connect-provider-name">provider</span> app. The refresh token is stored next to this credential. The agent does not get it.</p>
     <p id="connect-error" class="flash" role="alert"></p>
     <form id="connect-provider" novalidate>
       <input type="hidden" name="provider_id" />

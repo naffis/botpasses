@@ -420,3 +420,123 @@ test("persistFulfill rolls back item when grant insert fails", async () => {
     cleanup(ctx.home);
   }
 });
+
+test("recipe host miss uses SPOTIFY_SECRET and primaryHost (AC-05, AC-11, AC-12)", async () => {
+  const ctx = await setup();
+  try {
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: ctx.client.id,
+      environment: "staging",
+      host: "accounts.spotify.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    assert.equal(miss.suggested_name, "SPOTIFY_SECRET");
+    assert.equal(miss.host, "api.spotify.com");
+    assert.ok(miss.recipe?.allowed_hosts.includes("accounts.spotify.com"));
+    assert.equal(miss.recipe?.kind, "client_secret");
+    const got = await ctx.kernel.getNeed(miss.need_id);
+    assert.equal(got?.need.recipe?.kind, "client_secret");
+    assert.ok(got?.need.recipe?.allowed_hosts.includes("api.spotify.com"));
+  } finally {
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("fulfill always_allow writes standing policy and grant; omitted stays prompt", async () => {
+  const ctx = await setup();
+  try {
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: ctx.client.id,
+      environment: "staging",
+      host: "api.stripe.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    await ctx.kernel.fulfillNeed({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      needId: miss.need_id,
+      value: CANARY,
+      allowedHosts: ["api.stripe.com"],
+      inject: "bearer",
+      alwaysAllow: true,
+    });
+    const grants = await ctx.kernel.listClientGrants(ctx.orgId, ctx.client.id);
+    assert.equal(grants[0]?.policy, "item_standing");
+    const policies = await ctx.store.listPoliciesForClient(ctx.orgId, ctx.client.id);
+    assert.equal(policies[0]?.kind, "item_standing");
+    const audit = await ctx.store.listAudit(ctx.orgId);
+    assert.ok(audit.some((a) => a.action === "standing_created"));
+    assert.ok(!JSON.stringify({ grants, policies, audit }).includes(CANARY));
+
+    const other = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: ctx.client.id,
+      environment: "staging",
+      host: "api.example.com",
+    });
+    assert.equal(other.status, "need_item");
+    if (other.status !== "need_item") return;
+    await ctx.kernel.fulfillNeed({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      needId: other.need_id,
+      value: CANARY,
+      allowedHosts: ["api.example.com"],
+      inject: "bearer",
+    });
+    const prompt = (await ctx.kernel.listClientGrants(ctx.orgId, ctx.client.id)).find((g) => g.policy === "prompt");
+    assert.ok(prompt);
+  } finally {
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("always_allow fulfill 409 on existing name rolls back item and policy", async () => {
+  const ctx = await setup();
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "secret",
+      name: "STRIPE_SECRET_KEY",
+      value: "already",
+      allowedHosts: ["api.stripe.com"],
+      inject: "bearer",
+    });
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: ctx.client.id,
+      environment: "staging",
+      host: "api.github.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    await assert.rejects(
+      () =>
+        ctx.kernel.fulfillNeed({
+          orgId: ctx.orgId,
+          actor: "user_owner",
+          needId: miss.need_id,
+          name: "STRIPE_SECRET_KEY",
+          value: CANARY,
+          allowedHosts: ["api.github.com"],
+          inject: "bearer",
+          alwaysAllow: true,
+        }),
+      (err: unknown) => isHttpError(err) && err.status === 409,
+    );
+    const env = await ctx.kernel.envFor(ctx.orgId, "staging");
+    assert.equal((await ctx.store.listItems(env.id)).length, 1);
+    assert.equal((await ctx.store.listPoliciesForClient(ctx.orgId, ctx.client.id)).length, 0);
+  } finally {
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});

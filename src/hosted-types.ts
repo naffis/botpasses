@@ -1,6 +1,21 @@
 export type MemberRole = "owner" | "operator";
 export type VaultEnvName = "staging" | "production";
 export type ItemKind = "secret" | "login" | "client_secret";
+
+/** Value-free setup recipe on MCP, GET need, and Collect. */
+export type SetupRecipePublic = {
+  id: string;
+  display_name: string;
+  suggested_name: string;
+  kind: ItemKind;
+  inject: string;
+  allowed_hosts: string[];
+  primary_host: string;
+  username_required: boolean;
+  dashboard_url: string;
+  hint: string;
+  connect_after: boolean;
+};
 /** Request-signing schemes for `hmac:<scheme>`. Algorithms: src/hosted/providers/hmac.ts. */
 export type HmacScheme = "stripe_sig" | "slack_sig" | "github_sig";
 
@@ -323,6 +338,8 @@ export type PersistFulfillInput = {
   audit: HostedAuditRecord;
   needId: string;
   fulfilledAt: string;
+  /** When set, inserted in the same transaction as the item and grant. */
+  policy?: PolicyRecord;
 };
 
 export type NeedPublic = {
@@ -342,6 +359,7 @@ export type NeedPublic = {
   created_at: string;
   expires_at: string;
   status: NeedItemStatus;
+  recipe?: SetupRecipePublic;
 };
 
 export type FindItemSummary = {
@@ -365,4 +383,5 @@ export type FindItemsResult =
       client_name: string;
       need_id: string;
       message: string;
+      recipe?: SetupRecipePublic;
     };

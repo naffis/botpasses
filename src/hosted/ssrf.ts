@@ -9,10 +9,14 @@ const BLOCKED_HOSTS = new Set([
   "instance-data",
 ]);
 
+/** DNS hostname: labels of `[a-z0-9-]`, no empty/leading/trailing hyphens, at least one dot. */
+const DNS_HOSTNAME =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
 export function assertAllowedHostname(hostname: string, allowlist: string[]): void {
   const host = hostname.trim().toLowerCase();
   if (!host) throw new HttpError(400, "Missing host");
-  if (host.includes("*") || host.includes("/") || host.includes(":")) {
+  if (host.length > 253 || !DNS_HOSTNAME.test(host)) {
     throw new HttpError(400, "Host must be an exact hostname");
   }
   if (isIP(host) !== 0) {

@@ -79,6 +79,7 @@ export async function handleItemRoutes(
       host: found.need.host,
       task_description: found.need.task_description,
       status: found.need.status,
+      recipe: found.need.recipe,
     });
     return true;
   }
@@ -96,6 +97,7 @@ export async function handleItemRoutes(
       inject: parseInjectMode(String(body.inject ?? defaultInjectForKind(body.kind === undefined ? "secret" : asKind(body.kind)))),
       kind: body.kind === undefined ? undefined : asKind(body.kind),
       username: optional(body.username),
+      alwaysAllow: body.always_allow === true,
     });
     json(res, 200, { item: result.item, grant_status: result.grant_status });
     return true;

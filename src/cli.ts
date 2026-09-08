@@ -77,7 +77,7 @@ Usage:
     Authorization for /api and the console; the model bearer is the Authorization for POST /mcp
   vault login
   vault mcp [--remote [http://127.0.0.1:8788]] [--user-jwt [JWT]]
-    stdio MCP with list_items, find_items, request_grant, list_grants, http_request (same as hosted)
+    stdio MCP with list_items, find_items, request_grant, list_grants, setup, http_request (same as hosted)
     --remote forwards stdio to a running vault serve with the model bearer
     --user-jwt proxies the hosted server; the token is the flag's value or VAULT_USER_JWT
   vault kek-wrap

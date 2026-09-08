@@ -76,7 +76,7 @@ const adrs = [
     Each credential is encrypted with AES-256-GCM under a data key that belongs to its organisation, with the
     organisation id as additional authenticated data. Organisation keys are wrapped by a platform key. At
     boot, AWS KMS unwraps that platform key (<code>VAULT_KEK_WRAPPED</code>) through a role the Fly Machine
-    assumes with Fly OIDC; the KMS key itself never leaves AWS and never sees a credential. A database dump
+    assumes with Fly OIDC; the KMS key itself stays in AWS and does not handle a credential. A database dump
     alone decrypts nothing. Machine tokens are stored as SHA-256 hashes. The local CLI uses a master key you
     hold, with the credential name bound into the ciphertext.
   </p>

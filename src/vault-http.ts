@@ -159,6 +159,7 @@ export function approveHint(grant: GrantRecord): string {
 }
 
 export function needItemResult(itemName: string | undefined, host: string | undefined): LocalHttpResult {
+  if (host) assertAllowedHostname(host, [host]);
   const suggested = itemName ? normalizeSecretName(itemName) : (host && suggestedNameFromHost(host)) || "API_KEY";
   const where = host ? ` --host ${host}` : "";
   return {

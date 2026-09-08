@@ -28,7 +28,7 @@ Run `npx vault` from the cloned repository (or `npm run vault -- <command>`) unt
 | `vault audit` | Store, grant, revoke, and inject events. No values |
 | `vault run --with NAME --agent A --tool T -- CMD` | Inject the value into the child process environment and run the command. Nothing is printed |
 | `vault serve [--host 127.0.0.1] [--port 8788]` | Loopback HTTP, the local console, and `POST /mcp`. Prints two loopback bearers: the operator bearer for `/api` and the console, the model bearer for `POST /mcp`. Neither opens the other surface. `--port` must be a whole number from 1 to 65535 |
-| `vault mcp` | MCP over stdio against the local vault (the same five tools as hosted, `http_request` included) |
+| `vault mcp` | MCP over stdio against the local vault (the same six tools as hosted, `setup` and `http_request` included) |
 | `vault mcp --remote [URL]` | MCP over stdio forwarded to a running `vault serve` (default `http://127.0.0.1:8788`) with the model bearer, derived from the master key so nothing is pasted into a client config. Carries the `Mcp-Session-Id` that `initialize` returned, so the stdio client is one session on the server |
 | `vault mcp --user-jwt [TOKEN]` | MCP over stdio proxied to the hosted server. The token comes from `--user-jwt TOKEN`, `--user-jwt=TOKEN`, or `VAULT_USER_JWT` when the flag is bare; the flag alone selects hosted mode, so a missing token is an error, never the local vault |
 | `vault login` | Print the hosted `/sign-in`, `/console`, and `/device` URLs |

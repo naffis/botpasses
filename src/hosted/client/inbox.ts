@@ -124,7 +124,7 @@ function connectNeedCard(n: InboxNeed): SafeHtml {
     <div class="inbox-copy">
       <h2 class="inbox-title">${client} needs a ${providerName} account for ${item}</h2>
       <p>${detail}</p>
-      <p class="inbox-meta">${n.created_at ? html`Asked ${timeHtml(n.created_at)} · ` : ""}${n.expires_at ? html`Request expires ${timeHtml(n.expires_at)} · ` : ""}The refresh token is stored as ${n.suggested_name}; the agent never sees it.</p>
+      <p class="inbox-meta">${n.created_at ? html`Asked ${timeHtml(n.created_at)} · ` : ""}${n.expires_at ? html`Request expires ${timeHtml(n.expires_at)} · ` : ""}The refresh token is stored as ${n.suggested_name}. The agent does not get it.</p>
     </div>
     <div class="inbox-actions">
       ${link ? html`<a class="btn btn-primary" href="${link}" data-testid="inbox-connect">Connect ${providerName}</a>` : html`<span class="hint">The credential this request was for is gone.</span>`}

@@ -334,6 +334,124 @@ test("unauthenticated collect HTML has no client or task (AC-11)", async () => {
 test("collect JS loads need without requiring a bootstrap token (D-06)", () => {
   assert.match(COLLECT_JS, /loadNeed\(\);/);
   assert.doesNotMatch(COLLECT_JS, /if \(bootstrapToken\(\)\) loadNeed/);
+  assert.match(COLLECT_JS, /Always allow this agent to use this credential/);
+  assert.match(COLLECT_JS, /always_allow/);
+  assert.match(COLLECT_JS, /fulfill-recipe-hint/);
+});
+
+test("Collect opened on a Spotify need prefills recipe fields and leaves value empty (AC-02, AC-12)", async () => {
+  const ctx = await setup();
+  try {
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: ctx.model.id,
+      environment: "staging",
+      host: "api.spotify.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    const page = await fetch(`${ctx.base}/collect/${miss.need_id}`, { headers: ctx.op });
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.doesNotMatch(html, new RegExp(CANARY));
+    const meta = await fetch(`${ctx.base}/api/need-items/${miss.need_id}`, { headers: ctx.op });
+    assert.equal(meta.status, 200);
+    const body = (await meta.json()) as {
+      suggested_name?: string;
+      host?: string;
+      recipe?: {
+        suggested_name?: string;
+        kind?: string;
+        inject?: string;
+        allowed_hosts?: string[];
+        username_required?: boolean;
+      };
+    };
+    assert.equal(body.suggested_name, "SPOTIFY_SECRET");
+    assert.equal(body.recipe?.suggested_name, "SPOTIFY_SECRET");
+    assert.equal(body.recipe?.kind, "client_secret");
+    assert.equal(body.recipe?.inject, "client_credentials");
+    assert.ok(body.recipe?.allowed_hosts?.includes("accounts.spotify.com"));
+    assert.ok(body.recipe?.allowed_hosts?.includes("api.spotify.com"));
+    assert.equal(body.recipe?.username_required, true);
+    assert.match(COLLECT_JS, /recipe\?\.suggested_name/);
+    assert.match(COLLECT_JS, /recipe\?\.allowed_hosts/);
+    assert.match(COLLECT_JS, /recipe\?\.kind === "client_secret"/);
+    assert.match(COLLECT_JS, /id="fulfill-name"/);
+    assert.match(COLLECT_JS, /id="fulfill-hosts"/);
+    assert.match(COLLECT_JS, /id="fulfill-kind"/);
+    assert.match(COLLECT_JS, /id="fulfill-username"/);
+    assert.match(COLLECT_JS, /Client ID/);
+    assert.match(COLLECT_JS, /id="fulfill-value"[^>]*type="password"[^>]*required/);
+    assert.doesNotMatch(COLLECT_JS, /id="fulfill-value"[^>]*value=/);
+    assert.match(COLLECT_JS, /<input type="checkbox" id="fulfill-always-allow" name="always_allow" \/>/);
+    assert.doesNotMatch(COLLECT_JS, /fulfill-always-allow[^>]*checked/);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("GET need-items returns recipe for Spotify (AC-12)", async () => {
+  const ctx = await setup();
+  try {
+    const miss = await ctx.kernel.findItems({
+      orgId: ctx.orgId,
+      clientId: ctx.model.id,
+      environment: "staging",
+      host: "api.spotify.com",
+    });
+    assert.equal(miss.status, "need_item");
+    if (miss.status !== "need_item") return;
+    const meta = await fetch(`${ctx.base}/api/need-items/${miss.need_id}`, { headers: ctx.op });
+    assert.equal(meta.status, 200);
+    const body = (await meta.json()) as {
+      recipe?: { kind?: string; allowed_hosts?: string[]; username_required?: boolean };
+    };
+    assert.equal(body.recipe?.kind, "client_secret");
+    assert.ok(body.recipe?.allowed_hosts?.includes("accounts.spotify.com"));
+    assert.ok(body.recipe?.allowed_hosts?.includes("api.spotify.com"));
+    assert.equal(body.recipe?.username_required, true);
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("setup connect need Collect 302s to inbox (AC-04)", async () => {
+  const ctx = await setup();
+  try {
+    await ctx.kernel.createItem({
+      orgId: ctx.orgId,
+      actor: "user_owner",
+      environment: "staging",
+      kind: "client_secret",
+      name: "SPOTIFY_SECRET",
+      value: CANARY,
+      allowedHosts: ["api.spotify.com", "accounts.spotify.com"],
+      inject: "client_credentials",
+      username: "spotify_client",
+    });
+    const rpc = await handleHostedMcpRpc(
+      { kernel: ctx.kernel, principal: ctx.principal },
+      { jsonrpc: "2.0", id: 50, method: "tools/call", params: { name: "setup", arguments: { provider: "spotify" } } },
+    );
+    const parsed = parseTool(rpc);
+    assert.equal(parsed.body.status, "user_connect_required");
+    assert.match(String(parsed.body.connect_url), /\/console#credentials\/item\//);
+    assert.doesNotMatch(String(parsed.body.connect_url), /hmac/i);
+    const needId = String(parsed.body.need_id);
+    const page = await fetch(`${ctx.base}/collect/${needId}`, { headers: ctx.op, redirect: "manual" });
+    assert.equal(page.status, 302);
+    assert.equal(page.headers.get("location"), "/console#inbox");
+    assert.ok(!JSON.stringify(parsed.body).includes(CANARY));
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
 });
 
 test("fulfill then http.request attaches bearer and redacts canary (AC-07)", async () => {
@@ -537,9 +655,15 @@ test("http.request with host only on a miss returns need_item and next, not isEr
     const parsed = parseTool(rpc);
     assert.equal(parsed.isError, undefined);
     assert.equal(parsed.body.status, "need_item");
+    assert.equal(parsed.body.suggested_name, "SPOTIFY_SECRET");
+    assert.notEqual(parsed.body.suggested_name, "API_SPOTIFY_COM");
+    const recipe = parsed.body.recipe as { kind?: string; allowed_hosts?: string[] } | undefined;
+    assert.equal(recipe?.kind, "client_secret");
+    assert.ok(recipe?.allowed_hosts?.includes("accounts.spotify.com"));
     assert.match(String(parsed.body.collect_url), /\/collect\//);
     const next = parsed.body.next as { for_model?: string; arguments?: Record<string, string> } | undefined;
     assert.match(next?.for_model ?? "", /collect_url/);
+    assert.match(next?.for_model ?? "", /Client ID and Client Secret/);
     assert.equal(next?.arguments?.host, "api.spotify.com");
     assert.equal(next?.arguments?.method, "GET");
     assert.equal(next?.arguments?.path, "/v1/me");

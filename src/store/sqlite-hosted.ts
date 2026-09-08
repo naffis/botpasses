@@ -894,6 +894,31 @@ export class SqliteHostedStore implements VaultStore {
         .prepare(`INSERT INTO items (${ITEM_INSERT_COLUMNS}) VALUES (${placeholders(15, "sqlite")})`)
         .run(...itemValues(input.item));
       this.#db.prepare(GRANT_INSERT_SQL).run(...grantValues(input.grant));
+      if (input.policy) {
+        this.#db
+          .prepare(
+            `INSERT INTO policies (
+              id, org_id, client_id, item_id, folder_id, environment_id, kind, created_at,
+              methods, path_prefixes, hosts, max_calls, calls_used, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.policy.id,
+            input.policy.orgId,
+            input.policy.clientId,
+            input.policy.itemId,
+            input.policy.folderId,
+            input.policy.environmentId,
+            input.policy.kind,
+            input.policy.createdAt,
+            scopeListJson(input.policy.methods),
+            scopeListJson(input.policy.pathPrefixes),
+            scopeListJson(input.policy.hosts),
+            input.policy.maxCalls,
+            input.policy.callsUsed,
+            input.policy.expiresAt,
+          );
+      }
       const claimed = this.#db
         .prepare(
           `UPDATE need_items SET status = 'fulfilled', item_id = ?, grant_id = ?, fulfilled_at = ?

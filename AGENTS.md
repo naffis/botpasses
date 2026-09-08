@@ -27,7 +27,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 ## Conventions
 
 - Secrets are injected into **tool/runtime env only**. Never into model context, MCP tool results, operator console JSON, audit logs, or chat. There is no `get_secret`.
-- MCP may list names, find by exact name or API host, request a grant, report grant status. A miss returns a path-only Botpasses `collect_url` (no HMAC). The operator types the secret on that origin. Values stay in the vault process until `vault run` or `http.request`. Tool and HTTP contracts: `docs/reference/mcp.md`, `docs/reference/http-api.md`.
+- MCP may list names, find by exact name or API host, run `setup` for a provider, request a grant, report grant status. A miss returns a path-only Botpasses `collect_url` (no HMAC). The operator types the secret on that origin. Values stay in the vault process until `vault run` or `http_request`. Tool and HTTP contracts: `docs/reference/mcp.md`, `docs/reference/http-api.md`.
 - Tests must fail if a canary secret appears in a mocked LLM/agent conversation after store, grant, or use.
 - `master.key`, `.botpasses/`, `.vault/`, and `.env` stay out of git.
 

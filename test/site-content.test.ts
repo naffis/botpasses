@@ -33,6 +33,7 @@ const REQUIRED_PAGES = [
   "docs/start.html",
   "docs/install.html",
   "docs/how-to/store-a-secret.html",
+  "docs/how-to/guided-setup.html",
   "docs/how-to/grant-access.html",
   "docs/how-to/revoke-access.html",
   "docs/how-to/use-an-oauth-client-secret.html",
@@ -61,7 +62,7 @@ test("site dist has every documented URL", () => {
 
 test("homepage sells the product and links the right places", () => {
   const home = page("index.html");
-  assert.match(home, /<h1>Named credentials for agents\. The model never sees the value\.<\/h1>/);
+  assert.match(home, /<h1>Your agent can call Stripe\. It never gets the key\.<\/h1>/);
   assert.match(home, /Create account/);
   assert.doesNotMatch(home, /Operator token/);
   assert.match(home, /How it works/);
@@ -143,8 +144,16 @@ test("docs pages keep their tested content", () => {
   assert.match(oauthHowTo, /http:\/\/127\.0\.0\.1:8888\/callback/);
   const revoke = page("docs/how-to/revoke-access.html");
   assert.match(revoke, /Access/);
+  const start = text(page("docs/start.html"));
+  assert.match(start, /2\. Connect an agent/);
+  assert.match(start, /3\. Set up a credential/);
+  assert.match(start, /Set up Spotify so you can call the API for me/);
+  const guided = text(page("docs/how-to/guided-setup.html"));
+  assert.match(guided, /setup/);
+  assert.match(guided, /Always allow this agent to use this credential/);
   const mcp = page("docs/reference/mcp-tools.html");
   assert.match(mcp, /http_request/);
+  assert.match(mcp, /setup/);
   assert.match(mcp, /http\.request/, "the alias is named once");
   assert.match(mcp, /find_items/);
   assert.match(mcp, /get_secret/);

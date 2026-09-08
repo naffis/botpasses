@@ -25,6 +25,13 @@ test("connectorTargetFromArgs keeps path and host when already split", () => {
   assert.equal(t.path, "/v1/me");
 });
 
+test("connectorTargetFromArgs rejects a host with shell metacharacters", () => {
+  assert.throws(
+    () => connectorTargetFromArgs({ host: "api.example.com;curl", method: "GET", path: "/v1/me" }),
+    /exact hostname/,
+  );
+});
+
 test("connectorTargetFromArgs rejects missing host and item_name", () => {
   assert.throws(
     () => connectorTargetFromArgs({ method: "GET", path: "/v1/me" }),
@@ -152,4 +159,47 @@ test("pending grant next.arguments merges retry with item_name", () => {
   assert.equal(next?.arguments?.item_name, "SPOTIFY_TOKEN");
   assert.equal(next?.arguments?.method, "GET");
   assert.equal(next?.arguments?.path, "/v1/me");
+});
+
+test("setup need_item with steps retries setup and mentions the recipe hint", () => {
+  const next = nextForPayload({
+    status: "need_item",
+    collect_url: "https://staging.botpasses.com/collect/nid_x",
+    steps: [{ id: "store", label: "Store", state: "current" }],
+    recipe: { hint: "Store the Client ID and Client Secret, not a user access token." },
+    retry: { provider: "spotify" },
+  });
+  assert.equal(next?.tool, "setup");
+  assert.match(next?.for_model ?? "", /Client ID and Client Secret/);
+  assert.match(next?.for_model ?? "", /call setup again/);
+  assert.equal(next?.arguments?.provider, "spotify");
+});
+
+test("setup ambiguous steers http_request and ignores leftover provider retry", () => {
+  const next = nextForPayload({
+    status: "ambiguous",
+    steps: [{ id: "store", label: "Store", state: "done" }],
+    items: [{ name: "STRIPE_SECRET_KEY" }, { name: "STRIPE_OTHER" }],
+    retry: { provider: "stripe" },
+  });
+  assert.equal(next?.tool, "http_request");
+  assert.equal(next?.arguments?.provider, undefined);
+  assert.match(next?.for_model ?? "", /item_name/);
+});
+
+test("ready and ready_prompt steer http_request without a new collect_url", () => {
+  const ready = nextForPayload({
+    status: "ready",
+    steps: [{ id: "ready", label: "Ready", state: "done" }],
+    retry: { method: "GET", path: "/v1/balance", host: "api.stripe.com", item_name: "STRIPE_SECRET_KEY" },
+  });
+  assert.equal(ready?.tool, "http_request");
+  assert.equal(ready?.arguments?.path, "/v1/balance");
+  const prompt = nextForPayload({
+    status: "ready_prompt",
+    steps: [{ id: "allow", label: "Allow", state: "current" }],
+    retry: { method: "GET", path: "/user", host: "api.github.com", item_name: "GITHUB_TOKEN" },
+  });
+  assert.match(prompt?.for_model ?? "", /Always-allow/);
+  assert.doesNotMatch(prompt?.for_model ?? "", /collect_url/);
 });

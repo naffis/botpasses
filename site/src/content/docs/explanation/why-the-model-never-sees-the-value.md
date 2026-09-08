@@ -1,7 +1,7 @@
 ---
-title: Why the model never sees the value
-label: Why the model never sees the value
-description: What goes wrong when a secret enters a model's context window, how Botpasses keeps values out of it, and what "grant-vault, not zero-knowledge" means.
+title: Why the key stays out of the chat
+label: Why the key stays out of the chat
+description: What goes wrong when a secret enters a model's context window, how Botpasses keeps keys out of it, and what "grant-vault, not zero-knowledge" means.
 section: explanation
 order: 1
 ---
