@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `request_grant` no longer returns a standing grant as `active` when the stated host, method, or path is outside `grant_scope`. A token-scoped `item_standing` (for example `POST accounts.spotify.com /api/token`) does not satisfy a playlist call; the tool creates or reuses a pending grant for the requested scope so the operator can approve it. `http_request` still refuses the out-of-scope call with `scope_denied`. Grant lookup before consume picks an active grant that covers the call when more than one is open.
 - Docs: the OAuth client-secret how-to lists `https://staging.botpasses.com/integrations/spotify/callback` next to the production and loopback Spotify redirect URIs.
 - Added: Inbox **Always approve for this agent** (opt-in `item_standing` for one credential and one agent, on hosts already on the item). Default Approve stays one call. A matching later `http_request` proceeds without a new Inbox card and writes audit `auto_approved` (item name, client, host; never values). Clear the standing approval from the agent row, Approvals, or the credential drawer. Approve with limits can check the same box.
 - Fixed: console. Closing the credential drawer or the connect dialog returns to the list only while the route still names that item, so a close event delivered after a newer route (another item, a deep link) no longer sends the page back to the list.
