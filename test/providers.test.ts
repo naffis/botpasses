@@ -196,6 +196,7 @@ test("user connect helpers are provider-generic", () => {
   assert.equal(chooseRedirect(google, "https://botpasses.com"), "https://botpasses.com/integrations/google/callback");
   assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8888/callback");
   assert.equal(chooseRedirect(spotify, "https://botpasses.com"), "https://botpasses.com/integrations/spotify/callback");
+  assert.equal(chooseRedirect(spotify, "https://staging.botpasses.com"), "https://staging.botpasses.com/integrations/spotify/callback");
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "https://evil.example/cb"), /redirect_uri/);
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "http://127.0.0.1:8888/callback"), /redirect_uri/, "the dev loopback callback is not a landing place for a hosted deployment");
   assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788", "http://127.0.0.1:8888/callback"), "http://127.0.0.1:8888/callback");
