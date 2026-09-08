@@ -283,6 +283,8 @@ export type HostedAuditRecord = {
   itemName: string | null;
   clientId: string | null;
   at: string;
+  /** Origin host for `auto_approved`. Null for other actions and pre-014 rows. */
+  host?: string | null;
 };
 
 export type NeedItemStatus = "pending" | "fulfilled" | "cancelled" | "denied";

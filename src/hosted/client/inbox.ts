@@ -40,6 +40,18 @@ export const SCOPE_DURATIONS: ReadonlyArray<{ value: string; label: string }> = 
 ];
 const SESSION_MAX_SECONDS = 86_400;
 
+export function isStandingPolicy(policy: string | undefined): boolean {
+  return policy === "item_standing" || policy === "folder_standing";
+}
+
+export function standingPolicyLabel(policy: string | undefined): string {
+  if (policy === "item_standing") return "Always approved";
+  if (policy === "folder_standing") return "Folder standing";
+  if (policy === "session") return "Session";
+  if (!policy || policy === "prompt") return "";
+  return policy.replace(/_/g, " ");
+}
+
 /** `grant_scope` as the API sends it. Null means unrestricted. */
 export type ScopePublic = {
   methods: string[] | null;
@@ -150,7 +162,8 @@ function limitsForm(g: ScopedInboxGrant, name: string): SafeHtml {
       <label>Path prefix <input name="path_prefix" value="${path}" placeholder="/v1 (empty: any path)" autocomplete="off"></label>
       <label>Max calls <input name="max_calls" type="number" min="1" step="1" placeholder="unlimited" inputmode="numeric"></label>
       <label>Duration <select name="duration">${SCOPE_DURATIONS.map((d) => html`<option value="${d.value}">${d.label}</option>`)}</select></label>
-      <p class="hint">${rs?.host ? `Limited to ${rs.host}.` : g.allowed_hosts?.length ? `Any of ${g.allowed_hosts.join(", ")}.` : ""}</p>
+      <label class="inline-select"><input type="checkbox" name="always_approve" data-testid="inbox-always-approve-limits"> Always approve for this agent</label>
+      <p class="hint">${rs?.host ? `Limited to ${rs.host}.` : g.allowed_hosts?.length ? `Any of ${g.allowed_hosts.join(", ")}.` : ""} Always approve covers every host already on the credential.</p>
       <button type="submit" class="btn-primary btn-small" data-testid="inbox-approve-limits">Approve with these limits</button>
     </form>
   </details>`;
@@ -187,8 +200,10 @@ export function grantCard(g: ScopedInboxGrant, now: number): SafeHtml {
     </div>
     <div class="inbox-actions">
       <button type="button" class="btn-primary" data-approve="${g.id}" data-testid="inbox-approve">Approve</button>
+      <button type="button" class="btn-ghost" data-approve-standing="${g.id}" data-method="${g.requested_scope?.method ?? ""}" data-path="${g.requested_scope?.path ?? ""}" data-testid="inbox-always-approve">Always approve for this agent</button>
       <button type="button" class="btn-ghost" data-deny="${g.id}" data-deny-label="${client}|${name}" data-testid="inbox-deny">Deny</button>
     </div>
+    <p class="hint">Always approve skips the inbox for this agent and this credential on its allowed hosts. You can clear it anytime from Agents or the credential.</p>
   </article>`;
 }
 
@@ -213,6 +228,7 @@ export function limitsBody(input: {
   maxCalls: string;
   duration: string;
   host: string;
+  alwaysApprove?: boolean;
 }): LimitsBody | { error: string } {
   if (input.methods.length === 0) return { error: "Pick at least one method." };
   const scope: Record<string, unknown> = { methods: input.methods };
@@ -229,14 +245,32 @@ export function limitsBody(input: {
     scope.max_calls = n;
   }
   let policy = "prompt";
-  if (input.duration === "standing") policy = "item_standing";
+  if (input.alwaysApprove || input.duration === "standing") policy = "item_standing";
   else if (input.duration !== "once") {
     const seconds = Number(input.duration);
     if (!Number.isInteger(seconds) || seconds < 60) return { error: "Pick a duration." };
     policy = seconds <= SESSION_MAX_SECONDS ? "session" : "item_standing";
     scope.ttl_seconds = seconds;
   }
+  if (input.alwaysApprove) {
+    delete scope.hosts;
+    delete scope.ttl_seconds;
+  }
   return { policy, scope };
+}
+
+/**
+ * Always-approve body. Method and path follow one-click rules when the agent stated them.
+ * Hosts are omitted so every host already on the item is covered (the connector still
+ * enforces the allowlist).
+ */
+export function alwaysApproveBody(method?: string, path?: string): LimitsBody {
+  const scope: Record<string, unknown> = {};
+  const m = method?.trim().toUpperCase();
+  if (m) scope.methods = [m];
+  const prefix = path?.trim().split("?")[0] ?? "";
+  if (prefix) scope.path_prefixes = [prefix];
+  return Object.keys(scope).length ? { policy: "item_standing", scope } : { policy: "item_standing", scope: {} };
 }
 
 function readLimits(form: HTMLFormElement): LimitsBody | { error: string } {
@@ -245,12 +279,14 @@ function readLimits(form: HTMLFormElement): LimitsBody | { error: string } {
     const el = form.elements.namedItem(name);
     return el instanceof HTMLInputElement || el instanceof HTMLSelectElement ? el.value : "";
   };
+  const always = form.elements.namedItem("always_approve");
   return limitsBody({
     methods,
     pathPrefix: value("path_prefix"),
     maxCalls: value("max_calls"),
     duration: value("duration"),
     host: form.dataset.host ?? "",
+    alwaysApprove: always instanceof HTMLInputElement && always.checked,
   });
 }
 
@@ -258,7 +294,15 @@ async function postApprove(id: string, body: LimitsBody, control: HTMLButtonElem
   await busy(control, async () => {
     try {
       const r = await api(`/api/grants/${encodeURIComponent(id)}/approve`, { method: "POST", body: JSON.stringify(body) });
-      flash(r.ok ? "Approved. The agent can retry now." : errorMessage(r, "Approve failed"), r.ok);
+      const standing = body.policy === "item_standing" || body.policy === "folder_standing";
+      flash(
+        r.ok
+          ? standing
+            ? "Always approved for this agent. You can clear this from Agents or the credential."
+            : "Approved. The agent can retry now."
+          : errorMessage(r, "Approve failed"),
+        r.ok,
+      );
     } catch (err) {
       flash(loadErrorText(err, "Approve failed"), false);
     }
@@ -270,6 +314,10 @@ async function postApprove(id: string, body: LimitsBody, control: HTMLButtonElem
 /** One click: no `scope`, so the server narrows to the requested call when the agent stated one. */
 async function approve(id: string, button: HTMLButtonElement): Promise<void> {
   await postApprove(id, { policy: "prompt" }, button);
+}
+
+async function alwaysApprove(id: string, button: HTMLButtonElement): Promise<void> {
+  await postApprove(id, alwaysApproveBody(button.dataset.method, button.dataset.path), button);
 }
 
 async function approveWithLimits(id: string, form: HTMLFormElement): Promise<void> {
@@ -365,7 +413,8 @@ export function bindInbox(on: InboxListeners): void {
   el?.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target.closest<HTMLButtonElement>("button") : null;
     if (!t) return;
-    if (t.dataset.approve) void approve(t.dataset.approve, t);
+    if (t.dataset.approveStanding) void alwaysApprove(t.dataset.approveStanding, t);
+    else if (t.dataset.approve) void approve(t.dataset.approve, t);
     else if (t.dataset.deny) {
       const [client, name] = (t.dataset.denyLabel ?? "|").split("|");
       void requestDeny(t.dataset.deny, client ?? "the agent", name ?? "this credential", t);

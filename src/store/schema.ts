@@ -477,3 +477,16 @@ ALTER TABLE need_items ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'secr
 ALTER TABLE need_items ADD COLUMN IF NOT EXISTS provider TEXT;
 ALTER TABLE need_items ADD COLUMN IF NOT EXISTS source_item_id TEXT;
 `;
+
+/**
+ * Migration 014. `audit.host` is the origin host a standing approval covered (http_request
+ * auto-approve). Null for every other action and for rows written before this column.
+ * Expand-only; mirrored by migrations/014_audit_host.sql.
+ */
+export const HOSTED_SCHEMA_AUDIT_HOST_ALTER_SQLITE = `
+ALTER TABLE audit ADD COLUMN host TEXT;
+`;
+
+export const HOSTED_SCHEMA_AUDIT_HOST_ALTER_PG = `
+ALTER TABLE audit ADD COLUMN IF NOT EXISTS host TEXT;
+`;

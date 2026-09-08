@@ -884,6 +884,12 @@ function describeActivity(row               , names               )         {
       return cred ? \`\${who} requested \${cred}\` : \`\${who} requested a credential\`;
     case "grant":
       return cred ? \`Approved \${agent || "an agent"} for \${cred}\` : \`Approved \${agent || "an agent"}\`;
+    case "auto_approved": {
+      const onHost = row.host ? \` on \${row.host}\` : "";
+      return cred
+        ? \`Standing approval let \${who} use \${cred}\${onHost}\`
+        : \`Standing approval let \${who} use a credential\${onHost}\`;
+    }
     case "revoke":
       return cred ? \`Revoked \${agent || "an agent"} for \${cred}\` : \`Revoked an approval\${agent ? \` for \${agent}\` : ""}\`;
     case "inject":
@@ -1037,6 +1043,18 @@ const SCOPE_DURATIONS                                                  = [
 ];
 const SESSION_MAX_SECONDS = 86_400;
 
+function isStandingPolicy(policy                    )          {
+  return policy === "item_standing" || policy === "folder_standing";
+}
+
+function standingPolicyLabel(policy                    )         {
+  if (policy === "item_standing") return "Always approved";
+  if (policy === "folder_standing") return "Folder standing";
+  if (policy === "session") return "Session";
+  if (!policy || policy === "prompt") return "";
+  return policy.replace(/_/g, " ");
+}
+
 /** \`grant_scope\` as the API sends it. Null means unrestricted. */
 
 /** \`requested_scope\`: what the agent said it would call. */
@@ -1129,7 +1147,8 @@ function limitsForm(g                  , name        )           {
       <label>Path prefix <input name="path_prefix" value="\${path}" placeholder="/v1 (empty: any path)" autocomplete="off"></label>
       <label>Max calls <input name="max_calls" type="number" min="1" step="1" placeholder="unlimited" inputmode="numeric"></label>
       <label>Duration <select name="duration">\${SCOPE_DURATIONS.map((d) => html\`<option value="\${d.value}">\${d.label}</option>\`)}</select></label>
-      <p class="hint">\${rs?.host ? \`Limited to \${rs.host}.\` : g.allowed_hosts?.length ? \`Any of \${g.allowed_hosts.join(", ")}.\` : ""}</p>
+      <label class="inline-select"><input type="checkbox" name="always_approve" data-testid="inbox-always-approve-limits"> Always approve for this agent</label>
+      <p class="hint">\${rs?.host ? \`Limited to \${rs.host}.\` : g.allowed_hosts?.length ? \`Any of \${g.allowed_hosts.join(", ")}.\` : ""} Always approve covers every host already on the credential.</p>
       <button type="submit" class="btn-primary btn-small" data-testid="inbox-approve-limits">Approve with these limits</button>
     </form>
   </details>\`;
@@ -1166,8 +1185,10 @@ function grantCard(g                  , now        )           {
     </div>
     <div class="inbox-actions">
       <button type="button" class="btn-primary" data-approve="\${g.id}" data-testid="inbox-approve">Approve</button>
+      <button type="button" class="btn-ghost" data-approve-standing="\${g.id}" data-method="\${g.requested_scope?.method ?? ""}" data-path="\${g.requested_scope?.path ?? ""}" data-testid="inbox-always-approve">Always approve for this agent</button>
       <button type="button" class="btn-ghost" data-deny="\${g.id}" data-deny-label="\${client}|\${name}" data-testid="inbox-deny">Deny</button>
     </div>
+    <p class="hint">Always approve skips the inbox for this agent and this credential on its allowed hosts. You can clear it anytime from Agents or the credential.</p>
   </article>\`;
 }
 
@@ -1203,14 +1224,32 @@ function limitsBody(input
     scope.max_calls = n;
   }
   let policy = "prompt";
-  if (input.duration === "standing") policy = "item_standing";
+  if (input.alwaysApprove || input.duration === "standing") policy = "item_standing";
   else if (input.duration !== "once") {
     const seconds = Number(input.duration);
     if (!Number.isInteger(seconds) || seconds < 60) return { error: "Pick a duration." };
     policy = seconds <= SESSION_MAX_SECONDS ? "session" : "item_standing";
     scope.ttl_seconds = seconds;
   }
+  if (input.alwaysApprove) {
+    delete scope.hosts;
+    delete scope.ttl_seconds;
+  }
   return { policy, scope };
+}
+
+/**
+ * Always-approve body. Method and path follow one-click rules when the agent stated them.
+ * Hosts are omitted so every host already on the item is covered (the connector still
+ * enforces the allowlist).
+ */
+function alwaysApproveBody(method         , path         )             {
+  const scope                          = {};
+  const m = method?.trim().toUpperCase();
+  if (m) scope.methods = [m];
+  const prefix = path?.trim().split("?")[0] ?? "";
+  if (prefix) scope.path_prefixes = [prefix];
+  return Object.keys(scope).length ? { policy: "item_standing", scope } : { policy: "item_standing", scope: {} };
 }
 
 function readLimits(form                 )                                 {
@@ -1219,12 +1258,14 @@ function readLimits(form                 )                                 {
     const el = form.elements.namedItem(name);
     return el instanceof HTMLInputElement || el instanceof HTMLSelectElement ? el.value : "";
   };
+  const always = form.elements.namedItem("always_approve");
   return limitsBody({
     methods,
     pathPrefix: value("path_prefix"),
     maxCalls: value("max_calls"),
     duration: value("duration"),
     host: form.dataset.host ?? "",
+    alwaysApprove: always instanceof HTMLInputElement && always.checked,
   });
 }
 
@@ -1232,7 +1273,15 @@ async function postApprove(id        , body            , control                
   await busy(control, async () => {
     try {
       const r = await api(\`/api/grants/\${encodeURIComponent(id)}/approve\`, { method: "POST", body: JSON.stringify(body) });
-      flash(r.ok ? "Approved. The agent can retry now." : errorMessage(r, "Approve failed"), r.ok);
+      const standing = body.policy === "item_standing" || body.policy === "folder_standing";
+      flash(
+        r.ok
+          ? standing
+            ? "Always approved for this agent. You can clear this from Agents or the credential."
+            : "Approved. The agent can retry now."
+          : errorMessage(r, "Approve failed"),
+        r.ok,
+      );
     } catch (err) {
       flash(loadErrorText(err, "Approve failed"), false);
     }
@@ -1244,6 +1293,10 @@ async function postApprove(id        , body            , control                
 /** One click: no \`scope\`, so the server narrows to the requested call when the agent stated one. */
 async function approve(id        , button                   )                {
   await postApprove(id, { policy: "prompt" }, button);
+}
+
+async function alwaysApprove(id        , button                   )                {
+  await postApprove(id, alwaysApproveBody(button.dataset.method, button.dataset.path), button);
 }
 
 async function approveWithLimits(id        , form                 )                {
@@ -1338,7 +1391,8 @@ function bindInbox(on                )       {
   el?.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target.closest                   ("button") : null;
     if (!t) return;
-    if (t.dataset.approve) void approve(t.dataset.approve, t);
+    if (t.dataset.approveStanding) void alwaysApprove(t.dataset.approveStanding, t);
+    else if (t.dataset.approve) void approve(t.dataset.approve, t);
     else if (t.dataset.deny) {
       const [client, name] = (t.dataset.denyLabel ?? "|").split("|");
       void requestDeny(t.dataset.deny, client ?? "the agent", name ?? "this credential", t);
@@ -1566,9 +1620,10 @@ async function openDrawer(id        )                   {
     render(
       approvals,
       grants.length
-        ? html\`\${grants.map(
-            (g) => html\`<div class="access-row"><div class="access-row-main"><p class="access-row-title">\${g.client_name}</p><p class="access-meta">\${g.status} · last used \${g.last_access_at ? timeHtml(g.last_access_at) : "never"}</p></div><div class="access-row-actions"><button type="button" class="btn-danger btn-small" data-revoke-grant="\${g.id}" data-revoke-label="\${g.client_name}|\${item.name}">Revoke</button></div></div>\`,
-          )}\`
+        ? html\`\${grants.map((g) => {
+            const standing = isStandingPolicy(g.policy);
+            return html\`<div class="access-row"><div class="access-row-main"><p class="access-row-title">\${g.client_name}\${standing ? html\` <span class="pill">Always approved</span>\` : ""}</p><p class="access-meta">\${g.status} · last used \${g.last_access_at ? timeHtml(g.last_access_at) : "never"}</p></div><div class="access-row-actions"><button type="button" class="btn-danger btn-small" data-revoke-grant="\${g.id}" data-revoke-label="\${g.client_name}|\${item.name}" data-standing="\${standing ? "1" : ""}" data-testid="\${standing ? "clear-standing" : "item-revoke-grant"}">\${standing ? "Clear standing approval" : "Revoke"}</button></div></div>\`;
+          })}\`
         : html\`<p class="hint">No agent has an approval for this credential.</p>\`,
     );
   } catch (err) {
@@ -1582,7 +1637,10 @@ function closeDrawer()       {
   if (drawer?.open) drawer.close();
 }
 
-function bindCredentials(h                    , onRevokeGrant                                                    )       {
+function bindCredentials(
+  h                    ,
+  onRevokeGrant                                                                        ,
+)       {
   credHandlers = h;
   byId("items-filters")?.addEventListener("input", renderItems);
   byId("items-filters")?.addEventListener("change", renderItems);
@@ -1626,7 +1684,7 @@ function bindCredentials(h                    , onRevokeGrant                   
     const revoke = e.target.closest                   ("[data-revoke-grant]");
     if (revoke?.dataset.revokeGrant) {
       const [client, name] = (revoke.dataset.revokeLabel ?? "|").split("|");
-      onRevokeGrant(revoke.dataset.revokeGrant, client ?? "the agent", name ?? "this credential");
+      onRevokeGrant(revoke.dataset.revokeGrant, client ?? "the agent", name ?? "this credential", revoke.dataset.standing === "1");
       return;
     }
     const button = e.target.closest                   ("button[data-act]");
@@ -1684,7 +1742,7 @@ function statusPill(status        )           {
   return html\`<span class="pill \${cls}">\${status}</span>\`;
 }
 
-function agentRow(c              , environments          )           {
+function agentRow(c              , environments          , standing                     )           {
   const canRotate = c.status === "active" && c.kind !== "oauth";
   const kind = c.kind === "oauth" ? "OAuth" : c.kind === "model" ? "token" : c.kind;
   return html\`<div class="access-row" data-testid="agent-row" data-client="\${c.id}">
@@ -1697,6 +1755,11 @@ function agentRow(c              , environments          )           {
         when("Last used", c.last_access_at),
         c.fetched.length ? \`Used \${c.fetched.join(", ")}\` : "",
       ])}</p>
+      \${standing.map(
+        (g) => html\`<p class="access-meta" data-testid="standing-approval">Always approved for <span class="mono">\${g.item_name || "credential"}</span>
+          <button type="button" class="btn-ghost btn-small" data-grant-revoke="\${g.id}" data-testid="clear-standing">Clear standing approval</button>
+        </p>\`,
+      )}
       <label class="inline-select">Environment
         <select data-env-client="\${c.id}" aria-label="Environment for \${c.name}"\${c.status !== "active" ? " disabled" : ""}>
           \${environments.map((e) => html\`<option value="\${e}"\${e === c.environment ? " selected" : ""}>\${e}</option>\`)}
@@ -1719,7 +1782,7 @@ function grantRow(g                   )           {
   const scope = describeScope(g.grant_scope);
   return html\`<div class="access-row" data-testid="grant-row">
     <div class="access-row-main">
-      <p class="access-row-title">\${g.client_name} → <span class="mono">\${g.item_name || "credential"}</span> \${statusPill(g.status)}\${g.policy && g.policy !== "prompt" ? html\` <span class="pill">\${g.policy.replace("_", " ")}</span>\` : ""}</p>
+      <p class="access-row-title">\${g.client_name} → <span class="mono">\${g.item_name || "credential"}</span> \${statusPill(g.status)}\${g.policy && standingPolicyLabel(g.policy) ? html\` <span class="pill">\${standingPolicyLabel(g.policy)}</span>\` : ""}</p>
       <p class="access-meta">\${meta([
         scope ? html\`<span data-testid="grant-scope">\${scope}</span>\` : "",
         !scope && g.expires_at ? html\`Expires \${timeHtml(g.expires_at)}\` : "",
@@ -1729,7 +1792,7 @@ function grantRow(g                   )           {
       ])}</p>
     </div>
     <div class="access-row-actions">
-      \${live ? html\`<button type="button" class="btn-danger btn-small" data-grant-revoke="\${g.id}" data-testid="grant-revoke">\${g.status === "pending" ? "Deny" : "Revoke"}</button>\` : ""}
+      \${live ? html\`<button type="button" class="btn-danger btn-small" data-grant-revoke="\${g.id}" data-testid="\${isStandingPolicy(g.policy) ? "clear-standing" : "grant-revoke"}">\${g.status === "pending" ? "Deny" : isStandingPolicy(g.policy) ? "Clear standing approval" : "Revoke"}</button>\` : ""}
       <a class="access-log-link" href="\${agentsHash("activity", { agent: g.client_id, credential: g.item_name })}">Activity</a>
     </div>
   </div>\`;
@@ -1789,7 +1852,13 @@ function renderLists()       {
     render(
       agents,
       state.clients.length
-        ? html\`\${state.clients.map((c) => agentRow(c, environments))}\`
+        ? html\`\${state.clients.map((c) =>
+            agentRow(
+              c,
+              environments,
+              state.grants.filter((g) => g.client_id === c.id && g.status === "active" && isStandingPolicy(g.policy)),
+            ),
+          )}\`
         : html\`<p class="section-empty hint">No agents yet. Issue a token above, or connect from the agent with OAuth.</p>\`,
     );
   }
@@ -2881,11 +2950,13 @@ document.addEventListener("DOMContentLoaded", () => {
       run,
     });
   });
-  const revokeGrant = (id        , client        , name        )       =>
+  const revokeGrant = (id        , client        , name        , standing = false)       =>
     openConfirm({
-      title: \`Revoke \${client}'s approval for \${name}?\`,
-      body: "The agent must ask again before it can use this credential.",
-      button: "Revoke approval",
+      title: standing ? \`Clear standing approval for \${client} on \${name}?\` : \`Revoke \${client}'s approval for \${name}?\`,
+      body: standing
+        ? \`\${client} will need Inbox approval the next time it uses \${name}.\`
+        : "The agent must ask again before it can use this credential.",
+      button: standing ? "Clear standing approval" : "Revoke approval",
       run: () => postAction(\`/api/grants/\${encodeURIComponent(id)}/revoke\`, "Revoke failed"),
     });
   bindCredentials(
@@ -2939,7 +3010,8 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         },
       }),
-    onRevokeGrant: (g) => revokeGrant(g.id, g.client_name, g.item_name || "this credential"),
+    onRevokeGrant: (g) =>
+      revokeGrant(g.id, g.client_name, g.item_name || "this credential", g.policy === "item_standing" || g.policy === "folder_standing"),
     onRevokeSession: (s) =>
       openConfirm({
         title: "Sign out that device?",

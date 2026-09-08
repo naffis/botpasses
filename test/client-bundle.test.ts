@@ -128,6 +128,11 @@ test("activity rows read as sentences for every action the kernel writes", () =>
   assert.equal(row("token_issued", null), "Token issued to cursor");
   assert.equal(row("store", "GITHUB_TOKEN", null), "Stored GITHUB_TOKEN");
   assert.equal(row("grant"), "Approved cursor for STRIPE_SECRET_KEY");
+  assert.equal(row("auto_approved"), "Standing approval let cursor use STRIPE_SECRET_KEY");
+  assert.equal(
+    describeActivity({ action: "auto_approved", actor: "x", itemName: "STRIPE_SECRET_KEY", clientId: "cli_1", host: "api.stripe.com" }, names),
+    "Standing approval let cursor use STRIPE_SECRET_KEY on api.stripe.com",
+  );
   assert.equal(row("revoke"), "Revoked cursor for STRIPE_SECRET_KEY");
   assert.equal(row("inject"), "cursor used STRIPE_SECRET_KEY");
   assert.equal(row("client_revoked", null), "Access revoked for cursor");

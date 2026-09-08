@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /** Agents panel: agents, approvals, sessions, and humanised activity with filters and paging. */
 import { describeActivity, pageOf } from "./activity.ts";
-import { describeScope, type ScopePublic } from "./inbox.ts";
+import { describeScope, isStandingPolicy, standingPolicyLabel, type ScopePublic } from "./inbox.ts";
 import { agentsHash, type AgentsTab, AGENTS_TABS, type Route } from "./routes.ts";
 import type { AccessClient, AccessGrant, AccessSession, AuditRow } from "./types.ts";
 import {
@@ -76,7 +76,7 @@ function statusPill(status: string): SafeHtml {
   return html`<span class="pill ${cls}">${status}</span>`;
 }
 
-function agentRow(c: AccessClient, environments: string[]): SafeHtml {
+function agentRow(c: AccessClient, environments: string[], standing: ScopedAccessGrant[]): SafeHtml {
   const canRotate = c.status === "active" && c.kind !== "oauth";
   const kind = c.kind === "oauth" ? "OAuth" : c.kind === "model" ? "token" : c.kind;
   return html`<div class="access-row" data-testid="agent-row" data-client="${c.id}">
@@ -89,6 +89,11 @@ function agentRow(c: AccessClient, environments: string[]): SafeHtml {
         when("Last used", c.last_access_at),
         c.fetched.length ? `Used ${c.fetched.join(", ")}` : "",
       ])}</p>
+      ${standing.map(
+        (g) => html`<p class="access-meta" data-testid="standing-approval">Always approved for <span class="mono">${g.item_name || "credential"}</span>
+          <button type="button" class="btn-ghost btn-small" data-grant-revoke="${g.id}" data-testid="clear-standing">Clear standing approval</button>
+        </p>`,
+      )}
       <label class="inline-select">Environment
         <select data-env-client="${c.id}" aria-label="Environment for ${c.name}"${c.status !== "active" ? " disabled" : ""}>
           ${environments.map((e) => html`<option value="${e}"${e === c.environment ? " selected" : ""}>${e}</option>`)}
@@ -116,7 +121,7 @@ function grantRow(g: ScopedAccessGrant): SafeHtml {
   const scope = describeScope(g.grant_scope);
   return html`<div class="access-row" data-testid="grant-row">
     <div class="access-row-main">
-      <p class="access-row-title">${g.client_name} → <span class="mono">${g.item_name || "credential"}</span> ${statusPill(g.status)}${g.policy && g.policy !== "prompt" ? html` <span class="pill">${g.policy.replace("_", " ")}</span>` : ""}</p>
+      <p class="access-row-title">${g.client_name} → <span class="mono">${g.item_name || "credential"}</span> ${statusPill(g.status)}${g.policy && standingPolicyLabel(g.policy) ? html` <span class="pill">${standingPolicyLabel(g.policy)}</span>` : ""}</p>
       <p class="access-meta">${meta([
         scope ? html`<span data-testid="grant-scope">${scope}</span>` : "",
         !scope && g.expires_at ? html`Expires ${timeHtml(g.expires_at)}` : "",
@@ -126,7 +131,7 @@ function grantRow(g: ScopedAccessGrant): SafeHtml {
       ])}</p>
     </div>
     <div class="access-row-actions">
-      ${live ? html`<button type="button" class="btn-danger btn-small" data-grant-revoke="${g.id}" data-testid="grant-revoke">${g.status === "pending" ? "Deny" : "Revoke"}</button>` : ""}
+      ${live ? html`<button type="button" class="btn-danger btn-small" data-grant-revoke="${g.id}" data-testid="${isStandingPolicy(g.policy) ? "clear-standing" : "grant-revoke"}">${g.status === "pending" ? "Deny" : isStandingPolicy(g.policy) ? "Clear standing approval" : "Revoke"}</button>` : ""}
       <a class="access-log-link" href="${agentsHash("activity", { agent: g.client_id, credential: g.item_name })}">Activity</a>
     </div>
   </div>`;
@@ -186,7 +191,13 @@ function renderLists(): void {
     render(
       agents,
       state.clients.length
-        ? html`${state.clients.map((c) => agentRow(c, environments))}`
+        ? html`${state.clients.map((c) =>
+            agentRow(
+              c,
+              environments,
+              state.grants.filter((g) => g.client_id === c.id && g.status === "active" && isStandingPolicy(g.policy)),
+            ),
+          )}`
         : html`<p class="section-empty hint">No agents yet. Issue a token above, or connect from the agent with OAuth.</p>`,
     );
   }

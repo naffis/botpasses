@@ -68,6 +68,7 @@ export type AccessGrant = {
   client_id: string;
   client_name: string;
   status: string;
+  policy?: string;
   created_at: string | null;
   first_access_at: string | null;
   last_access_at: string | null;
@@ -97,6 +98,7 @@ export type AuditRow = {
   itemName: string | null;
   clientId: string | null;
   at: string;
+  host?: string | null;
 };
 
 export type AccountInfo = {
