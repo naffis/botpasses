@@ -497,11 +497,25 @@ export class HostedKernel {
 
   /* ---- audit ---- */
 
-  async writeAudit(orgId: string, action: string, actor: string, itemName: string | null, clientId: string | null): Promise<void> {
-    await this.#audit(orgId, action, actor, itemName, clientId);
+  async writeAudit(
+    orgId: string,
+    action: string,
+    actor: string,
+    itemName: string | null,
+    clientId: string | null,
+    host?: string | null,
+  ): Promise<void> {
+    await this.#audit(orgId, action, actor, itemName, clientId, host);
   }
 
-  async #audit(orgId: string, action: string, actor: string, itemName: string | null, clientId: string | null): Promise<void> {
+  async #audit(
+    orgId: string,
+    action: string,
+    actor: string,
+    itemName: string | null,
+    clientId: string | null,
+    host?: string | null,
+  ): Promise<void> {
     await this.store.insertAudit({
       id: `aud_${randomUUID()}`,
       orgId,
@@ -510,6 +524,7 @@ export class HostedKernel {
       itemName,
       clientId,
       at: this.now().toISOString(),
+      host: host ?? null,
     });
   }
 
@@ -593,7 +608,7 @@ export class HostedKernel {
       envFor: (orgId, name) => this.envFor(orgId, name),
       clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
       needItemError: (input) => this.needItemError(input),
-      audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),
+      audit: (orgId, action, actor, itemName, clientId, host) => this.#audit(orgId, action, actor, itemName, clientId, host),
     };
   }
 

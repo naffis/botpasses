@@ -85,7 +85,7 @@ Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 
 | POST | `/api/grants/approve-by-code` | `{ "code" }`, 8 digits. Reuse is 409, expired is 410 |
 | GET, POST | `/approve?token=...` | Email approval link. Operator session required; the token is single use |
 | GET | `/api/inbox` | Pending approvals and requests. Each request has a `kind`: `secret` (typed on the collect page) or `connect` (an agent needs a provider account for a stored client secret; the card's Connect button opens the connect dialog with that agent pre-selected) |
-| GET | `/api/audit` | Actions and names. Optional `client_id` and `item_name` filters. No values |
+| GET | `/api/audit` | Actions, names, and `host` on `auto_approved`. Optional `client_id` and `item_name` filters. No values |
 
 Policies: `prompt` (one successful call, then consumed; a failed call keeps it usable), `session` (8 hours), `item_standing`, `folder_standing`.
 

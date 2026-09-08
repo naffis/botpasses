@@ -8,6 +8,7 @@ export type ActivityInput = {
   actor: string;
   itemName: string | null;
   clientId: string | null;
+  host?: string | null;
 };
 
 export type ActivityNames = {
@@ -31,6 +32,12 @@ export function describeActivity(row: ActivityInput, names: ActivityNames): stri
       return cred ? `${who} requested ${cred}` : `${who} requested a credential`;
     case "grant":
       return cred ? `Approved ${agent || "an agent"} for ${cred}` : `Approved ${agent || "an agent"}`;
+    case "auto_approved": {
+      const onHost = row.host ? ` on ${row.host}` : "";
+      return cred
+        ? `Standing approval let ${who} use ${cred}${onHost}`
+        : `Standing approval let ${who} use a credential${onHost}`;
+    }
     case "revoke":
       return cred ? `Revoked ${agent || "an agent"} for ${cred}` : `Revoked an approval${agent ? ` for ${agent}` : ""}`;
     case "inject":

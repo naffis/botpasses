@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { describeScope, grantCard, limitsBody } from "../src/hosted/client/inbox.ts";
+import { alwaysApproveBody, describeScope, grantCard, limitsBody } from "../src/hosted/client/inbox.ts";
 import { isHttpError, isInjectDenied, isScopeDenied } from "../src/hosted/errors.ts";
 import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
@@ -532,6 +532,14 @@ test("inbox card names the call when the agent stated one, else the credential; 
   assert.match(plain, /cursor wants STRIPE_KEY/);
   assert.match(plain, /value="DELETE" checked/, "no stated method pre-checks every method");
   assert.match(plain, /Any of api\.stripe\.com, files\.stripe\.com\./);
+  assert.match(scoped, /data-testid="inbox-always-approve"/);
+  assert.match(scoped, /Always approve for this agent/);
+  assert.match(plain, /data-testid="inbox-always-approve-limits"/);
+  assert.deepEqual(alwaysApproveBody("GET", "/v1/search?q=x"), {
+    policy: "item_standing",
+    scope: { methods: ["GET"], path_prefixes: ["/v1/search"] },
+  });
+  assert.deepEqual(alwaysApproveBody(), { policy: "item_standing", scope: {} });
   const approved = grantCard(
     { ...base, status: "active", approved_at: "2026-03-01T10:04:00.000Z", requested_scope: { host: "api.stripe.com", method: "GET", path: "/v1/balance" }, grant_scope: { methods: ["GET"], path_prefixes: ["/v1/balance"], hosts: ["api.stripe.com"], max_calls: 10, calls_used: 2, expires_at: "2026-03-01T18:05:00.000Z" } },
     now,
@@ -549,6 +557,10 @@ test("inbox card names the call when the agent stated one, else the credential; 
     scope: { methods: ["GET", "POST"], ttl_seconds: 604_800 },
   });
   assert.deepEqual(limitsBody({ methods: ["GET"], pathPrefix: "", maxCalls: "", duration: "standing", host: "" }), { policy: "item_standing", scope: { methods: ["GET"] } });
+  assert.deepEqual(limitsBody({ methods: ["GET"], pathPrefix: "/v1", maxCalls: "", duration: "3600", host: "api.stripe.com", alwaysApprove: true }), {
+    policy: "item_standing",
+    scope: { methods: ["GET"], path_prefixes: ["/v1"] },
+  });
   assert.deepEqual(limitsBody({ methods: ["GET"], pathPrefix: "", maxCalls: "", duration: "once", host: "" }), { policy: "prompt", scope: { methods: ["GET"] } });
   assert.deepEqual(limitsBody({ methods: [], pathPrefix: "", maxCalls: "", duration: "once", host: "" }), { error: "Pick at least one method." });
   assert.deepEqual(limitsBody({ methods: ["GET"], pathPrefix: "v1", maxCalls: "", duration: "once", host: "" }), { error: "Path prefix must start with /." });

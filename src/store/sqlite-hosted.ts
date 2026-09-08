@@ -28,6 +28,7 @@ import {
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
   HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
+  HOSTED_SCHEMA_AUDIT_HOST_ALTER_SQLITE,
   HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
@@ -99,6 +100,7 @@ const SQLITE_ALTERS = [
   HOSTED_SCHEMA_V10_ALTER_SQLITE,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
   HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE,
+  HOSTED_SCHEMA_AUDIT_HOST_ALTER_SQLITE,
 ];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
@@ -773,9 +775,9 @@ export class SqliteHostedStore implements VaultStore {
   async insertAudit(row: HostedAuditRecord): Promise<void> {
     this.#db
       .prepare(
-        "INSERT INTO audit (id, org_id, action, actor, item_name, client_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO audit (id, org_id, action, actor, item_name, client_id, at, host) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(row.id, row.orgId, row.action, row.actor, row.itemName, row.clientId, row.at);
+      .run(row.id, row.orgId, row.action, row.actor, row.itemName, row.clientId, row.at, row.host ?? null);
   }
 
   async listAudit(orgId: string, limit = 200, filter?: AuditListFilter): Promise<HostedAuditRecord[]> {
@@ -805,6 +807,7 @@ export class SqliteHostedStore implements VaultStore {
       itemName: r.item_name == null ? null : String(r.item_name),
       clientId: r.client_id == null ? null : String(r.client_id),
       at: String(r.at),
+      host: r.host == null ? null : String(r.host),
     }));
   }
 

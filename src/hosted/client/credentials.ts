@@ -21,6 +21,7 @@ import {
   showLoadError,
   timeHtml,
 } from "./shared.ts";
+import { isStandingPolicy } from "./inbox.ts";
 import { itemHash } from "./routes.ts";
 
 export type CredentialHandlers = {
@@ -197,9 +198,10 @@ export async function openDrawer(id: string): Promise<boolean> {
     render(
       approvals,
       grants.length
-        ? html`${grants.map(
-            (g) => html`<div class="access-row"><div class="access-row-main"><p class="access-row-title">${g.client_name}</p><p class="access-meta">${g.status} · last used ${g.last_access_at ? timeHtml(g.last_access_at) : "never"}</p></div><div class="access-row-actions"><button type="button" class="btn-danger btn-small" data-revoke-grant="${g.id}" data-revoke-label="${g.client_name}|${item.name}">Revoke</button></div></div>`,
-          )}`
+        ? html`${grants.map((g) => {
+            const standing = isStandingPolicy(g.policy);
+            return html`<div class="access-row"><div class="access-row-main"><p class="access-row-title">${g.client_name}${standing ? html` <span class="pill">Always approved</span>` : ""}</p><p class="access-meta">${g.status} · last used ${g.last_access_at ? timeHtml(g.last_access_at) : "never"}</p></div><div class="access-row-actions"><button type="button" class="btn-danger btn-small" data-revoke-grant="${g.id}" data-revoke-label="${g.client_name}|${item.name}" data-standing="${standing ? "1" : ""}" data-testid="${standing ? "clear-standing" : "item-revoke-grant"}">${standing ? "Clear standing approval" : "Revoke"}</button></div></div>`;
+          })}`
         : html`<p class="hint">No agent has an approval for this credential.</p>`,
     );
   } catch (err) {
@@ -213,7 +215,10 @@ export function closeDrawer(): void {
   if (drawer?.open) drawer.close();
 }
 
-export function bindCredentials(h: CredentialHandlers, onRevokeGrant: (id: string, client: string, name: string) => void): void {
+export function bindCredentials(
+  h: CredentialHandlers,
+  onRevokeGrant: (id: string, client: string, name: string, standing?: boolean) => void,
+): void {
   credHandlers = h;
   byId("items-filters")?.addEventListener("input", renderItems);
   byId("items-filters")?.addEventListener("change", renderItems);
@@ -257,7 +262,7 @@ export function bindCredentials(h: CredentialHandlers, onRevokeGrant: (id: strin
     const revoke = e.target.closest<HTMLButtonElement>("[data-revoke-grant]");
     if (revoke?.dataset.revokeGrant) {
       const [client, name] = (revoke.dataset.revokeLabel ?? "|").split("|");
-      onRevokeGrant(revoke.dataset.revokeGrant, client ?? "the agent", name ?? "this credential");
+      onRevokeGrant(revoke.dataset.revokeGrant, client ?? "the agent", name ?? "this credential", revoke.dataset.standing === "1");
       return;
     }
     const button = e.target.closest<HTMLButtonElement>("button[data-act]");
