@@ -137,6 +137,10 @@ test("docs pages keep their tested content", () => {
   const cursor = text(page("docs/connect/cursor.html"));
   assert.match(cursor, /"url": "https:\/\/botpasses\.com\/mcp"/);
   assert.match(cursor, /"args": \["vault", "mcp"\]/);
+  const oauthHowTo = text(page("docs/how-to/use-an-oauth-client-secret.html"));
+  assert.match(oauthHowTo, /https:\/\/botpasses\.com\/integrations\/spotify\/callback/);
+  assert.match(oauthHowTo, /https:\/\/staging\.botpasses\.com\/integrations\/spotify\/callback/);
+  assert.match(oauthHowTo, /http:\/\/127\.0\.0\.1:8888\/callback/);
   const revoke = page("docs/how-to/revoke-access.html");
   assert.match(revoke, /Access/);
   const mcp = page("docs/reference/mcp-tools.html");
