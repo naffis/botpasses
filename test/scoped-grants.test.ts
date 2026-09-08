@@ -13,7 +13,7 @@ import { isHttpError, isInjectDenied, isScopeDenied } from "../src/hosted/errors
 import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
-import { resolveApprovalScope, scopeDenialReason } from "../src/hosted/kernel-grants.ts";
+import { requestFitsGrant, resolveApprovalScope, scopeDenialReason } from "../src/hosted/kernel-grants.ts";
 import { listHostedMcpTools, publicGrant } from "../src/hosted/mcp.ts";
 import { unscopedFields } from "../src/hosted-types.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
@@ -132,6 +132,13 @@ test("scopeDenialReason and resolveApprovalScope are pure and exact", () => {
   assert.equal(scopeDenialReason(scope, { host: "b.example", method: "GET", path: "/v1" }), "host");
   assert.equal(scopeDenialReason(scope, { host: "a.example", method: "DELETE", path: "/v1" }), "method");
   assert.equal(scopeDenialReason(unscopedFields(), { host: "x", method: "DELETE", path: "/" }), undefined);
+  assert.equal(requestFitsGrant(scope, null), true, "no stated call is covered");
+  assert.equal(requestFitsGrant(scope, { host: "a.example", method: "GET", path: "/v1/x" }), true);
+  assert.equal(requestFitsGrant(scope, { host: "a.example", method: "POST", path: "/v1" }), false, "method must fit when stated");
+  assert.equal(requestFitsGrant(scope, { host: "b.example", method: "GET", path: "/v1" }), false);
+  assert.equal(requestFitsGrant(scope, { host: "a.example", method: "GET", path: "/v2" }), false);
+  assert.equal(requestFitsGrant(scope, { host: null, method: "GET", path: null }), true, "unspecified host and path are not checked");
+  assert.equal(requestFitsGrant(unscopedFields(), { host: "anywhere.example", method: "DELETE", path: "/admin" }), true);
   const now = new Date("2026-03-01T10:00:00.000Z");
   const item = { allowedHostsJson: JSON.stringify(HOSTS) };
   const fromRequest = resolveApprovalScope({ scope: undefined, requested: { host: "api.stripe.com", method: "GET", path: "/v1/balance?limit=1" }, item, policy: "prompt", now });

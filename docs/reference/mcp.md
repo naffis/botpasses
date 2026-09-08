@@ -109,9 +109,9 @@ Public grant fields gain `requested_scope` (`{ host, method, path }` or null) an
 
 A scoped grant refuses a call outside its scope with 403 `scope_denied`: `{ status: "scope_denied", reason: "method" | "host" | "path", grant_id, grant_scope }`. Grants with `max_calls` become `consumed` on the last call and the standing policy behind them is removed. `find_items` is optional; `http_request` finds the item itself.
 
-Returns the existing open grant for this client and item (an active one as-is; a pending one with a fresh `approval_code`). Ten calls yield one grant, not ten. Counted against the org rate limit (30 per hour) inside the kernel, so `http_request` and REST share the same budget.
+Returns the existing open grant for this client and item when that grant covers the stated call, or when the agent stated no call (an active one as-is; a pending one with a fresh `approval_code`). A standing or active grant whose `grant_scope` does not admit the stated host, method, or path does not satisfy the request: a pending grant is created (or reused) for that scope so the operator can approve it. Ten covering calls yield one grant, not ten. Counted against the org rate limit (30 per hour) inside the kernel, so `http_request` and REST share the same budget.
 
-Requires `item_name`; optional `task_description`. Returns public grant fields (including `task_id`) plus `approval_code` and `notify_failed`. Never the secret. Standing policies may activate immediately.
+Requires `item_name`; optional `task_description`. Returns public grant fields (including `task_id`) plus `approval_code` and `notify_failed`. Never the secret. Standing policies may activate immediately when they cover the call.
 
 Public grant fields: `grant_id`, `policy`, `status`, `environment_id`, `expires_at`, `created_at`, `approved_at`, `consumed_at`, `task_id`, `task_description`.
 

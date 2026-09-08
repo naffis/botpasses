@@ -207,6 +207,132 @@ test("standing approval is per client: another agent still hits Inbox", async ()
   }
 });
 
+test("standing token-scope does not satisfy playlist request_grant (BOTP-8)", async () => {
+  const ctx = await setup();
+  try {
+    const tokenAsk = await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: ctx.model.id,
+      itemName: "SPOTIFY_SECRET",
+      environment: "staging",
+      request: { host: "accounts.spotify.com", method: "POST", path: "/api/token" },
+    });
+    const standing = await ctx.kernel.approveGrant({
+      orgId: ctx.orgId,
+      grantId: tokenAsk.grant.id,
+      policy: "item_standing",
+      role: "owner",
+      actor: "user_owner",
+      scope: { methods: ["POST"], pathPrefixes: ["/api/token"] },
+    });
+    assert.equal(standing.status, "active");
+    assert.equal(standing.hosts, null, "Always approve limits method and path, not host");
+    assert.deepEqual(standing.pathPrefixes, ["/api/token"]);
+
+    const denied = toolText(
+      (
+        await mcp(ctx, "http_request", {
+          item_name: "SPOTIFY_SECRET",
+          host: "api.spotify.com",
+          method: "POST",
+          path: "/v1/me/playlists",
+        })
+      ).rpc,
+    );
+    assert.equal(denied.status, "scope_denied");
+    assert.equal(denied.reason, "path");
+    assertNoCanary(denied);
+
+    const asked = toolText(
+      (
+        await mcp(ctx, "request_grant", {
+          item_name: "SPOTIFY_SECRET",
+          host: "api.spotify.com",
+          method: "POST",
+          path: "/v1/me/playlists",
+        })
+      ).rpc,
+    );
+    assert.equal(asked.status, "pending");
+    assert.notEqual(asked.grant_id, standing.id);
+    assert.deepEqual(asked.requested_scope, {
+      host: "api.spotify.com",
+      method: "POST",
+      path: "/v1/me/playlists",
+    });
+    assert.notEqual(asked.status, "active");
+    assertNoCanary(asked);
+
+    const again = toolText(
+      (
+        await mcp(ctx, "request_grant", {
+          item_name: "SPOTIFY_SECRET",
+          host: "api.spotify.com",
+          method: "POST",
+          path: "/v1/me/playlists",
+        })
+      ).rpc,
+    );
+    assert.equal(again.grant_id, asked.grant_id);
+    assert.equal(again.status, "pending");
+
+    const covering = await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: ctx.model.id,
+      itemName: "SPOTIFY_SECRET",
+      environment: "staging",
+      request: { host: "accounts.spotify.com", method: "POST", path: "/api/token" },
+    });
+    assert.equal(covering.grant.id, standing.id);
+    assert.equal(covering.grant.status, "active");
+
+    const unnamed = await ctx.kernel.requestGrant({
+      orgId: ctx.orgId,
+      clientId: ctx.model.id,
+      itemName: "SPOTIFY_SECRET",
+      environment: "staging",
+    });
+    assert.equal(unnamed.grant.id, standing.id);
+    assert.equal(unnamed.grant.status, "active");
+
+    await ctx.kernel.approveGrant({
+      orgId: ctx.orgId,
+      grantId: String(asked.grant_id),
+      policy: "prompt",
+      role: "owner",
+      actor: "user_owner",
+    });
+    const playlist = toolText(
+      (
+        await mcp(ctx, "http_request", {
+          item_name: "SPOTIFY_SECRET",
+          host: "api.spotify.com",
+          method: "POST",
+          path: "/v1/me/playlists",
+        })
+      ).rpc,
+    );
+    assert.equal(playlist.origin_status, 200);
+    assertNoCanary(playlist);
+
+    const token = toolText(
+      (
+        await mcp(ctx, "http_request", {
+          item_name: "SPOTIFY_SECRET",
+          host: "accounts.spotify.com",
+          method: "POST",
+          path: "/api/token",
+        })
+      ).rpc,
+    );
+    assert.equal(token.origin_status, 200);
+    assertNoCanary(token);
+    assert.ok(!JSON.stringify(await ctx.store.listAudit(ctx.orgId, 50)).includes(CANARY));
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("plain Approve stays one-shot: a second identical http_request is pending", async () => {
   const ctx = await setup();
   try {

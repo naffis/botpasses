@@ -117,7 +117,7 @@ Inventory of credentials in the agent's environment: `name`, `kind`, `last4`, `u
 
 ## request_grant
 
-Requires `item_name`; optional `task_description`. Creates a pending approval and returns the public grant plus `approval_code` and `notify_failed`. Standing policies may activate it at once.
+Requires `item_name`; optional `task_description`. Creates a pending approval and returns the public grant plus `approval_code` and `notify_failed`. Standing policies may activate it at once when they cover the stated host, method, and path. A standing grant that does not cover the call does not come back as `active`; a pending grant is created for that scope.
 
 Public grant fields: `grant_id`, `policy`, `status`, `environment_id`, `expires_at`, `created_at`, `approved_at`, `consumed_at`, `task_id`, `task_description`.
 

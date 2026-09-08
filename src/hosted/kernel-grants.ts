@@ -37,6 +37,7 @@ import {
 } from "./kernel-grant-approval.ts";
 import {
   itemHosts,
+  requestFitsGrant,
   requestedScopeFor,
   resolveApprovalScope,
   scopeDenialReason,
@@ -63,6 +64,7 @@ export {
   STANDING_TTL_MAX_SECONDS,
   TTL_MIN_SECONDS,
   pathWithinPrefix,
+  requestFitsGrant,
   resolveApprovalScope,
   scopeDenialReason,
   type ConnectorCall,
@@ -139,12 +141,13 @@ export type RequestGrantInput = {
 export type RequestGrantResult = { grant: HostedGrantRecord; code?: string; notifyFailed?: boolean };
 
 /**
- * One open grant per (client, item). A standing policy activates immediately (the grant inherits
- * the policy's scope and expiry); otherwise the existing pending grant is reused with a fresh
- * approval code and the newest requested scope. The org limiter is counted here exactly once per
- * call, whichever surface (REST, request_grant, http_request) asked. Notification goes to
- * `operatorEmail` (must be a member) or to every member; it is sent for a new grant or when the
- * previous magic link expired, never on every retry.
+ * One covering grant per (client, item, requested call). An active grant or standing policy
+ * satisfies the request only when host, method, and path fit its scope (or the agent stated
+ * no call). Otherwise a pending grant is created, or the existing pending is reused with a
+ * fresh approval code and the newest requested scope. The org limiter is counted here exactly
+ * once per call, whichever surface (REST, request_grant, http_request) asked. Notification
+ * goes to `operatorEmail` (must be a member) or to every member; it is sent for a new grant
+ * or when the previous magic link expired, never on every retry.
  */
 export async function requestGrant(host: GrantHost, raw: RequestGrantInput): Promise<RequestGrantResult> {
   const input: RequestGrantInput = { ...raw, taskDescription: truncateTask(raw.taskDescription) };
@@ -173,19 +176,25 @@ export async function requestGrant(host: GrantHost, raw: RequestGrantInput): Pro
   const standing = await standingFor(host, input.orgId, client.id, item);
   const now = host.now();
   const at = nowIso(now);
-  const open = await openGrantFor(host, input.orgId, client.id, item.id);
+  const pair = await settleExpired(host, await host.store.listGrantsForPair(input.orgId, client.id, item.id));
+  const active = pair.find((g) => g.status === "active");
+  const pending = pair.find((g) => g.status === "pending");
+  const standingCovers = standing !== undefined && requestFitsGrant(standing, requested);
+  const activeCovers = active !== undefined && requestFitsGrant(active, requested);
   let grant: HostedGrantRecord;
-  if (open && open.status === "active") {
-    grant = open;
-  } else if (standing) {
-    grant = open
-      ? { ...open, ...scopeFromPolicy(standing), policy: standing.kind, status: "active", approvedAt: at }
+  let reusedPending = false;
+  if (activeCovers && active) {
+    grant = active;
+  } else if (standingCovers && standing) {
+    grant = pending
+      ? { ...pending, ...scopeFromPolicy(standing), policy: standing.kind, status: "active", approvedAt: at }
       : newGrant(input, client.id, item, env.id, at, standing.kind, "active", requested, standing);
-    if (open) await host.store.updateGrant(grant);
+    if (pending) await host.store.updateGrant(grant);
     else await host.store.insertGrant(grant);
-  } else if (open) {
-    grant = requested ? { ...open, requestedScope: requested } : open;
+  } else if (pending) {
+    grant = requested ? { ...pending, requestedScope: requested } : pending;
     if (requested) await host.store.updateGrant(grant);
+    reusedPending = true;
   } else {
     grant = newGrant(input, client.id, item, env.id, at, "prompt", "pending", requested, undefined);
     await host.store.insertGrant(grant);
@@ -198,7 +207,7 @@ export async function requestGrant(host: GrantHost, raw: RequestGrantInput): Pro
   const code = await rotateCodeChallenge(host, grant.id, now);
   const magic = await ensureMagicChallenge(host, grant.orgId, grant.id, now);
   let notifyFailed = false;
-  if (!open || magic.fresh) {
+  if (!reusedPending || magic.fresh) {
     notifyFailed = !(await notify(host, input.orgId, recipients, client, item, magic.token));
   }
   assertSafePublicObject("requestGrant", grant);
@@ -233,17 +242,6 @@ function newGrant(
     requestedScope: requested,
     ...scopeFromPolicy(standing),
   };
-}
-
-/** Newest pending or unexpired active grant for the pair; active wins over pending. */
-async function openGrantFor(
-  host: GrantHost,
-  orgId: string,
-  clientId: string,
-  itemId: string,
-): Promise<HostedGrantRecord | undefined> {
-  const pair = await settleExpired(host, await host.store.listGrantsForPair(orgId, clientId, itemId));
-  return pair.find((g) => g.status === "active") ?? pair.find((g) => g.status === "pending");
 }
 
 /** D15: an active grant past `expires_at` reads as `expired`. */
@@ -502,8 +500,9 @@ export async function listClientGrants(host: GrantHost, orgId: string, clientId:
 }
 
 /**
- * Finds the active grant for the pair and spends it. With `call`, the grant's scope must admit
- * the call or this is 403 `scope_denied` (payload: `grant_scope`, `reason`; never the secret).
+ * Finds an active grant for the pair that admits `call` (when given) and spends it. With
+ * `call`, a grant whose scope does not admit the call is skipped; if none admit it this is
+ * 403 `scope_denied` (payload: `grant_scope`, `reason`; never the secret).
  * Prompt grants are consumed. Grants with `max_calls` count one call atomically and become
  * `consumed` on the last one, taking the standing policy that made them with them so the
  * approval does not renew itself. A standing (`item_standing` / `folder_standing`) consume
@@ -520,19 +519,22 @@ export async function consumeActiveGrant(
 ): Promise<HostedGrantRecord> {
   const pair = await settleExpired(host, await host.store.listGrantsForPair(orgId, clientId, itemId));
   const at = host.now();
-  const match = pair.find((g) => g.status === "active");
-  if (!match) throw new InjectDeniedError();
+  const actives = pair.filter((g) => g.status === "active");
+  const first = actives[0];
+  if (!first) throw new InjectDeniedError();
+  let match = first;
   if (call) {
-    const reason = scopeDenialReason(match, call);
-    if (reason) {
+    const covering = actives.find((g) => scopeDenialReason(g, call) === undefined);
+    if (!covering) {
       const item = await host.store.getItem(itemId);
       await host.audit(orgId, "scope_denied", clientId, item?.name ?? null, clientId);
       throw new ScopeDeniedError({
-        reason,
-        grant_id: match.id,
-        grant_scope: publicGrantScope(match),
+        reason: scopeDenialReason(first, call) ?? "path",
+        grant_id: first.id,
+        grant_scope: publicGrantScope(first),
       });
     }
+    match = covering;
   }
   if (match.policy === "prompt") {
     const ok = await host.store.consumeGrant(match.id, nowIso(at));

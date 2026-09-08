@@ -430,7 +430,7 @@ export class HostedKernel {
 
   /* ---- grants (kernel-grants.ts) ---- */
 
-  /** See `kernel-grants.ts` `requestGrant`: one open grant per (client, item), limiter counted once. */
+  /** See `kernel-grants.ts` `requestGrant`: one covering grant per (client, item, requested call). */
   async requestGrant(input: grants.RequestGrantInput): Promise<grants.RequestGrantResult> {
     return grants.requestGrant(this.#grantHost(), input);
   }

@@ -79,7 +79,7 @@ Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 
 | POST | `/api/clients/trusted` | Issues an `avt_...` once for `/runtime/resolve` |
 | POST | `/api/clients/:id/rotate` | New token once. The old hash stops working |
 | POST | `/api/clients/:id/revoke` | Later bearer calls are 401; OAuth tokens are denylisted; approvals revoked. Every OAuth grant this organisation's members gave for the client is destroyed; the same person's grants for it in other organisations survive |
-| POST | `/api/grants/request` | Model or operator. `{ "item_name", "task_description?" }`. Returns the grant plus `approval_code`. 30 per organisation per hour |
+| POST | `/api/grants/request` | Model or operator. `{ "item_name", "task_description?" }`. Optional `host`, `method`, `path`. Returns the covering grant, or a pending grant when standing scope does not admit the call. 30 per organisation per hour |
 | POST | `/api/grants/:id/approve` | `{ "policy", "confirm_name?" }`. `folder_standing` is owner-only and needs `confirm_name` |
 | POST | `/api/grants/:id/revoke` | Status becomes `revoked`. The row stays listed |
 | POST | `/api/grants/approve-by-code` | `{ "code" }`, 8 digits. Reuse is 409, expired is 410 |
