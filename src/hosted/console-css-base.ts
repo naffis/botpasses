@@ -2,18 +2,25 @@ import { cssVariables } from "../brand-visual.ts";
 
 /** Fonts, tokens, reset, app shell, rail, page head. Components live in console-css-components.ts. */
 export const CONSOLE_CSS_BASE = `@font-face {
-  font-family: "IBM Plex Sans";
+  font-family: "Inter";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("/assets/fonts/ibm-plex-sans-400.woff2") format("woff2");
+  src: url("/assets/fonts/inter-400.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Sans";
+  font-family: "Inter";
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("/assets/fonts/ibm-plex-sans-600.woff2") format("woff2");
+  src: url("/assets/fonts/inter-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/assets/fonts/inter-700.woff2") format("woff2");
 }
 @font-face {
   font-family: "IBM Plex Mono";
@@ -22,26 +29,12 @@ export const CONSOLE_CSS_BASE = `@font-face {
   font-display: swap;
   src: url("/assets/fonts/ibm-plex-mono-400.woff2") format("woff2");
 }
-@font-face {
-  font-family: "Fraunces";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/assets/fonts/fraunces-400.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Fraunces";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("/assets/fonts/fraunces-700.woff2") format("woff2");
-}
 
 ${cssVariables()}
 
 :root {
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: Inter, Helvetica, Arial, sans-serif;
+  --font-body: Inter, Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   --radius: 10px;
   --radius-small: 8px;
@@ -135,8 +128,15 @@ tr:focus-visible {
   font-weight: 600;
   letter-spacing: -0.02em;
 }
-.brand img { width: 28px; height: 28px; }
-.brand-mark { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; }
+.brand img { width: 32px; height: 32px; }
+.brand-mark-on-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-mark-on-light { display: none; }
+  :root:not([data-theme="light"]) .brand-mark-on-dark { display: block; }
+}
+:root[data-theme="dark"] .brand-mark-on-light { display: none; }
+:root[data-theme="dark"] .brand-mark-on-dark { display: block; }
+.brand-mark { font-family: Inter, Helvetica, Arial, sans-serif; font-size: 1.2rem; font-weight: 700; letter-spacing: -0.03em; }
 
 .plane-label {
   margin: -0.75rem 0 0;

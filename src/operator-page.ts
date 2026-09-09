@@ -1,4 +1,5 @@
-import { PRODUCT_NAME } from "./brand.ts";
+import { PRODUCT_NAME, PRODUCT_WORDMARK } from "./brand.ts";
+import { BRAND_FONTS, BRAND_HEX } from "./brand-visual.ts";
 
 /**
  * Local loopback console for `vault serve`. Shares the hosted vocabulary (credentials, agents,
@@ -15,20 +16,20 @@ export function operatorHtml(nonce = ""): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${PRODUCT_NAME} local console</title>
   <style${nonceAttr}>
-    :root { color-scheme: dark; --bg:#111; --fg:#eee; --muted:#9aa; --line:#333; --ok:#8fd19e; --warn:#e6c07b; }
-    html, body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ui-sans-serif, system-ui, sans-serif; }
+    :root { color-scheme: dark; --bg:${BRAND_HEX.bg}; --fg:${BRAND_HEX.fg}; --muted:${BRAND_HEX.muted}; --line:${BRAND_HEX.line}; --accent:${BRAND_HEX.accent}; --accent-fg:${BRAND_HEX.accentFg}; --ok:${BRAND_HEX.ok}; --warn:${BRAND_HEX.warn}; --elev:${BRAND_HEX.bgElev}; }
+    html, body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ${BRAND_FONTS.stack}; }
     main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
-    h1 { font-size: 1.35rem; margin: 0 0 8px; }
+    h1 { font-size: 1.35rem; margin: 0 0 8px; font-family: ${BRAND_FONTS.stack}; letter-spacing: -0.03em; }
     h2 { font-size: 1rem; margin: 28px 0 8px; }
     p, li { color: var(--muted); }
     code { color: var(--fg); }
-    .banner { border: 1px solid var(--line); padding: 12px 14px; margin: 16px 0 24px; }
+    .banner { border: 1px solid var(--line); padding: 12px 14px; margin: 16px 0 24px; background: var(--elev); }
     form, table { width: 100%; }
     label { display:block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
     input, select, button { font: inherit; }
-    input, select { width: 100%; box-sizing: border-box; background:#1a1a1a; color:var(--fg); border:1px solid var(--line); padding:8px; }
-    button { background:#2a2a2a; color:var(--fg); border:1px solid var(--line); padding:8px 12px; cursor:pointer; }
-    button.primary { background:#244024; border-color:#3a5; }
+    input, select { width: 100%; box-sizing: border-box; background:var(--elev); color:var(--fg); border:1px solid var(--line); padding:8px; }
+    button { background:var(--elev); color:var(--fg); border:1px solid var(--line); padding:8px 12px; cursor:pointer; }
+    button.primary { background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
     .row { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     table { border-collapse: collapse; margin-top: 8px; }
     th, td { text-align:left; border-bottom:1px solid var(--line); padding:8px 6px; font-size:13px; overflow-wrap: anywhere; }
@@ -41,7 +42,7 @@ export function operatorHtml(nonce = ""): string {
 </head>
 <body>
   <main>
-    <h1>${PRODUCT_NAME} local console</h1>
+    <h1>${PRODUCT_WORDMARK} local console</h1>
     <p>Store a credential once. Agents request it. The key is attached by <code>http_request</code> or injected by <code>vault run</code>. This page shows the name and last four after submit, not the secret.</p>
     <div class="banner">
       This is not a human password manager. No autofill, TOTP, passkeys, or sharing secrets with other people.

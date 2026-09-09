@@ -25,4 +25,9 @@ test("local console builds rows with textContent, never innerHTML, and uses the 
   assert.doesNotMatch(html, /—/);
   assert.equal((html.match(/<th(?=[\s>])(?![^>]*scope="col")[^>]*>/g) ?? []).length, 0, "every th has scope=col");
   assert.match(html, /<p id="flash" role="status">/);
+  assert.match(html, /#00C2A8/);
+  assert.match(html, /#0B1020/);
+  assert.match(html, /Inter, Helvetica, Arial/);
+  assert.match(html, /<h1>botpasses local console<\/h1>/);
+  assert.doesNotMatch(html, /#244024|#3a5|#7DDA88|#0B0F0C/);
 });

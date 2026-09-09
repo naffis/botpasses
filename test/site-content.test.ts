@@ -62,11 +62,11 @@ test("site dist has every documented URL", () => {
 
 test("homepage sells the product and links the right places", () => {
   const home = page("index.html");
-  assert.match(home, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*It never gets the key\.\s*<\/h1>/);
+  assert.match(home, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*The model does not get the key\.\s*<\/h1>/);
   assert.match(home, /data-hero-rotate="/);
   assert.match(home, /class="hero-rotate-word">Stripe<\/span>/);
   assert.doesNotMatch(home, /hero-rotate-sizer/);
-  assert.match(home, /class="hero-rotate-word">Stripe<\/span><\/span>\. It never gets the key\./);
+  assert.match(home, /class="hero-rotate-word">Stripe<\/span><\/span>\. The model does not get the key\./);
   for (const service of ["Slack", "GitHub", "Salesforce", "Twilio", "Shopify", "Notion"]) {
     assert.match(home, new RegExp(`data-hero-rotate="[^"]*${service}`), service);
   }
@@ -141,8 +141,12 @@ test("docs pages keep their tested content", () => {
   for (const p of ["Fly", "Neon", "Cloudflare", "Resend", "Sentry"]) assert.match(privacy, new RegExp(p));
   assert.doesNotMatch(privacy, /Clerk/);
   const design = page("design.html");
-  assert.match(design, /#0B0F0C/);
-  assert.match(design, /#7DDA88/);
+  assert.match(design, /#14213D/);
+  assert.match(design, /#00C2A8/);
+  assert.match(design, /src="\/mark\.svg"/);
+  assert.match(design, /src="\/og\.png"/);
+  assert.match(design, /src="\/og-square\.png"/);
+  assert.match(design, /src="\/logo\.png"/);
   const grok = page("docs/connect/grok.html");
   assert.doesNotMatch(grok, /paste a Clerk JWT/i);
   assert.match(grok, /data-testid="docs-search"/);

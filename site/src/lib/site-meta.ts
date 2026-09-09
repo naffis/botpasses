@@ -10,7 +10,7 @@ export const SECURITY_EMAIL = "security@botpasses.com";
 export const PRODUCT_DESCRIPTION =
   "Botpasses is a grant-vault for AI agents. Store an API key once. Claude, Cursor, ChatGPT, or Grok call the API over MCP; the key never enters the model, the chat, or the logs.";
 
-export const PRODUCT_TAGLINE = "Your agent can call Stripe, Slack, GitHub. It never gets the key.";
+export const PRODUCT_TAGLINE = "Your agent can call Stripe, Slack, GitHub. The model does not get the key.";
 
 export type JsonLd = Record<string, unknown>;
 
@@ -22,7 +22,7 @@ export function organizationLd(): JsonLd {
     url: SITE_URL,
     email: SUPPORT_EMAIL,
     description: PRODUCT_DESCRIPTION,
-    logo: `${SITE_URL}/og.png`,
+    logo: `${SITE_URL}/logo.png`,
     sameAs: [GITHUB],
     contactPoint: [
       { "@type": "ContactPoint", email: SUPPORT_EMAIL, contactType: "customer support" },
@@ -51,6 +51,7 @@ export function softwareApplicationLd(): JsonLd {
     applicationCategory: "DeveloperApplication",
     operatingSystem: "Web",
     url: SITE_URL,
+    image: `${SITE_URL}/og.png`,
     description: PRODUCT_DESCRIPTION,
     offers: {
       "@type": "Offer",

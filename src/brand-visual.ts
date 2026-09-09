@@ -26,34 +26,37 @@ export type BrandPalette = {
   okDim: string;
 };
 
+export const BRAND_NAVY = "#14213D";
+export const BRAND_TEAL = "#00C2A8";
+
 export const BRAND_HEX: BrandPalette = {
-  bg: "#0B0F0C",
-  bgElev: "#151C17",
-  fg: "#F2F5F2",
-  muted: "#C5D0C7",
-  line: "#2A332C",
-  accent: "#7DDA88",
-  accentFg: "#0B0F0C",
-  accentDim: "#244024",
+  bg: "#0B1020",
+  bgElev: BRAND_NAVY,
+  fg: "#F4F6FA",
+  muted: "#B4BDD0",
+  line: "#2C3A58",
+  accent: BRAND_TEAL,
+  accentFg: "#0B1020",
+  accentDim: "#123D38",
   danger: "#E07070",
   dangerDim: "#3A1C1C",
   warn: "#E9B857",
   warnDim: "#3A2E12",
   info: "#8CC4EE",
   infoDim: "#17303F",
-  ok: "#A6E4AD",
+  ok: "#8FD4A8",
   okDim: "#17331E",
 };
 
 export const BRAND_HEX_LIGHT: BrandPalette = {
-  bg: "#F4F7F4",
+  bg: "#F4F6FA",
   bgElev: "#FFFFFF",
-  fg: "#121A14",
-  muted: "#4B5A4F",
-  line: "#D3DCD5",
-  accent: "#1F7A34",
+  fg: BRAND_NAVY,
+  muted: "#4A5568",
+  line: "#D5DBE6",
+  accent: "#0A7A6C",
   accentFg: "#FFFFFF",
-  accentDim: "#DDF2E0",
+  accentDim: "#D5F3EE",
   danger: "#B3261E",
   dangerDim: "#FBE3E1",
   warn: "#8A5A00",
@@ -70,12 +73,13 @@ export const BRAND_THEMES: Record<BrandTheme, BrandPalette> = {
 };
 
 export const BRAND_FONTS = {
-  display: "Fraunces",
-  body: "IBM Plex Sans",
+  display: "Inter",
+  body: "Inter",
   mono: "IBM Plex Mono",
+  stack: "Inter, Helvetica, Arial, sans-serif",
 } as const;
 
-export const MARK_SIZE = 24;
+export const MARK_SIZE = 32;
 
 export type BrandHexKey = keyof BrandPalette;
 

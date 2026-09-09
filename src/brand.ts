@@ -1,6 +1,8 @@
 /** Product identity. Process env prefix stays VAULT_*. */
 
 export const PRODUCT_NAME = "Botpasses";
+/** Live lockup. Lowercase, no .com. Render in Inter / Helvetica / Arial. */
+export const PRODUCT_WORDMARK = "botpasses";
 export const PRODUCT_SLUG = "botpasses";
 export const MCP_SERVER_NAME = "botpasses";
 export const HEALTH_PRODUCT = "botpasses";

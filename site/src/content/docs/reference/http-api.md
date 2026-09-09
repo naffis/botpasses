@@ -31,7 +31,7 @@ A session that has not completed the authenticator step gets 403 `{ "error": "mf
 | GET | `/sitemap.xml` | Public urlset of every canonical page |
 | GET | `/llms.txt`, `/llms-full.txt` | Machine-readable site index and full docs for AI crawlers |
 | GET | `/.well-known/security.txt`, `/security.txt` | Vulnerability contact. Same bytes at both paths. See [Security disclosure](/docs/security/disclosure) |
-| GET | `/favicon.ico`, `/apple-touch-icon.png` | Browser and iOS default icon URLs. SVG mark remains at `/favicon.svg` |
+| GET | `/favicon.ico`, `/apple-touch-icon.png`, `/favicon.svg`, `/mark.svg`, `/mark-on-dark.svg`, `/og.png`, `/og-square.png`, `/logo.png`, `/android-chrome-192x192.png`, `/android-chrome-512x512.png`, `/site.webmanifest` | Browser, iOS, Android, and social-card URLs. `/mark.svg` is the navy ticket. `/mark-on-dark.svg` is the white ticket. `/favicon.svg` is the simplified 16 px tile. `/logo.png` is the square favicon raster; `/og.png` is the 1200x630 card |
 
 ## Sign-in and account
 

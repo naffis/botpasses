@@ -40,6 +40,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 ## Do not
 
 - Commit secrets, master keys, or PII; read them from env / `$VAULT_HOME/master.key`.
+- Commit operator identifiers (Neon project slugs, Linear workspace URLs, `/Users/…` paths). Those live in gitignored `.env.ops` (see `.env.ops.example`).
 - Return a secret **value** from any MCP/API/CLI list/grant/audit path.
 - `git stash`, create a feature branch, or selectively stage "only my files".
 - Bind local servers to port 8787 (Cursor MCP OAuth loopback). Product HTTP listens on **8788**.

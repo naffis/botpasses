@@ -38,7 +38,8 @@ test("console shell: routed panels, tabs, account, breakglass hidden, mark from 
   const html = hostedOperatorHtml();
   assert.match(html, /data-testid="app-shell"/);
   assert.match(html, /src="\/assets\/mark\.[0-9a-f]{8}\.svg"/);
-  assert.match(html, /<link rel="icon" href="\/assets\/mark\.[0-9a-f]{8}\.svg"/);
+  assert.match(html, /src="\/assets\/mark-on-dark\.[0-9a-f]{8}\.svg"/);
+  assert.match(html, /<link rel="icon" href="\/favicon\.svg"/);
   assert.match(html, /<meta name="color-scheme" content="light dark"/);
   for (const panel of ["inbox", "credentials", "agents", "account"]) assert.match(html, new RegExp(`data-panel="${panel}"`));
   assert.match(html, /role="tablist"/);
@@ -127,7 +128,7 @@ test("team panel, org switcher, and plan card are in the shell and the bundle dr
 
 test("console css: two themes, action accent, warn and success surfaces, fixed table, title size", () => {
   assert.match(CONSOLE_CSS, /\.app-shell/);
-  assert.match(CONSOLE_CSS, /ibm-plex-sans-400\.woff2/);
+  assert.match(CONSOLE_CSS, /inter-400\.woff2/);
   assert.match(CONSOLE_CSS, /color-scheme: light dark/);
   assert.match(CONSOLE_CSS, /@media \(prefers-color-scheme: dark\)/);
   assert.match(CONSOLE_CSS, /:root\[data-theme="dark"\]/);
@@ -142,7 +143,7 @@ test("console css: two themes, action accent, warn and success surfaces, fixed t
   assert.match(CONSOLE_CSS, /th \{ color: var\(--muted\); font-size: 0\.85rem/);
   assert.match(CONSOLE_CSS, /\.pill \{[^}]*background:/);
   assert.match(CONSOLE_CSS, /a \{ color: var\(--fg\); text-decoration: underline/);
-  const font = hostedFont("/assets/fonts/ibm-plex-sans-400.woff2");
+  const font = hostedFont("/assets/fonts/inter-400.woff2");
   assert.ok(font);
   assert.equal(font.type, "font/woff2");
   assert.ok(font.body.length > 1000);

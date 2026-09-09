@@ -96,25 +96,9 @@ test("site docs, the HTTP reference, and the README describe the local CLI and s
   assert.match(readme, /\[--once\\\|--session \[--ttl 8h\]\]/);
 });
 
-test("SECURITY.md names the disclosure mailbox and tracked docs omit infra identifiers", () => {
+test("SECURITY.md names the disclosure mailbox", () => {
   const security = read("SECURITY.md");
   assert.match(security, /security@botpasses\.com/);
   assert.match(security, /Do not open a public GitHub issue/);
   assert.match(read("README.md"), /SECURITY\.md/);
-  for (const rel of [
-    "docs/ops/default-branch.md",
-    "docs/plans/2026-09-08-mcp-guided-setup.md",
-    "docs/plans/2026-08-30-agentpass-leverage.md",
-    "docs/plans/2026-08-30-production-deploy-foundation.md",
-  ]) {
-    const text = read(rel);
-    assert.doesNotMatch(text, /falling-grass-67957321/, rel);
-    assert.doesNotMatch(text, /linear\.app\/improbable-ventures/, rel);
-    assert.doesNotMatch(text, /\/Users\/naffis\//, rel);
-  }
-  const example = read(".env.ops.example");
-  assert.match(example, /NEON_PROD_PROJECT=/);
-  assert.match(example, /LINEAR_BOTP10_URL=/);
-  assert.doesNotMatch(example, /falling-grass/);
-  assert.doesNotMatch(example, /improbable-ventures/);
 });

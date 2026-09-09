@@ -15,7 +15,15 @@ import { hostedOperatorHtml } from "../src/hosted/operator-page.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { cleanup, tempHome } from "./helpers.ts";
 
-const NAMES: AssetName[] = ["auth.css", "console.css", "auth.js", "console.js", "collect.js", "mark.svg"];
+const NAMES: AssetName[] = [
+  "auth.css",
+  "console.css",
+  "auth.js",
+  "console.js",
+  "collect.js",
+  "mark.svg",
+  "mark-on-dark.svg",
+];
 
 function split(name: AssetName): { stem: string; ext: string } {
   const dot = name.lastIndexOf(".");
@@ -43,7 +51,7 @@ test("B3 every asset has a hashed path that serves the same body as the plain na
 
 test("B3 the console, auth, and collect pages reference the hashed names, never the plain ones", () => {
   const consoleHtml = hostedOperatorHtml({ hosted: true, nonce: "n" });
-  for (const name of ["console.css", "console.js", "mark.svg"] as const) {
+  for (const name of ["console.css", "console.js", "mark.svg", "mark-on-dark.svg"] as const) {
     assert.ok(consoleHtml.includes(`"${assetPath(name)}"`), `console references ${assetPath(name)}`);
   }
   assert.doesNotMatch(consoleHtml, /"\/assets\/[a-z]+\.(css|js|svg)"/);

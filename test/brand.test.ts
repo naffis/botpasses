@@ -7,6 +7,7 @@ import {
   HEALTH_PRODUCT,
   MCP_SERVER_NAME,
   PRODUCT_NAME,
+  PRODUCT_WORDMARK,
   PRODUCTION_ORIGIN,
   publicOriginError,
   resolvePublicOrigin,
@@ -18,6 +19,7 @@ import { createResendSender } from "../src/hosted/email.ts";
 
 test("brand constants are Botpasses", () => {
   assert.equal(PRODUCT_NAME, "Botpasses");
+  assert.equal(PRODUCT_WORDMARK, "botpasses");
   assert.equal(MCP_SERVER_NAME, "botpasses");
   assert.equal(HEALTH_PRODUCT, "botpasses");
   assert.equal(DEFAULT_HOME_DIRNAME, ".botpasses");

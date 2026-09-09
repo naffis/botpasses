@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "../brand.ts";
+import { PRODUCT_NAME, PRODUCT_WORDMARK } from "../brand.ts";
 import type { VaultEnvName } from "../hosted-types.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
 import { consoleDialogsHtml } from "./console-dialogs.ts";
@@ -77,6 +77,7 @@ export function hostedOperatorHtml(
     : `<p id="console-signin" class="signin" data-testid="console-signin">Local operator console. Sign in is not required on loopback.</p>`;
   const planeLabel = plane === "staging" ? `<p class="plane-label" data-testid="plane-label">Staging</p>` : "";
   const mark = assetPath("mark.svg");
+  const markOnDark = assetPath("mark-on-dark.svg");
   return `<!doctype html>
 <html lang="en" data-deploy-plane="${plane}" data-environments="${envAttr}" data-default-environment="${defaultEnv}">
 <head>
@@ -85,7 +86,7 @@ export function hostedOperatorHtml(
   <meta name="color-scheme" content="light dark" />
   <title>${PRODUCT_NAME} console</title>
   <link rel="icon" href="/favicon.ico" sizes="48x48" />
-  <link rel="icon" href="${mark}" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="${assetPath("console.css")}" />
 </head>
@@ -93,7 +94,7 @@ export function hostedOperatorHtml(
   <a class="skip" href="#main">Skip to content</a>
   <div class="app-shell" data-testid="app-shell">
     <aside class="rail">
-      <a class="brand" href="/console#inbox"><img src="${mark}" alt="" width="28" height="28" /><span class="brand-mark">${PRODUCT_NAME}</span></a>
+      <a class="brand" href="/console#inbox"><img class="brand-mark-on-light" src="${mark}" alt="" width="32" height="32" /><img class="brand-mark-on-dark" src="${markOnDark}" alt="" width="32" height="32" /><span class="brand-mark">${PRODUCT_WORDMARK}</span></a>
       ${planeLabel}
       <label id="org-switch" class="org-switch" hidden><span class="visually-hidden">Workspace</span><select id="org-switcher" data-testid="org-switcher"></select></label>
       <nav class="rail-nav" aria-label="Console">

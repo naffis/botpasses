@@ -1,6 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
-import { BRAND_FONTS, BRAND_HEX } from "../../../src/brand-visual.ts";
+import { BRAND_FONTS, BRAND_HEX, BRAND_NAVY, BRAND_TEAL } from "../../../src/brand-visual.ts";
 
 const tokens = Object.entries(BRAND_HEX) as [keyof typeof BRAND_HEX, string][];
 const cssName = (key: string) => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}`;
@@ -9,11 +9,42 @@ const cssName = (key: string) => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLower
   <h1>Design</h1>
   <p>
     The living style guide. Tokens come from <code>src/brand-visual.ts</code> in the repository and are
-    rendered here and in the console from the same file. Hex is the source of truth.
+    rendered here and in the console from the same file. Hex is the source of truth. Official lockups live
+    in <code>src/brand-assets/source/</code>.
   </p>
   <h2>Mark</h2>
-  <p><img src="/favicon.svg" alt="Botpasses mark" width="48" height="48" /></p>
+  <p>
+    Ticket silhouette: navy tile, side notches, teal eyes, white perforation and barcode, one teal bar.
+    Used in the site header, the console rail, and social cards. Do not use this full silhouette at 16 px.
+  </p>
+  <p>
+    <img src="/mark.svg" alt="botpasses ticket mark on light" width="64" height="64" />
+    <img src="/mark-on-dark.svg" alt="botpasses ticket mark on dark" width="64" height="64" style="background:#0B1020;padding:8px;border-radius:8px" />
+  </p>
+  <h2>Favicon</h2>
+  <p>
+    Simplified eyes, perforation, and barcode on a navy tile. The ticket silhouette muddies at favicon
+    size. Home-screen PNGs are resized from the official 512 raster.
+  </p>
+  <p><img src="/favicon.svg" alt="botpasses favicon" width="48" height="48" /></p>
+  <h2>Social and icons</h2>
+  <p>
+    Generated from the same tokens and mark. Rebuild with
+    <code>node site/scripts/og.mjs</code> and
+    <code>node site/scripts/write-icons.mjs</code>, then commit the PNGs.
+  </p>
+  <p><img src="/og.png" alt="Open Graph card, 1200 by 630" width="600" height="315" /></p>
+  <p><img src="/og-square.png" alt="Square social card, 1200 by 1200" width="300" height="300" /></p>
+  <p>
+    <img src="/logo.png" alt="Logo, 512 by 512" width="128" height="128" />
+    <img src="/apple-touch-icon.png" alt="Apple touch icon, 180 by 180" width="90" height="90" />
+    <img src="/android-chrome-192x192.png" alt="Android Chrome icon, 192 by 192" width="96" height="96" />
+  </p>
   <h2>Tokens</h2>
+  <p>
+    Brand navy is <code>{BRAND_NAVY}</code>. Brand teal is <code>{BRAND_TEAL}</code>. Dark surfaces sit
+    on navy; the action accent is teal. Light theme uses a darker teal so text on white stays AA.
+  </p>
   <div class="swatches">
     {tokens.map(([name, hex]) => (
       <div class="swatch">
@@ -25,9 +56,10 @@ const cssName = (key: string) => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLower
   </div>
   <h2>Type</h2>
   <p>
-    Display {BRAND_FONTS.display}. Body {BRAND_FONTS.body}. Mono {BRAND_FONTS.mono}. Self-hosted OFL files,
-    no font service at runtime. Headings use the display face at 700; body text is 16 px with a 1.55 line
-    height and a 68-character measure.
+    Display {BRAND_FONTS.display}. Body {BRAND_FONTS.body}. Mono {BRAND_FONTS.mono}. Stack
+    <code>{BRAND_FONTS.stack}</code>. The wordmark is live type, lowercase <code>botpasses</code>, no
+    <code>.com</code>. Self-hosted OFL files, no font service at runtime. Headings use the display face
+    at 700; body text is 16 px with a 1.55 line height and a 68-character measure.
   </p>
   <h2>Shape</h2>
   <p>

@@ -41,7 +41,7 @@ test("AC-01 fixture dist GET / is marketing", async () => {
     const res = await fetch(`${ctx.base}/`);
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.match(html, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*It never gets the key\.\s*<\/h1>/);
+    assert.match(html, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*The model does not get the key\.\s*<\/h1>/);
     assert.match(html, /data-hero-rotate="/);
     assert.match(html, /class="hero-rotate-word">Stripe<\/span>/);
     assert.match(html, /href="\/sign-up"/);
@@ -201,8 +201,16 @@ test("site: hashed assets are immutable, sitemaps and text files are served", as
       ["/.well-known/security.txt", /text\/plain/],
       ["/security.txt", /text\/plain/],
       ["/favicon.ico", /image\/x-icon/],
+      ["/favicon.svg", /image\/svg\+xml/],
+      ["/mark.svg", /image\/svg\+xml/],
+      ["/mark-on-dark.svg", /image\/svg\+xml/],
       ["/apple-touch-icon.png", /image\/png/],
       ["/og.png", /image\/png/],
+      ["/og-square.png", /image\/png/],
+      ["/logo.png", /image\/png/],
+      ["/android-chrome-192x192.png", /image\/png/],
+      ["/android-chrome-512x512.png", /image\/png/],
+      ["/site.webmanifest", /application\/manifest\+json/],
     ] as const) {
       const res = await fetch(`${ctx.base}${path}`);
       assert.equal(res.status, 200, path);

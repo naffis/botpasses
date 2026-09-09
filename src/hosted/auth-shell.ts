@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "../brand.ts";
+import { PRODUCT_WORDMARK } from "../brand.ts";
 import { assetPath } from "./hosted-assets.ts";
 
 export function escapeHtml(s: string): string {
@@ -42,7 +42,7 @@ export function authDocument(input: {
 <body class="auth-body">
   <a class="skip" href="#content">Skip to content</a>
   <header class="auth-header">
-    <a class="brand auth-brand" href="/"><span class="brand-mark">${PRODUCT_NAME}</span></a>
+    <a class="brand auth-brand" href="/"><span class="brand-mark">${PRODUCT_WORDMARK}</span></a>
   </header>
   <main class="${cardClass}" id="content"${testid}>
     <h1>${escapeHtml(heading)}</h1>

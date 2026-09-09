@@ -25,6 +25,7 @@ and show the output. Bug fixes carry a regression test that fails before the fix
 
 - No `any`, no floating promises, exhaustive `switch` over unions.
 - No secret value ever reaches an MCP result, operator JSON, audit row, log line, or email.
+- Operator identifiers (Neon slugs, Linear workspace URLs, home paths) stay in `.env.ops`, never in git.
 - No em-dashes in user-facing copy. Plain, direct, specific.
 - Schema changes are expand-only and land in both `src/store/schema.ts` and `migrations/`.
 - The console client under `src/hosted/client/` is compiled into the committed bundle by

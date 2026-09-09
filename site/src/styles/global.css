@@ -1,17 +1,15 @@
-@import "@fontsource/fraunces/400.css";
-@import "@fontsource/fraunces/700.css";
-@import "@fontsource/ibm-plex-sans/400.css";
-@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
 @import "@fontsource/ibm-plex-mono/400.css";
 
 /*
- * Colour tokens (--bg, --fg, --accent, ...) are emitted inline by Base.astro from
- * src/brand-visual.ts so the site and the console share one source. --warn and --info
- * are used with fallbacks until the token file provides them.
+ * Colour tokens (--bg, --fg, --accent, --warn, --info, ...) are emitted inline by
+ * Base.astro from src/brand-visual.ts so the site and the console share one source.
  */
 :root {
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: Inter, Helvetica, Arial, sans-serif;
+  --font-body: Inter, Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   --radius: 10px;
   --radius-sm: 8px;
@@ -137,12 +135,35 @@ nav.primary .brand {
   gap: 0.5rem;
   color: var(--fg) !important;
   text-decoration: none;
-  font-weight: 600;
+  font-weight: 700;
+  font-family: Inter, Helvetica, Arial, sans-serif;
+  letter-spacing: -0.03em;
 }
 
 .brand img {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
+}
+
+.brand-mark-on-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-mark-on-light {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .brand-mark-on-dark {
+    display: block;
+  }
+}
+
+:root[data-theme="dark"] .brand-mark-on-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-mark-on-dark {
+  display: block;
 }
 
 .footer-note {
@@ -419,8 +440,8 @@ caption {
 }
 
 .pill-warn {
-  background: color-mix(in oklab, var(--warn, #b7791f) 25%, var(--bg-elev));
-  border-color: color-mix(in oklab, var(--warn, #b7791f) 50%, var(--line));
+  background: color-mix(in oklab, var(--warn) 25%, var(--bg-elev));
+  border-color: color-mix(in oklab, var(--warn) 50%, var(--line));
 }
 
 .eyebrow {

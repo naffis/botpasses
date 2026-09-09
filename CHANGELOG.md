@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Site and console: official brand. Navy `#14213D`, teal `#00C2A8`, Inter wordmark `botpasses` (no `.com`). Navy ticket at `/mark.svg`; white ticket at `/mark-on-dark.svg` (dark surfaces and social cards). Favicon is the simplified eyes, perforation, and barcode on a navy tile. The local `vault serve` console uses the same tokens. Social cards and home-screen icons rebuild from the official rasters (`node site/scripts/og.mjs`, `node site/scripts/write-icons.mjs`).
+- Site: the homepage, social cards, and webmanifest drop the dangling "It never gets the key." The second sentence is now the same claim as the FAQ: the model does not get the key.
+- Site: social cards and icons. `/og.png` is a 1200x630 card that names Stripe, Slack, and GitHub. `/og-square.png` covers LinkedIn, Slack, and iMessage square slots. `/logo.png` is the JSON-LD Organization logo (no longer the landscape card). Android Chrome 192/512 icons and `/site.webmanifest` ship next to the existing favicon and Apple touch icon. Rebuild with `node site/scripts/og.mjs` and `node site/scripts/write-icons.mjs`.
+- Repository: tracked files must not contain a local home path, a Linear workspace URL, or a Neon project-slug shape. Operator identifiers stay in gitignored `.env.ops`. The check scans for those shapes so the real values are not stored in the test.
 - Site: FAQ, homepage FAQ, and the grant-vault definition now say the model does not get the key.
 - Docs: root `SECURITY.md` tells researchers to email `security@botpasses.com` (same process as the site disclosure page). Ops and plan docs no longer name a Neon project slug, a Linear workspace URL, or a local home path. Those identifiers live in gitignored `.env.ops` (see `.env.ops.example`). User-facing copy now says the model does not get the key.
 - Site: the homepage hero rotates the named API (Stripe, Slack, GitHub, and dozens more) so the promise is not Stripe-only. The highlight sizes to the current name so the period stays next to the word. The first paint and no-JS heading stay "Stripe". Motion stops when the system asks for reduced motion, the tab is hidden, or the word is hovered.

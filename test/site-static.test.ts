@@ -23,7 +23,7 @@ test("isPublicSitePath accepts canonical, .html, and trailing-slash forms of sit
   for (const p of ["/", "/index.html", "/security", "/security.html", "/security/", "/docs", "/docs/", "/docs/start.html"]) {
     assert.equal(isPublicSitePath(p), true, p);
   }
-  for (const p of ["/llms.txt", "/llms-full.txt", "/.well-known/security.txt", "/security.txt", "/sitemap.xml", "/sitemap-index.xml", "/sitemap-0.xml", "/favicon.ico", "/apple-touch-icon.png", "/_astro/x.css", "/pagefind/pagefind.js"]) {
+  for (const p of ["/llms.txt", "/llms-full.txt", "/.well-known/security.txt", "/security.txt", "/sitemap.xml", "/sitemap-index.xml", "/sitemap-0.xml", "/favicon.ico", "/apple-touch-icon.png", "/favicon.svg", "/mark.svg", "/mark-on-dark.svg", "/og.png", "/og-square.png", "/logo.png", "/android-chrome-192x192.png", "/android-chrome-512x512.png", "/site.webmanifest", "/_astro/x.css", "/pagefind/pagefind.js"]) {
     assert.equal(isPublicSitePath(p), true, p);
   }
   for (const p of ["/console", "/console/", "/api/items", "/mcp", "/sign-in", "/anything"]) {
@@ -35,7 +35,7 @@ test("staticHeaders: html revalidates, _astro is immutable, other assets live an
   assert.equal(staticHeaders("/site/dist/index.html")["cache-control"], "no-cache");
   assert.equal(staticHeaders("/site/dist/docs/start.html")["cache-control"], "no-cache");
   assert.equal(staticHeaders("/site/dist/_astro/claude.abc12345.css")["cache-control"], "public, max-age=31536000, immutable");
-  assert.equal(staticHeaders("/site/dist/_astro/fraunces-latin-700-normal.CEOla-zY.woff2")["cache-control"], "public, max-age=31536000, immutable");
+  assert.equal(staticHeaders("/site/dist/_astro/inter-latin-700-normal.CEOla-zY.woff2")["cache-control"], "public, max-age=31536000, immutable");
   assert.equal(staticHeaders("/site/dist/favicon.svg")["cache-control"], "public, max-age=3600");
   assert.equal(staticHeaders("/site/dist/pagefind/pagefind.js")["cache-control"], "public, max-age=3600");
   const html = staticHeaders("/site/dist/index.html");
@@ -57,6 +57,7 @@ test("staticHeaders knows fonts, wasm, pagefind chunks, txt, and xml", () => {
   assert.equal(type("sitemap-0.xml"), "application/xml; charset=utf-8");
   assert.equal(type("favicon.ico"), "image/x-icon");
   assert.equal(type("apple-touch-icon.png"), "image/png");
+  assert.equal(type("site.webmanifest"), "application/manifest+json");
   assert.equal(type("a.unknown"), "application/octet-stream");
 });
 

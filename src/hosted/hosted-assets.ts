@@ -12,8 +12,9 @@ export const CONSOLE_JS = CONSOLE_BUNDLE_JS;
 export const COLLECT_JS = COLLECT_BUNDLE_JS;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-/** Brand mark, served so the console rail does not depend on the marketing root's favicon. */
+/** Brand marks, served so the console rail does not depend on the marketing root. */
 export const MARK_SVG = readFileSync(join(HERE, "..", "brand-assets", "mark.svg"), "utf8");
+export const MARK_ON_DARK_SVG = readFileSync(join(HERE, "..", "brand-assets", "mark-on-dark.svg"), "utf8");
 
 export const AUTH_CSS = `.auth-body {
   min-height: 100vh;
@@ -53,7 +54,14 @@ figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 0.4rem; }
 `;
 
 /** First-party files under `/assets/`, keyed by their plain file name. */
-export type AssetName = "auth.css" | "console.css" | "auth.js" | "console.js" | "collect.js" | "mark.svg";
+export type AssetName =
+  | "auth.css"
+  | "console.css"
+  | "auth.js"
+  | "console.js"
+  | "collect.js"
+  | "mark.svg"
+  | "mark-on-dark.svg";
 
 export type HostedAsset = {
   type: string;
@@ -72,6 +80,7 @@ const SOURCES: Record<AssetName, { type: string; body: string }> = {
   "console.js": { type: "text/javascript; charset=utf-8", body: CONSOLE_JS },
   "collect.js": { type: "text/javascript; charset=utf-8", body: COLLECT_JS },
   "mark.svg": { type: "image/svg+xml", body: MARK_SVG },
+  "mark-on-dark.svg": { type: "image/svg+xml", body: MARK_ON_DARK_SVG },
 };
 
 /** Eight hex characters of the body's SHA-256: enough to change on every edit, short in the URL. */

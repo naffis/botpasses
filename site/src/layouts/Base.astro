@@ -1,6 +1,6 @@
 ---
 import "../styles/global.css";
-import fraunces700 from "@fontsource/fraunces/files/fraunces-latin-700-normal.woff2?url";
+import inter700 from "@fontsource/inter/files/inter-latin-700-normal.woff2?url";
 import { BRAND_HEX, BRAND_HEX_LIGHT, cssVariables } from "../../../src/brand-visual.ts";
 import {
   GITHUB,
@@ -29,6 +29,7 @@ const path = Astro.url.pathname.replace(/\.html$/, "").replace(/^\/index$/, "/")
 const site = Astro.site?.toString().replace(/\/$/, "") ?? "https://botpasses.com";
 const canonical = new URL(path, `${site}/`).toString();
 const ogImage = new URL("/og.png", `${site}/`).toString();
+const ogSquare = new URL("/og-square.png", `${site}/`).toString();
 const llms = new URL("/llms.txt", `${site}/`).toString();
 const llmsFull = new URL("/llms-full.txt", `${site}/`).toString();
 // One token source for site and console: src/brand-visual.ts.
@@ -64,10 +65,12 @@ const breadcrumbLd = crumbs && crumbs.length > 0
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/android-chrome-192x192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <link rel="alternate" type="text/plain" href={llms} title="LLM-readable site index" />
     <link rel="alternate" type="text/plain" href={llmsFull} title="LLM-readable full documentation" />
-    <link rel="preload" href={fraunces700} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={inter700} as="font" type="font/woff2" crossorigin />
     <style set:html={tokens}></style>
     <meta property="og:type" content={ogType} />
     <meta property="og:locale" content="en_US" />
@@ -76,8 +79,14 @@ const breadcrumbLd = crumbs && crumbs.length > 0
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={`Botpasses. ${PRODUCT_TAGLINE}`} />
+    <meta property="og:image" content={ogSquare} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="1200" />
     <meta property="og:image:alt" content={`Botpasses. ${PRODUCT_TAGLINE}`} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={fullTitle} />
@@ -98,7 +107,7 @@ const breadcrumbLd = crumbs && crumbs.length > 0
     <header class="site-header">
       <div class="wrap">
         <nav class="primary" aria-label="Primary">
-          <a class="brand" href="/"><img src="/favicon.svg" alt="" width="24" height="24" /> Botpasses</a>
+          <a class="brand" href="/"><img class="brand-mark-on-light" src="/mark.svg" alt="" width="32" height="32" /><img class="brand-mark-on-dark" src="/mark-on-dark.svg" alt="" width="32" height="32" /> botpasses</a>
           <a href="/docs">Docs</a>
           <a href="/security">Security</a>
           <a href={GITHUB} rel="noopener">GitHub</a>

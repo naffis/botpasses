@@ -32,7 +32,9 @@ test("bundles are plain JS with no leftover module syntax and parse cleanly", ()
   }
   assert.equal(hostedAsset("/assets/console.js")?.body, CONSOLE_JS);
   assert.equal(hostedAsset("/assets/mark.svg")?.type, "image/svg+xml");
-  assert.match(hostedAsset("/assets/mark.svg")?.body ?? "", /<svg/);
+  assert.match(hostedAsset("/assets/mark.svg")?.body ?? "", /#14213D/);
+  assert.equal(hostedAsset("/assets/mark-on-dark.svg")?.type, "image/svg+xml");
+  assert.match(hostedAsset("/assets/mark-on-dark.svg")?.body ?? "", /ticket-on-dark/);
 });
 
 test("moduleToScript strips types, imports, references, and export keywords", () => {

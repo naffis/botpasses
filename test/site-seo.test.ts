@@ -132,6 +132,8 @@ test("social and theme meta tags are complete on every page", () => {
     assert.equal(attr(p.html, /<meta property="og:url" content="([^"]+)"/), canonical, `${p.url} og:url`);
     assert.equal(attr(p.html, /<meta property="og:site_name" content="([^"]+)"/), "Botpasses", p.url);
     assert.equal(attr(p.html, /<meta property="og:image" content="([^"]+)"/), `${SITE}/og.png`, p.url);
+    assert.match(p.html, /<meta property="og:image" content="https:\/\/botpasses\.com\/og-square\.png"/, `${p.url} og:image square`);
+    assert.equal(attr(p.html, /<meta property="og:image:type" content="([^"]+)"/), "image/png", p.url);
     assert.equal(attr(p.html, /<meta property="og:image:width" content="([^"]+)"/), "1200", p.url);
     assert.equal(attr(p.html, /<meta property="og:image:height" content="([^"]+)"/), "630", p.url);
     assert.ok(attr(p.html, /<meta property="og:image:alt" content="([^"]+)"/), `${p.url} og:image:alt`);
@@ -143,12 +145,13 @@ test("social and theme meta tags are complete on every page", () => {
     assert.equal(attr(p.html, /<meta property="og:locale" content="([^"]+)"/), "en_US", p.url);
     assert.match(p.html, /<link rel="icon" href="\/favicon\.ico"/, `${p.url} favicon.ico`);
     assert.match(p.html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/, `${p.url} apple-touch-icon`);
+    assert.match(p.html, /<link rel="manifest" href="\/site\.webmanifest"/, `${p.url} webmanifest`);
     assert.match(p.html, /<link rel="alternate" type="text\/plain" href="https:\/\/botpasses\.com\/llms\.txt"/, `${p.url} llms.txt`);
     assert.match(p.html, /<link rel="alternate" type="text\/plain" href="https:\/\/botpasses\.com\/llms-full\.txt"/, `${p.url} llms-full.txt`);
-    assert.equal(attr(p.html, /<meta name="theme-color" content="([^"]+)"/), "#0B0F0C", p.url);
-    assert.match(p.html, /<link rel="preload" href="\/_astro\/fraunces-latin-700-normal\.[^"]+\.woff2" as="font"/, `${p.url} preload`);
-    assert.match(p.html, /:root \{ color-scheme: light dark; --bg: #F4F7F4;/, `${p.url} inline tokens`);
-    assert.match(p.html, /prefers-color-scheme: dark\) \{ :root:not\(\[data-theme="light"\]\) \{ --bg: #0B0F0C;/, `${p.url} dark tokens`);
+    assert.equal(attr(p.html, /<meta name="theme-color" content="([^"]+)"/), "#0B1020", p.url);
+    assert.match(p.html, /<link rel="preload" href="\/_astro\/inter-latin-700-normal\.[^"]+\.woff2" as="font"/, `${p.url} preload`);
+    assert.match(p.html, /:root \{ color-scheme: light dark; --bg: #F4F6FA;/, `${p.url} inline tokens`);
+    assert.match(p.html, /prefers-color-scheme: dark\) \{ :root:not\(\[data-theme="light"\]\) \{ --bg: #0B1020;/, `${p.url} dark tokens`);
     assert.doesNotMatch(p.html, /<link rel="stylesheet" href="\/_astro\//, `${p.url} stylesheet should be inlined`);
   }
 });
@@ -214,6 +217,7 @@ test("indexable pages ship Organization and WebSite JSON-LD; the homepage and do
       continue;
     }
     assert.match(p.html, /"@type":"Organization"/, `${p.url} Organization`);
+    assert.match(p.html, /"logo":"https:\/\/botpasses\.com\/logo\.png"/, `${p.url} Organization.logo`);
     assert.match(p.html, /"@type":"WebSite"/, `${p.url} WebSite`);
   }
   const home = all.find((p) => p.url === "/")?.html ?? "";
@@ -258,8 +262,27 @@ test("llms.txt and security.txt ship with the site", () => {
   assert.equal(readFileSync(join(dist, "security.txt"), "utf8"), sec, "/security.txt must be the same bytes as the well-known file");
   const ico = readFileSync(join(dist, "favicon.ico"));
   assert.equal(ico.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0])), true, "favicon.ico is an ICO");
-  const apple = readFileSync(join(dist, "apple-touch-icon.png"));
-  assert.equal(apple.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), true, "apple-touch-icon is a PNG");
+  const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  function pngSize(file: string): { w: number; h: number } {
+    const buf = readFileSync(join(dist, file));
+    assert.equal(buf.subarray(0, 8).equals(pngMagic), true, `${file} is a PNG`);
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  }
+  assert.deepEqual(pngSize("apple-touch-icon.png"), { w: 180, h: 180 });
+  assert.deepEqual(pngSize("og.png"), { w: 1200, h: 630 });
+  assert.deepEqual(pngSize("og-square.png"), { w: 1200, h: 1200 });
+  assert.deepEqual(pngSize("logo.png"), { w: 512, h: 512 });
+  assert.deepEqual(pngSize("android-chrome-192x192.png"), { w: 192, h: 192 });
+  assert.deepEqual(pngSize("android-chrome-512x512.png"), { w: 512, h: 512 });
+  const manifest = JSON.parse(readFileSync(join(dist, "site.webmanifest"), "utf8")) as {
+    name: string;
+    icons: { src: string; sizes: string }[];
+  };
+  assert.equal(manifest.name, "Botpasses");
+  assert.deepEqual(
+    manifest.icons.map((i) => i.src),
+    ["/android-chrome-192x192.png", "/android-chrome-512x512.png"],
+  );
 });
 
 test("404 page is real HTML, noindex, and not in the sitemap", () => {

@@ -1,0 +1,17 @@
+---
+description: >
+  Keep operator-only infra names out of git. Neon slugs, Linear workspace
+  URLs, and home paths belong in gitignored .env.ops.
+alwaysApply: true
+---
+
+# Operator identifiers stay out of git
+
+These are not app runtime secrets. They still must not land in the public tree.
+
+- Put them in gitignored `.env.ops` (copy `.env.ops.example`). Empty values only in the example file.
+- Never commit a Neon project slug, a `linear.app/<workspace>/` URL, or a `/Users/<name>/` (or `/home/<name>/`) path.
+- Docs, tests, comments, fixtures, and commit messages name the env var (`NEON_PROD_PROJECT`) or a ticket id (`BOTP-10`), not the private value.
+- Do not re-introduce a leaked value as a regex or string to "prove it is gone." Scan for the shape instead (`scripts/ops-identifiers.ts`).
+
+If you find one already committed, stop and say so. Deleting the line does not erase git history.
