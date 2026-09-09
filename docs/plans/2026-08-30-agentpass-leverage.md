@@ -15,7 +15,7 @@ isProject: false
 
 **Yes, it makes sense** — as an extra authorization *protocol*, not as the product. [AgentPass](https://agentpass.com/) ([spec v0.1 draft](https://agentpass.com/spec), [clerk/agentpass](https://github.com/clerk/agentpass)) is Clerk’s open protocol for **task-scoped agent authorization**. It does not store view-once API keys. The spec banner says it is not production-audited. We do not make v1 depend on it.
 
-This is locked in the existing product plan ([grant_vault_product_1a24ec63.plan.md](/Users/naffis/.cursor/plans/grant_vault_product_1a24ec63.plan.md)) as **D-10** and **T-11**. This note is the research decision, not a new Build.
+This is locked in the existing product plan (`grant_vault_product_1a24ec63.plan.md`) as **D-10** and **T-11**. This note is the research decision, not a new Build.
 
 ## What AgentPass actually is
 

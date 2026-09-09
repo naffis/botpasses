@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Site: FAQ, homepage FAQ, and the grant-vault definition now say the model does not get the key.
+- Docs: root `SECURITY.md` tells researchers to email `security@botpasses.com` (same process as the site disclosure page). Ops and plan docs no longer name a Neon project slug, a Linear workspace URL, or a local home path. Those identifiers live in gitignored `.env.ops` (see `.env.ops.example`). User-facing copy now says the model does not get the key.
+- Site: the homepage hero rotates the named API (Stripe, Slack, GitHub, and dozens more) so the promise is not Stripe-only. The highlight sizes to the current name so the period stays next to the word. The first paint and no-JS heading stay "Stripe". Motion stops when the system asks for reduced motion, the tab is hidden, or the word is hovered.
 - Changed: the Agents list groups standing approvals by credential. One Clear control ends the pair (every grant for that agent and credential), instead of repeating the same row for each grant. Hosts and last used stay on the grouped row.
 - Site: SEO and AIO/GEO. Every public page ships Organization and WebSite JSON-LD, `llms.txt` / `llms-full.txt` alternate links, and `index, follow`. The homepage defines Botpasses in the first sentence and adds FAQPage, HowTo, SoftwareApplication, and a grant-vault DefinedTerm. Docs pages add TechArticle (FAQ page also FAQPage). `llms.txt` is generated from the docs collection; `llms-full.txt` is every docs page in one file. Production `robots.txt` points AI crawlers at both and lists `Sitemap: https://botpasses.com/sitemap.xml`. Conventional discovery URLs that crawlers and browsers request are real files, not JSON 404s: `/sitemap.xml` (the public urlset), `/favicon.ico`, `/apple-touch-icon.png`, and `/security.txt` (same bytes as `/.well-known/security.txt`). Entries carry `lastmod`.
 - Fixed: API hostnames must be DNS names (`api.example.com`). A host with spaces, shell characters, a path, or a port is refused at `assertAllowedHostname`, so local `setup`, `find_items`, and `http_request` cannot put `vault set --host api.example.com;…` in the result.
@@ -85,7 +88,7 @@
 - Local plane: `http_request` honours `client_id`, `timeout_ms`, and `dry_run` with the hosted payload shapes and returns `origin_status` and `origin_headers`; `vault set` takes the hosted inject vocabulary and `--username` (HTTP Basic user, OAuth client id, or AWS access key id; local schema 3 adds the column); `list_items` shows the username.
 - Fixed: the production image builds again. The site stage now carries the three repository files the site build reads (`src/brand-visual.ts`, `CHANGELOG.md`, `docs/security/threat-model.md`); `.dockerignore` lets those two Markdown files through. CI gained an `image` job that runs `docker build` and checks the image exits 78 on an unsafe configuration.
 
-## 0.5.0 — 2026-09-04
+## 0.5.0 (2026-09-04)
 
 - Console: the sidebar sign-in links are hidden while signed in; the Connect account action shows only on OAuth client secrets; the credential drawer shows created and updated times (`created_at`, `updated_at` on `/api/items`); approving or denying re-renders the inbox even while another card's limits form is open; a pending approval's button reads Deny. Site: homepage spacing and shorter examples in How it works; docs name the Credentials panel; the docs breadcrumb no longer repeats a section that matches the page.
 - Infra: the site builds on Astro 7 (`npm --prefix site audit` was failing on advisories fixed only in 7.1+); `@astrojs/markdown-remark` is installed for the docs table rehype plugin. The `secrets-scan` CI job has `pull-requests: read` so gitleaks can list the PR's commits. `npm audit` in CI and the prod deploy runs through `scripts/audit.sh` (90 s per attempt, three attempts) because the registry's advisory endpoints sometimes hang; in CI the audits are their own `audit` job so they cannot consume the `test` job's time budget.
@@ -145,7 +148,7 @@
 
 - Public and internal MCP + HTTP API reference: hosted tools (`http.request`, find, grant), operator `/api`, OAuth, local `vault serve`. No `get_secret`.
 
-## 0.4.1 — 2026-08-31
+## 0.4.1 (2026-08-31)
 
 Grant-vault hardening: honest trust model, KMS-wrapped KEK, surface locks.
 
@@ -157,7 +160,7 @@ Grant-vault hardening: honest trust model, KMS-wrapped KEK, surface locks.
 - Local envelopes bind AAD to the secret name (migrate-on-open). `vault serve` requires `HMAC-SHA256(master, "botpasses-loopback")` on `/api` and `POST /mcp`.
 - CI: `npm audit --omit=dev --audit-level=high`. Dependabot weekly for npm.
 
-## 0.4.0 — 2026-08-31
+## 0.4.0 (2026-08-31)
 
 Marketing site, first-party operator accounts, same-origin OAuth, and the Access panel. Clerk is removed.
 
@@ -168,7 +171,7 @@ Marketing site, first-party operator accounts, same-origin OAuth, and the Access
 - Env: `VAULT_SESSION_SECRET`, `VAULT_OIDC_PRIVATE_JWK`. No `CLERK_*`.
 - ADRs [0003](docs/adr/0003-first-party-operator-identity.md), [0004](docs/adr/0004-same-origin-oauth-as.md), [0005](docs/adr/0005-access-ledger.md).
 
-## 0.3.4 — 2026-08-31
+## 0.3.4 (2026-08-31)
 
 MCP tells the model when to use Botpasses, so the user does not have to paste a procedure.
 
@@ -179,7 +182,7 @@ MCP tells the model when to use Botpasses, so the user does not have to paste a 
 - Tool and param descriptions state when to use each tool versus siblings.
 - Operator console and README: after the Grok connector is on, ask for the task in plain language.
 
-## 0.3.3 — 2026-08-31
+## 0.3.3 (2026-08-31)
 
 Public origins are **botpasses.com**, not botpasses.ai.
 
@@ -188,16 +191,16 @@ Public origins are **botpasses.com**, not botpasses.ai.
 - Hosted boot requires `VAULT_PUBLIC_URL` to match the deploy plane origin. MCP, CLI, and emails never use a platform default hostname.
 - Canonical constants: `src/brand.ts`. Identity ADR: [0002](docs/adr/0002-botpasses-com-origin.md).
 
-## 0.3.2 — 2026-08-30
+## 0.3.2 (2026-08-30)
 
-Agents can find named credentials and operators can enter a missing key on Botpasses without the model seeing the value.
+Agents can find named credentials and operators can enter a missing key on Botpasses. The model does not get the key.
 
 - MCP `find_items` matches an exact `item_name` and/or exact API hostname. Results are `found`, `ambiguous` (up to 5, with `allowed_hosts`), `host_mismatch`, or `need_item`.
 - A miss returns a path-only `collect_url` (`/collect/{needId}`, no query HMAC). Sign in on Botpasses and POST fulfill as the operator. Model and trusted tokens cannot fulfill.
 - Fulfill stores the item and an active prompt grant for the requesting client, then `http.request` injects in-process. Local MCP miss tells the operator to `vault store` and does not mint a collect URL.
 - Inbox lists pending needs next to grants. Console store form uses an inject select and host example `api.spotify.com`.
 
-## 0.3.1 — 2026-08-30
+## 0.3.1 (2026-08-30)
 
 Hosted console and Grok Bot can run without Clerk.
 
@@ -206,7 +209,7 @@ Hosted console and Grok Bot can run without Clerk.
 - Process env: `VAULT_BOOTSTRAP_TOKEN`.
 - GitHub repository is `naffis/botpasses` (old `naffis/agent-vault` URL redirects).
 
-## 0.3.0 — 2026-08-30
+## 0.3.0 (2026-08-30)
 
 Product identity is **Botpasses**. Hosted origins are `https://botpasses.ai` and `https://staging.botpasses.ai`.
 
@@ -216,7 +219,7 @@ Product identity is **Botpasses**. Hosted origins are `https://botpasses.ai` and
 - Hosted email From comes from `VAULT_EMAIL_FROM` (required at boot when `RESEND_API_KEY` is set).
 - Process env prefix stays `VAULT_*`. AgentPass paths are unchanged.
 
-## 0.2.0 — 2026-08-30
+## 0.2.0 (2026-08-30)
 
 Hosted multi-user grant vault (Fly + Neon + Cloudflare) alongside the local sqlite CLI.
 

@@ -207,7 +207,7 @@ Reject: Clerk; Better Auth; other SaaS IdPs; hand-rolled authorize/token; email-
 
 ### Acceptance criteria
 
-- **AC-01.** Fixture dist: `GET /` 200, H1 “Named credentials for agents. The model never sees the value.”, Create account → `/sign-up`, Sign in → `/sign-in`, no `Operator token`.
+- **AC-01.** Fixture dist: `GET /` 200, H1 says the model does not get the key, Create account → `/sign-up`, Sign in → `/sign-in`, no `Operator token`.
 - **AC-02.** `GET /console` 200, matches `Issue Grok Bot token`, `data-testid="console-signin"`. `vault_op_token` remains the bootstrap key.
 - **AC-03.** `GET /docs/start` and `GET /docs` 200. `/pagefind/` files exist.
 - **AC-04.** `GET /privacy`, `/terms`, `/security`, `/design` 200. Privacy names Fly, Neon, Cloudflare, Resend, Sentry and does not name Clerk. Design shows token hex and the mark.
@@ -389,7 +389,7 @@ CLI: RFC 8628 `/device` after TOTP, or bootstrap `avt_`.
 - `/oauth/authorize` `/oauth/token` `/oauth/register` `/oauth/revoke` `/oauth/device/auth` `/oauth/session/end`
 - `/favicon.svg` `/robots.txt` `/sitemap.xml` `/og.png`
 
-Homepage H1: “Named credentials for agents. The model never sees the value.”
+Homepage H1: the model does not get the key (person plus a concrete API, not a schema label).
 
 Privacy names Fly, Neon, Cloudflare, Resend, Sentry. Not Clerk. Not Better Auth.
 

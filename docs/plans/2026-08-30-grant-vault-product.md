@@ -7,7 +7,7 @@ This file is the create-plan research twin. Do not implement from this file alon
 ## 1. Summary
 
 - Problem: Local unauthenticated kernel cannot serve Grok/Claude/ChatGPT/apps, cannot store logins, cannot offer flexible grants, and cannot recover view-once keys.
-- Outcome: Multi-user hosted grant vault: store once, approve with policies, inject via our connector or trusted resolve, model never sees values.
+- Outcome: Multi-user hosted grant vault: store once, approve with policies, inject via our connector or trusted resolve. The model does not get those keys.
 - Approach: Keep the Node 22 TypeScript kernel; add Clerk, Resend, `VaultStore` (sqlite local / Neon hosted), remote MCP, connector with SSRF guards. Deploy on Fly Machines behind Cloudflare. Do not rewrite onto D1/Workers.
 
 ## 2. Scope

@@ -41,7 +41,9 @@ test("AC-01 fixture dist GET / is marketing", async () => {
     const res = await fetch(`${ctx.base}/`);
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.match(html, /<h1>Your agent can call Stripe\. It never gets the key\.<\/h1>/);
+    assert.match(html, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*It never gets the key\.\s*<\/h1>/);
+    assert.match(html, /data-hero-rotate="/);
+    assert.match(html, /class="hero-rotate-word">Stripe<\/span>/);
     assert.match(html, /href="\/sign-up"/);
     assert.match(html, /href="\/sign-in"/);
     assert.doesNotMatch(html, /Operator token/);

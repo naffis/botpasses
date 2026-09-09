@@ -1,12 +1,12 @@
 # AGENTS.md
 
-Cross-tool baseline conventions, read by Cursor and other agents. Keep it THIN — only what
+Cross-tool baseline conventions, read by Cursor and other agents. Keep it THIN: only what
 applies broadly. Situational knowledge belongs in a skill (loaded on demand), not here.
 Litmus test per line: "would removing this cause an agent to make a mistake?" If not, cut it.
 
 ## Stack
 
-- TypeScript (Node.js 22.14+, ESM, `--experimental-strip-types` — no compile step for run)
+- TypeScript (Node.js 22.14+, ESM, `--experimental-strip-types`. No compile step for run)
 - SQLite vault at `$VAULT_HOME` (default `$HOME/.botpasses`) · AES-256-GCM envelope encryption
 - MCP (stdio + HTTP) + CLI (`npx vault` / `npm run vault -- <command>`) + loopback operator console
 - Hosted origins: `https://botpasses.com`, `https://staging.botpasses.com`. Never a platform default hostname.
@@ -34,7 +34,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 ## Workflow
 
 - Smallest safe change; follow existing patterns; verify with `npm test && npm run typecheck` before claiming done.
-- Integration trunk: `dev`. Parallel agents share one local trunk checkout — no per-agent branches/worktrees/stashes; when asked to commit, land all eligible dirty files (`committing-on-shared-trunk`).
+- Integration trunk: `dev`. Parallel agents share one local trunk checkout. No per-agent branches, worktrees, or stashes; when asked to commit, land all eligible dirty files (`committing-on-shared-trunk`).
 - Branch/PR etiquette: PRs only when explicitly asked · target `dev` · conventional commits.
 
 ## Do not

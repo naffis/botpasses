@@ -62,7 +62,15 @@ test("site dist has every documented URL", () => {
 
 test("homepage sells the product and links the right places", () => {
   const home = page("index.html");
-  assert.match(home, /<h1>Your agent can call Stripe\. It never gets the key\.<\/h1>/);
+  assert.match(home, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*It never gets the key\.\s*<\/h1>/);
+  assert.match(home, /data-hero-rotate="/);
+  assert.match(home, /class="hero-rotate-word">Stripe<\/span>/);
+  assert.doesNotMatch(home, /hero-rotate-sizer/);
+  assert.match(home, /class="hero-rotate-word">Stripe<\/span><\/span>\. It never gets the key\./);
+  for (const service of ["Slack", "GitHub", "Salesforce", "Twilio", "Shopify", "Notion"]) {
+    assert.match(home, new RegExp(`data-hero-rotate="[^"]*${service}`), service);
+  }
+  assert.match(home, /<script type="module" src="\/_astro\/[^"]+\.js"/);
   assert.match(home, /Create account/);
   assert.doesNotMatch(home, /Operator token/);
   assert.match(home, /How it works/);
@@ -79,6 +87,9 @@ test("homepage sells the product and links the right places", () => {
   assert.match(home, /github\.com\/naffis\/botpasses/);
   assert.match(home, /Free while in beta/);
   assert.match(home, /Botpasses is a grant-vault for AI agents/);
+  assert.match(home, /The model does not get the key/);
+  assert.doesNotMatch(home, /The model never sees the value/);
+  assert.doesNotMatch(home, /The model never receives the value/);
   assert.match(home, /What is Botpasses\?/);
   assert.match(home, /Is this a password manager\?/);
   assert.match(home, /Composio/);
@@ -172,6 +183,9 @@ test("docs pages keep their tested content", () => {
   for (const id of ["host_mismatch", "mfa_required", "the-connect-card-keeps-appearing", "409-on-an-approval-code", "need_item-and-collect_url", "429-rate-limit"]) {
     assert.match(trouble, new RegExp(`id="${id}"`), id);
   }
+  const faq = text(page("docs/faq.html"));
+  assert.match(faq, /The model does not get the key/);
+  assert.doesNotMatch(faq, /The model never sees the value/);
   const index = page("docs.html");
   assert.match(index, /MCP tools/);
   assert.match(index, /HTTP API/);

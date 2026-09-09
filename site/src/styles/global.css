@@ -444,6 +444,26 @@ caption {
   max-width: 62ch;
 }
 
+.hero-rotate {
+  display: inline-block;
+  vertical-align: baseline;
+  background: var(--accent-dim);
+  color: var(--fg);
+  border-radius: 0.18em;
+  padding: 0.02em 0.28em 0.1em;
+}
+
+.hero-rotate-word {
+  display: inline-block;
+  white-space: nowrap;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.hero-rotate.is-leaving .hero-rotate-word {
+  opacity: 0;
+  transform: translateY(-0.28em);
+}
+
 .hero-actions {
   display: flex;
   flex-wrap: wrap;

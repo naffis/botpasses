@@ -22,7 +22,7 @@ Gate results on this branch: `npm ci` 0 vulnerabilities; `tsc --noEmit` clean; `
 
 ## 1. What is built, and what it is trying to be
 
-**The promise.** An operator stores a named credential once. An AI agent (Claude, Cursor, ChatGPT, Grok) connects over MCP and calls `http.request`. Botpasses finds the credential, asks the operator to approve if needed, makes the outbound HTTPS call with the credential attached, and returns a redacted body. The model never sees the value. Not a password manager. Not zero-knowledge. A "grant vault" that decrypts only at approved inject.
+**The promise.** An operator stores a named credential once. An AI agent (Claude, Cursor, ChatGPT, Grok) connects over MCP and calls `http.request`. Botpasses finds the credential, asks the operator to approve if needed, makes the outbound HTTPS call with the credential attached, and returns a redacted body. The model does not get the key. Not a password manager. Not zero-knowledge. A "grant vault" that decrypts only at approved inject.
 
 **What exists (hosted plane).**
 
@@ -107,7 +107,7 @@ Not found after looking: SQL injection (all parameterized), redirect following, 
 | D9 | P1 | Pre-TOTP session lingers and shows as a revocable orphan in Sessions. `HEAD /console` is 404. `favicon.svg` is served from the marketing root, so the console rail shows a broken image if `siteRoot` lacks it. | `operator-identity.ts:275,322`, `http.ts:295`, `static-site.ts:27` |
 | D10 | P1 | Site canonical URLs on 20 of 21 pages end in `.html` and the server 404s them; `/sitemap.xml` is listed but never emitted; robots has no `Sitemap:`; hashed `_astro/*` assets and the favicon are `cache-control: no-cache` because the `hashed` branch is unreachable. | `site/src/layouts/Base.astro:15`, `static-site.ts:30,62-77` |
 | D11 | P1 | Docs search input has no script. Pagefind (772 KB) is built, served, and CSP-allowed but never loaded. | `site/src/layouts/Docs.astro:18-21` |
-| D12 | P1 | MCP tool name `http.request` contains a dot; Anthropic and OpenAI function-name grammars are `^[a-zA-Z0-9_-]{1,64}$`. Some hosts sanitize or reject it, and every `next.tool: "http.request"` then names a tool the model never saw. | `hosted/mcp.ts:32`, `mcp-steer.ts` |
+| D12 | P1 | MCP tool name `http.request` contains a dot; Anthropic and OpenAI function-name grammars are `^[a-zA-Z0-9_-]{1,64}$`. Some hosts sanitize or reject it, and every `next.tool: "http.request"` then names a tool the model did not see. | `hosted/mcp.ts:32`, `mcp-steer.ts` |
 | D13 | P1 | Store dialog defaults Environment to `staging` even on the production plane, so the first secret lands where a production-bound agent cannot see it. | `operator-page.ts:156` |
 | D14 | P2 | `approveByCode` increments `attempts` on every pending challenge for each wrong code, so five typos lock out every pending approval in the org. | `kernel.ts:718-753` |
 | D15 | P2 | Hosted `session` grants are never marked `expired`; `list_grants` shows `active` with a past `expires_at`. Local MCP miss message says `vault store`; the command is `vault set`. | `kernel.ts`, `src/mcp.ts:151` |

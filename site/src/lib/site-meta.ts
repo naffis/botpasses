@@ -10,7 +10,7 @@ export const SECURITY_EMAIL = "security@botpasses.com";
 export const PRODUCT_DESCRIPTION =
   "Botpasses is a grant-vault for AI agents. Store an API key once. Claude, Cursor, ChatGPT, or Grok call the API over MCP; the key never enters the model, the chat, or the logs.";
 
-export const PRODUCT_TAGLINE = "Your agent can call Stripe. It never gets the key.";
+export const PRODUCT_TAGLINE = "Your agent can call Stripe, Slack, GitHub. It never gets the key.";
 
 export type JsonLd = Record<string, unknown>;
 
@@ -76,7 +76,7 @@ export function definedTermLd(): JsonLd {
     "@type": "DefinedTerm",
     name: "grant-vault",
     description:
-      "A vault that decrypts a credential only at an approved inject, to attach it to an outbound API call. The model never receives the value. Not zero-knowledge.",
+      "A vault that decrypts a credential only at an approved inject, to attach it to an outbound API call. The model does not get the key. Not zero-knowledge.",
     url: `${SITE_URL}/docs/explanation/why-the-model-never-sees-the-value`,
     inDefinedTermSet: {
       "@type": "DefinedTermSet",

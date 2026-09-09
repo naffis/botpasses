@@ -2,7 +2,7 @@
 
 Living document. Trust decision: [ADR 0006](../adr/0006-grant-vault-trust-model.md). KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md). Hardening after the 2026-09 audit: [ADR 0008](../adr/0008-security-hardening.md).
 
-Botpasses is a **grant-vault**. The model never sees secret values. The hosted process decrypts at approved inject. This is not a human password manager and it is not client-side encryption that the vendor cannot undo.
+Botpasses is a **grant-vault**. The model does not get secret values. The hosted process decrypts at approved inject. This is not a human password manager and it is not client-side encryption that the vendor cannot undo.
 
 ## Actors
 

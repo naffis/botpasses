@@ -7,7 +7,7 @@ order: 2
 
 ## What is Botpasses?
 
-Botpasses is a grant-vault for AI agents. You store an API key once. An agent asks to call an API. You approve. Botpasses attaches the key inside the vault, makes the call, and returns a redacted result. The model never sees the value. There is no `get_secret`.
+Botpasses is a grant-vault for AI agents. You store an API key once. An agent asks to call an API. You approve. Botpasses attaches the key inside the vault, makes the call, and returns a redacted result. The model does not get the key. There is no `get_secret`.
 
 ## Is this a password manager?
 

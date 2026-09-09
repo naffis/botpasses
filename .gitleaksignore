@@ -1,5 +1,5 @@
 # Commit-pinned gitleaks false positives. Each line is commit:file:rule:line. The values were
 # test fixtures (fake Slack tokens); the fixtures were renamed afterwards so new commits do not
 # trip the rule, but history keeps the old text and a dev-to-main scan walks that history.
-b4f6d0ec4e8429fb1c2b75385bf02f4a61a9689d:test/providers.test.ts:generic-api-key:254
-b4f6d0ec4e8429fb1c2b75385bf02f4a61a9689d:test/providers.test.ts:generic-api-key:256
+f4ad0496669dcc08ea2e3875fa0de5492c275c67:test/providers.test.ts:generic-api-key:254
+f4ad0496669dcc08ea2e3875fa0de5492c275c67:test/providers.test.ts:generic-api-key:256

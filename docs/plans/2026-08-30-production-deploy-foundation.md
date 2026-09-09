@@ -13,7 +13,7 @@ isProject: false
 
 # Production deploy: Fly + Neon + Cloudflare
 
-This updates the product plan ([grant_vault_product_1a24ec63.plan.md](/Users/naffis/.cursor/plans/grant_vault_product_1a24ec63.plan.md)) **D-06 / D-11 / T-01 / T-10**. Not a new product. No code until you ask to implement.
+This updates the product plan (`grant_vault_product_1a24ec63.plan.md`) **D-06 / D-11 / T-01 / T-10**. Not a new product. No code until you ask to implement.
 
 ## Direct answer
 

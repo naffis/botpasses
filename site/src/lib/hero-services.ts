@@ -1,0 +1,111 @@
+/**
+ * Names that rotate in the homepage hero ("Your agent can call {name}.").
+ * Stripe stays first so the no-JS heading and the first paint stay a concrete noun.
+ * Keep each name short enough for the reserved hero slot on a 320 px viewport.
+ */
+export const HERO_SERVICES = [
+  "Stripe",
+  "Slack",
+  "GitHub",
+  "Google",
+  "Spotify",
+  "Salesforce",
+  "HubSpot",
+  "Notion",
+  "Linear",
+  "Jira",
+  "Zendesk",
+  "Intercom",
+  "Twilio",
+  "Shopify",
+  "QuickBooks",
+  "OpenAI",
+  "Anthropic",
+  "AWS",
+  "Cloudflare",
+  "Vercel",
+  "Neon",
+  "Discord",
+  "LinkedIn",
+  "Gmail",
+  "Outlook",
+  "Teams",
+  "Zoom",
+  "Asana",
+  "Airtable",
+  "Figma",
+  "Datadog",
+  "Sentry",
+  "PayPal",
+  "Square",
+  "Segment",
+  "Mixpanel",
+  "Klaviyo",
+  "Contentful",
+  "Webflow",
+  "Calendly",
+  "DocuSign",
+  "Workday",
+  "Apollo",
+  "Resend",
+  "Postmark",
+  "MongoDB",
+  "Redis",
+  "Snowflake",
+  "BigQuery",
+  "Plaid",
+  "Adyen",
+  "Chargebee",
+  "Braze",
+  "Amplitude",
+  "Typeform",
+  "Monday",
+  "Dropbox",
+  "Box",
+  "Microsoft",
+  "SendGrid",
+  "Mailchimp",
+  "Supabase",
+  "Firebase",
+  "PagerDuty",
+  "Freshdesk",
+  "Pipedrive",
+  "NetSuite",
+  "Algolia",
+  "Pinecone",
+  "Replicate",
+  "Instagram",
+  "YouTube",
+  "Telegram",
+  "WhatsApp",
+  "Confluence",
+  "Xero",
+  "Braintree",
+  "WordPress",
+  "Canva",
+  "Adobe",
+  "GitLab",
+  "Auth0",
+  "Okta",
+  "Heroku",
+  "Render",
+  "Railway",
+  "Twitter",
+  "Facebook",
+  "PostHog",
+  "Crisp",
+] as const;
+
+export type HeroService = (typeof HERO_SERVICES)[number];
+
+export function nextHeroIndex(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return (index + 1) % length;
+}
+
+export function parseHeroServices(raw: string): string[] {
+  return raw
+    .split("|")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}

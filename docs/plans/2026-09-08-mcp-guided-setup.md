@@ -1,6 +1,6 @@
 # MCP guided setup (BOTP-10)
 
-Buildable twin of the 2026-09-08 plan. Ticket: [BOTP-10](BOTP-10).
+Buildable twin of the 2026-09-08 plan. Ticket: BOTP-10.
 
 ## Problem
 

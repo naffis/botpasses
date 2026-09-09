@@ -9,7 +9,7 @@ Task file: [`.loadout/tasks/key-discovery-and-store-prompt/TASK.md`](../../.load
 ## 1. Summary
 
 - Problem: Operators can store items on a crude hosted form, but agents cannot **find** the right named credential when names collide or nothing exists. A miss today is a 404 (`Unknown item`) with no operator prompt. There is no secure collect page for "the bot needs a Spotify token." Inject already exists (`http.request` / `vault run`) and must stay the only path that touches values.
-- Outcome: An operator can add a key on Botpasses (console + a focused collect page). When a model client looks up a credential and finds none (or several), MCP/API returns **names and metadata only**, plus a **non-capability** Botpasses-origin `collect_url`. The human signs in on that origin and types the secret. After store and a prompt grant, `http.request` attaches the credential on the vault process; the model never sees the value.
+- Outcome: An operator can add a key on Botpasses (console + a focused collect page). When a model client looks up a credential and finds none (or several), MCP/API returns **names and metadata only**, plus a **non-capability** Botpasses-origin `collect_url`. The human signs in on that origin and types the secret. After store and a prompt grant, `http.request` attaches the credential on the vault process. The model does not get the key.
 - Approach: Add structured `find_items` (exact name and/or exact allowlisted hostname, cap 5). On zero matches, create a `need_item` row and return `collect_url` **without** a query HMAC (MCP already returns grant `approval_code`, never `/approve?token=`). Collect POST requires an operator bearer (`VAULT_BOOTSTRAP_TOKEN` session), same as `POST /api/items`. Keep protocol `2024-11-05`. Do not add `get_secret`. No new npm dependencies. Do not change grant magic-link token JSON in this change.
 
 ## 2. Scope
@@ -562,7 +562,7 @@ Down: `DROP TABLE IF EXISTS need_items`.
 
 | Risk | Likelihood | Impact | Mitigation |
 | ---- | ---------- | ------ | ---------- |
-| Grok never surfaces tool JSON | Medium | Operator never sees URL | Inbox; MCP message tells the agent to quote `collect_url` |
+| Grok never surfaces tool JSON | Medium | Operator does not see the URL | Inbox; MCP message tells the agent to quote `collect_url` |
 | Operator pastes secret into Grok | Medium | Transcript leak | Instructions; cannot stop a determined user |
 | Phishing collect URL | Low | Stolen key typed on fake origin | Path-only URL; sign-in; address-bar copy; `originOk` |
 | Operator fulfills for the wrong client | Medium | Credential bound to attacker client | Client name on collect page and inbox |

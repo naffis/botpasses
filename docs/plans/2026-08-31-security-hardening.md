@@ -5,7 +5,7 @@ Canonical interactive plan: Cursor CreatePlan **Security hardening**. Topology: 
 ## 1. Summary
 
 - Problem: Operators will store live API keys in Botpasses. Today hosted ciphertext is AES-256-GCM with a per-org DEK, but the platform `VAULT_KEK` sits in a Fly env var. Anyone with that secret plus a Neon dump decrypts every org. Local HTTP has no auth. Hosted HTML has no CSP/HSTS/CORS allowlist. There is no written trust model, so a LastPass-style "we cannot read your vault" claim would be false.
-- Outcome: A documented, testable grant-vault: the model never sees values; no human or support path returns values; a database dump alone cannot decrypt; staging/prod KEK material is unwrapped via AWS KMS after cutover; browser and MCP surfaces match OWASP and MCP 2025-11-25 controls.
+- Outcome: A documented, testable grant-vault: the model does not get stored keys; no human or support path returns keys; a database dump alone cannot decrypt; staging/prod KEK material is unwrapped via AWS KMS after cutover; browser and MCP surfaces match OWASP and MCP 2025-11-25 controls.
 - Approach: Keep the existing inject architecture (`http.request`, `vault run`, trusted resolve). Reject client-side zero-knowledge for hosted. Wrap the platform KEK with AWS KMS using Fly Machine OIDC (no static AWS keys). First image on a plane still boots on raw `VAULT_KEK` (expand/contract) until the operator sets `VAULT_KEK_REQUIRE_KMS=1`. Bind local envelopes to secret names. Authenticate loopback HTTP. Ship security headers, tight CORS, collect-page auth, store-backed rate limits, token rotate, `npm audit --omit=dev --audit-level=high` in CI, ADRs, and a public threat table that tells the truth. Do not invent an MCP session store.
 
 ## 2. Scope

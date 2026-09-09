@@ -205,6 +205,7 @@ Public (this origin after `site` build):
 
 Internal (engineers, file pointers, local vs hosted):
 
+- [SECURITY.md](SECURITY.md) (report a vulnerability: security@botpasses.com)
 - [docs/reference/mcp.md](docs/reference/mcp.md)
 - [docs/reference/http-api.md](docs/reference/http-api.md)
 
