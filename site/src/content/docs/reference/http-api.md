@@ -27,9 +27,11 @@ A session that has not completed the authenticator step gets 403 `{ "error": "mf
 | GET | `/ready` | 200 or 503 from the database ping |
 | GET | `/.well-known/oauth-protected-resource` | `resource` is `https://botpasses.com/mcp`. Same document at the `/mcp` path-aware URLs |
 | GET | `/.well-known/oauth-authorization-server` | RFC 8414. `response_types_supported` is `["code"]`, PKCE `S256` only. Also at `/.well-known/openid-configuration` |
-| GET | `/robots.txt` | Production disallows console, auth, collect, api, mcp, oauth. Comments point at `/llms.txt` and `/llms-full.txt` |
+| GET | `/robots.txt` | Production disallows console, auth, collect, api, mcp, oauth. Lists `Sitemap: https://botpasses.com/sitemap.xml`. Comments point at `/llms.txt` and `/llms-full.txt` |
+| GET | `/sitemap.xml` | Public urlset of every canonical page |
 | GET | `/llms.txt`, `/llms-full.txt` | Machine-readable site index and full docs for AI crawlers |
-| GET | `/.well-known/security.txt` | Vulnerability contact. See [Security disclosure](/docs/security/disclosure) |
+| GET | `/.well-known/security.txt`, `/security.txt` | Vulnerability contact. Same bytes at both paths. See [Security disclosure](/docs/security/disclosure) |
+| GET | `/favicon.ico`, `/apple-touch-icon.png` | Browser and iOS default icon URLs. SVG mark remains at `/favicon.svg` |
 
 ## Sign-in and account
 

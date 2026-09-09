@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  CONVENTIONAL_DISCOVERY_PATHS,
   canonicalSitePath,
   isPublicSitePath,
   resolveSiteFile,
@@ -22,10 +23,10 @@ test("isPublicSitePath accepts canonical, .html, and trailing-slash forms of sit
   for (const p of ["/", "/index.html", "/security", "/security.html", "/security/", "/docs", "/docs/", "/docs/start.html"]) {
     assert.equal(isPublicSitePath(p), true, p);
   }
-  for (const p of ["/llms.txt", "/llms-full.txt", "/.well-known/security.txt", "/sitemap-index.xml", "/sitemap-0.xml", "/_astro/x.css", "/pagefind/pagefind.js"]) {
+  for (const p of ["/llms.txt", "/llms-full.txt", "/.well-known/security.txt", "/security.txt", "/sitemap.xml", "/sitemap-index.xml", "/sitemap-0.xml", "/favicon.ico", "/apple-touch-icon.png", "/_astro/x.css", "/pagefind/pagefind.js"]) {
     assert.equal(isPublicSitePath(p), true, p);
   }
-  for (const p of ["/console", "/console/", "/sitemap.xml", "/api/items", "/mcp", "/sign-in", "/anything"]) {
+  for (const p of ["/console", "/console/", "/api/items", "/mcp", "/sign-in", "/anything"]) {
     assert.equal(isPublicSitePath(p), false, p);
   }
 });
@@ -52,7 +53,10 @@ test("staticHeaders knows fonts, wasm, pagefind chunks, txt, and xml", () => {
   assert.equal(type("x.pf_index"), "application/octet-stream");
   assert.equal(type("x.pf_fragment"), "application/octet-stream");
   assert.equal(type("llms.txt"), "text/plain; charset=utf-8");
+  assert.equal(type("sitemap.xml"), "application/xml; charset=utf-8");
   assert.equal(type("sitemap-0.xml"), "application/xml; charset=utf-8");
+  assert.equal(type("favicon.ico"), "image/x-icon");
+  assert.equal(type("apple-touch-icon.png"), "image/png");
   assert.equal(type("a.unknown"), "application/octet-stream");
 });
 
@@ -61,6 +65,10 @@ test("resolveSiteFile maps extensionless site paths to built HTML and refuses es
   assert.ok(resolveSiteFile(dist, "/docs/start")?.endsWith(join("docs", "start.html")));
   assert.ok(resolveSiteFile(dist, "/404")?.endsWith("404.html"));
   assert.ok(resolveSiteFile(dist, "/.well-known/security.txt")?.endsWith("security.txt"));
+  for (const path of CONVENTIONAL_DISCOVERY_PATHS) {
+    assert.equal(isPublicSitePath(path), true, path);
+    assert.ok(resolveSiteFile(dist, path), `${path} must resolve to a dist file`);
+  }
   assert.equal(resolveSiteFile(dist, "/../package.json"), undefined);
   assert.equal(resolveSiteFile(dist, "/%2e%2e/package.json"), undefined);
   assert.equal(resolveSiteFile(dist, "/docs/does-not-exist"), undefined);

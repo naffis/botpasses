@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "astro dev --port 4321",
-    "build": "astro build && pagefind --site dist --output-path dist/pagefind",
+    "build": "astro build && node scripts/write-sitemap.mjs && node scripts/write-conventional.mjs && pagefind --site dist --output-path dist/pagefind",
     "preview": "astro preview --port 4321"
   },
   "dependencies": {

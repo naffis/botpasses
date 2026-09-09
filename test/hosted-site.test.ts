@@ -100,6 +100,7 @@ test("AC-06 robots staging allow and prod disallow console", async () => {
     assert.match(body, /Allow: \/docs/);
     assert.match(body, /Disallow: \/console/);
     assert.match(body, /Disallow: \/sign-in/);
+    assert.match(body, /Sitemap: https:\/\/botpasses\.com\/sitemap\.xml/);
     assert.match(body, /llms\.txt/);
     assert.match(body, /llms-full\.txt/);
   } finally {
@@ -174,7 +175,7 @@ test("site: unknown docs path is the HTML 404 page, not JSON", async () => {
   }
 });
 
-test("site: hashed assets are immutable, sitemaps and text files are served, sitemap.xml is gone", async () => {
+test("site: hashed assets are immutable, sitemaps and text files are served", async () => {
   const ctx = await siteServer();
   try {
     const home = await (await fetch(`${ctx.base}/`)).text();
@@ -190,21 +191,32 @@ test("site: hashed assets are immutable, sitemaps and text files are served, sit
     assert.equal(favicon.headers.get("cache-control"), "public, max-age=3600");
 
     for (const [path, type] of [
+      ["/sitemap.xml", /application\/xml/],
       ["/sitemap-index.xml", /application\/xml/],
       ["/sitemap-0.xml", /application\/xml/],
       ["/llms.txt", /text\/plain/],
       ["/llms-full.txt", /text\/plain/],
       ["/.well-known/security.txt", /text\/plain/],
+      ["/security.txt", /text\/plain/],
+      ["/favicon.ico", /image\/x-icon/],
+      ["/apple-touch-icon.png", /image\/png/],
       ["/og.png", /image\/png/],
     ] as const) {
       const res = await fetch(`${ctx.base}${path}`);
       assert.equal(res.status, 200, path);
       assert.match(res.headers.get("content-type") ?? "", type, path);
     }
+    const sitemap = await (await fetch(`${ctx.base}/sitemap.xml`)).text();
+    assert.match(sitemap, /<urlset\b/);
+    assert.match(sitemap, /<loc>https:\/\/botpasses\.com\/<\/loc>/);
     const sec = await (await fetch(`${ctx.base}/.well-known/security.txt`)).text();
     assert.match(sec, /Contact: mailto:security@botpasses\.com/);
-    const gone = await fetch(`${ctx.base}/sitemap.xml`);
-    assert.equal(gone.status, 404);
+    const rootSec = await (await fetch(`${ctx.base}/security.txt`)).text();
+    assert.equal(rootSec, sec);
+    const ico = Buffer.from(await (await fetch(`${ctx.base}/favicon.ico`)).arrayBuffer());
+    assert.equal(ico.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0])), true);
+    const apple = Buffer.from(await (await fetch(`${ctx.base}/apple-touch-icon.png`)).arrayBuffer());
+    assert.equal(apple.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), true);
 
     const pf = await fetch(`${ctx.base}/pagefind/pagefind-ui.js`);
     assert.equal(pf.status, 200);
@@ -212,6 +224,22 @@ test("site: hashed assets are immutable, sitemaps and text files are served, sit
     const wasm = await fetch(`${ctx.base}/pagefind/wasm.en.pagefind`);
     assert.equal(wasm.status, 200);
     assert.equal(wasm.headers.get("content-type"), "application/octet-stream");
+  } finally {
+    await ctx.http.close();
+    await ctx.store.close();
+    cleanup(ctx.home);
+  }
+});
+
+test("site: paths with no conventional twin stay JSON 404", async () => {
+  const ctx = await siteServer();
+  try {
+    for (const path of ["/humans.txt", "/ads.txt", "/feed.xml"]) {
+      const res = await fetch(`${ctx.base}${path}`);
+      assert.equal(res.status, 404, path);
+      assert.match(res.headers.get("content-type") ?? "", /application\/json/, path);
+      assert.deepEqual(await res.json(), { error: "not found" });
+    }
   } finally {
     await ctx.http.close();
     await ctx.store.close();

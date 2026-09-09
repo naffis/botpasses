@@ -11,6 +11,7 @@ const TYPES: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".ico": "image/x-icon",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".wasm": "application/wasm",
@@ -24,6 +25,18 @@ const TYPES: Record<string, string> = {
   ".pf_fragment": "application/octet-stream",
   ".pagefind": "application/octet-stream",
 };
+
+/**
+ * Conventional discovery URLs that browsers and crawlers request by habit.
+ * Each has a working twin (Astro shard, well-known file, or SVG mark) and must
+ * be a real file in `site/dist`. A miss is a JSON 404 from the API router.
+ */
+export const CONVENTIONAL_DISCOVERY_PATHS = [
+  "/sitemap.xml",
+  "/favicon.ico",
+  "/apple-touch-icon.png",
+  "/security.txt",
+] as const;
 
 const PUBLIC_STATIC = new Set([
   "/",
@@ -39,6 +52,7 @@ const PUBLIC_STATIC = new Set([
   "/llms-full.txt",
   "/.well-known/security.txt",
   "/sitemap-index.xml",
+  ...CONVENTIONAL_DISCOVERY_PATHS,
 ]);
 
 const CACHE_HTML = "no-cache";

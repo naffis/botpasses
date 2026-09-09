@@ -56,19 +56,22 @@ function canonicalOf(html: string): string | undefined {
   return attr(html, /<link rel="canonical" href="([^"]+)"/);
 }
 
-function sitemapUrls(): Set<string> {
-  const xml = readFileSync(join(dist, "sitemap-0.xml"), "utf8");
+function sitemapUrls(file = "sitemap.xml"): Set<string> {
+  const xml = readFileSync(join(dist, file), "utf8");
   return new Set([...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1] ?? ""));
 }
 
-test("sitemap-index and sitemap-0 exist and every listed URL is extensionless", () => {
+test("sitemap.xml is the public urlset and matches every Astro shard", () => {
+  assert.ok(existsSync(join(dist, "sitemap.xml")), "site build must write /sitemap.xml");
   assert.ok(existsSync(join(dist, "sitemap-index.xml")));
   assert.ok(existsSync(join(dist, "sitemap-0.xml")));
-  assert.ok(!existsSync(join(dist, "sitemap.xml")), "sitemap.xml is not emitted; the index is sitemap-index.xml");
+  const publicXml = readFileSync(join(dist, "sitemap.xml"), "utf8");
+  assert.match(publicXml, /<urlset\b/);
+  assert.doesNotMatch(publicXml, /<sitemapindex\b/);
   const urls = sitemapUrls();
   assert.ok(urls.size >= 25, `expected at least 25 sitemap URLs, got ${urls.size}`);
-  const xml = readFileSync(join(dist, "sitemap-0.xml"), "utf8");
-  assert.match(xml, /<lastmod>\d{4}-\d{2}-\d{2}T00:00:00\.000Z<\/lastmod>/);
+  assert.deepEqual(urls, sitemapUrls("sitemap-0.xml"));
+  assert.match(publicXml, /<lastmod>\d{4}-\d{2}-\d{2}T00:00:00\.000Z<\/lastmod>/);
   for (const u of urls) {
     assert.doesNotMatch(u, /\.html$/, u);
     if (u !== `${SITE}/`) assert.doesNotMatch(u, /\/$/, u);
@@ -138,6 +141,8 @@ test("social and theme meta tags are complete on every page", () => {
     assert.equal(attr(p.html, /<meta name="twitter:image" content="([^"]+)"/), `${SITE}/og.png`, p.url);
     assert.ok(attr(p.html, /<meta name="twitter:image:alt" content="([^"]+)"/), `${p.url} twitter:image:alt`);
     assert.equal(attr(p.html, /<meta property="og:locale" content="([^"]+)"/), "en_US", p.url);
+    assert.match(p.html, /<link rel="icon" href="\/favicon\.ico"/, `${p.url} favicon.ico`);
+    assert.match(p.html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/, `${p.url} apple-touch-icon`);
     assert.match(p.html, /<link rel="alternate" type="text\/plain" href="https:\/\/botpasses\.com\/llms\.txt"/, `${p.url} llms.txt`);
     assert.match(p.html, /<link rel="alternate" type="text\/plain" href="https:\/\/botpasses\.com\/llms-full\.txt"/, `${p.url} llms-full.txt`);
     assert.equal(attr(p.html, /<meta name="theme-color" content="([^"]+)"/), "#0B0F0C", p.url);
@@ -250,6 +255,11 @@ test("llms.txt and security.txt ship with the site", () => {
   assert.match(sec, /^Preferred-Languages: en$/m);
   const expires = /^Expires: (.+)$/m.exec(sec)?.[1] ?? "";
   assert.ok(new Date(expires).getTime() > Date.now(), "security.txt has expired");
+  assert.equal(readFileSync(join(dist, "security.txt"), "utf8"), sec, "/security.txt must be the same bytes as the well-known file");
+  const ico = readFileSync(join(dist, "favicon.ico"));
+  assert.equal(ico.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0])), true, "favicon.ico is an ICO");
+  const apple = readFileSync(join(dist, "apple-touch-icon.png"));
+  assert.equal(apple.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), true, "apple-touch-icon is a PNG");
 });
 
 test("404 page is real HTML, noindex, and not in the sitemap", () => {

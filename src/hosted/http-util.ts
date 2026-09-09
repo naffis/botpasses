@@ -221,7 +221,7 @@ export function robotsTxt(plane: "staging" | "production"): string {
   return [
     "# LLM-readable index: https://botpasses.com/llms.txt",
     "# Full docs for AI crawlers: https://botpasses.com/llms-full.txt",
-    "Sitemap: https://botpasses.com/sitemap-index.xml",
+    "Sitemap: https://botpasses.com/sitemap.xml",
     "User-agent: *",
     "Allow: /",
     "Allow: /docs",
