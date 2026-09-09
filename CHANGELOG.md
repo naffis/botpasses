@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Infra: CI smoke installs Playwright Chromium from Playwright's CDN, not Google's Chrome apt repo, so a Packages.gz hash mismatch cannot fail the job.
 - Site and console: official brand. Navy `#14213D`, teal `#00C2A8`, Inter wordmark `botpasses` (no `.com`). Navy ticket at `/mark.svg`; white ticket at `/mark-on-dark.svg` (dark surfaces and social cards). Favicon is the simplified eyes, perforation, and barcode on a navy tile. The local `vault serve` console uses the same tokens. Social cards and home-screen icons rebuild from the official rasters (`node site/scripts/og.mjs`, `node site/scripts/write-icons.mjs`).
 - Site: the homepage, social cards, and webmanifest drop the dangling "It never gets the key." The second sentence is now the same claim as the FAQ: the model does not get the key.
 - Site: social cards and icons. `/og.png` is a 1200x630 card that names Stripe, Slack, and GitHub. `/og-square.png` covers LinkedIn, Slack, and iMessage square slots. `/logo.png` is the JSON-LD Organization logo (no longer the landscape card). Android Chrome 192/512 icons and `/site.webmanifest` ship next to the existing favicon and Apple touch icon. Rebuild with `node site/scripts/og.mjs` and `node site/scripts/write-icons.mjs`.
