@@ -23,7 +23,7 @@ order: 1
 
 **Grok with a model token.** The `Authorization: Bearer avm_...` header is enough. `initialize` and `tools/list` succeed without OAuth. Grok Bot in the cloud cannot finish an OAuth card (its callback is `http://localhost` or a local app scheme). Skip the card. If vault calls still fail, the header is missing, revoked, or rotated (Access shows the last four characters).
 
-**OAuth clients (Claude, Cursor, ChatGPT).** A card that returns after every session usually means the client could not finish dynamic client registration or the redirect back. Botpasses accepts `https`, loopback `http://127.0.0.1:<port>` (or `[::1]`), and desktop schemes such as `cursor://` and `grokbot://`. It rejects `http://localhost` (that name can resolve off-box), `javascript:`, `data:`, and `file:`. Remove the server entry in the client, add it again, and complete the browser sign-in on botpasses.com in one go. If the agent was revoked in the Access panel, the client must connect again; that is expected.
+**OAuth clients (Claude, Cursor, ChatGPT).** A card that returns after every session usually means the client could not finish dynamic client registration or the redirect back. Botpasses accepts `https`, RFC 8252 loopback `http` (`127.0.0.1`, `[::1]`, `localhost`), and desktop schemes such as `cursor://` and `grokbot://`. It rejects `javascript:`, `data:`, and `file:`. Remove the server entry in the client, add it again, and complete the browser sign-in on botpasses.com in one go. If the agent was revoked in the Access panel, the client must connect again; that is expected.
 
 ## 409 on an approval code
 

@@ -4,6 +4,7 @@ import {
   assertRedirectUri,
   deriveOidcCookieKeys,
   isDesktopRedirect,
+  isLoopbackHttpRedirect,
   isOauthPath,
   redirectHosts,
 } from "../src/hosted/oauth-as.ts";
@@ -19,13 +20,20 @@ import {
 import { TEST_SESSION_SECRET } from "./helpers.ts";
 import { startOauthServer } from "./oauth-helpers.ts";
 
-test("S5 redirect_uri policy: https, IP-literal loopback http, named desktop schemes only", () => {
+test("S5 redirect_uri policy: https, RFC 8252 loopback http, named desktop schemes", () => {
   for (const ok of [
     "https://claude.ai/api/mcp/auth_callback",
+    "https://www.cursor.com/agents/mcp/oauth/callback",
     "https://evil.example/cb",
     "http://127.0.0.1:5555/cb",
     "http://127.0.0.1/cb",
     "http://[::1]:5555/cb",
+    "http://localhost:8787/callback",
+    "http://localhost/cb",
+    "http://LOCALHOST:8787/callback",
+    "http://127.1/cb",
+    "http://2130706433/cb",
+    "http://0x7f000001/cb",
     "cursor://anysphere.cursor-mcp/oauth/callback",
     "cursor-mcp://cb",
     "vscode://cb",
@@ -38,10 +46,16 @@ test("S5 redirect_uri policy: https, IP-literal loopback http, named desktop sch
     assert.doesNotThrow(() => assertRedirectUri(ok), ok);
   }
   for (const bad of [
-    "http://localhost:5555/cb",
-    "http://localhost/cb",
+    "http://localhost.example/cb",
+    "http://localhost.evil.com/cb",
+    "http://localhost./cb",
     "http://example.com/cb",
     "http://10.0.0.5/cb",
+    "http://0.0.0.0:8787/cb",
+    "http://0/",
+    "http://127.0.0.2/cb",
+    "http://[::ffff:127.0.0.1]/cb",
+    "http://user@localhost/cb",
     "com.example.app://cb",
     "myapp://cb",
     "claude://cb",
@@ -59,14 +73,21 @@ test("S5 redirect_uri policy: https, IP-literal loopback http, named desktop sch
   assert.equal(isDesktopRedirect("grokbot://oauth/callback"), true);
   assert.equal(isDesktopRedirect("com.example.app://x"), false);
   assert.equal(isDesktopRedirect("https://x"), false);
-  assert.deepEqual(redirectHosts(["https://claude.ai/cb", "https://claude.ai/other", "http://127.0.0.1:9/cb", "grok://cb", "nope"]), [
+  assert.equal(isLoopbackHttpRedirect("http://localhost:8787/callback"), true);
+  assert.equal(isLoopbackHttpRedirect("http://127.0.0.1:9/cb"), true);
+  assert.equal(isLoopbackHttpRedirect("http://[::1]/cb"), true);
+  assert.equal(isLoopbackHttpRedirect("http://example.com/cb"), false);
+  assert.equal(isLoopbackHttpRedirect("https://localhost/cb"), false);
+  assert.equal(isLoopbackHttpRedirect("http://evil@localhost/cb"), false);
+  assert.deepEqual(redirectHosts(["https://claude.ai/cb", "https://claude.ai/other", "http://127.0.0.1:9/cb", "http://localhost:8787/callback", "grok://cb", "nope"]), [
     "claude.ai",
     "127.0.0.1:9",
+    "localhost:8787",
     "grok://",
   ]);
 });
 
-test("S5 DCR rejects private-use schemes and localhost, accepts IP loopback", async () => {
+test("S5 DCR rejects unknown private-use schemes, accepts RFC 8252 loopback including localhost", async () => {
   const srv = await startOauthServer({ secure: false });
   try {
     const attempt = (redirect_uris: string[]) =>
@@ -76,12 +97,46 @@ test("S5 DCR rejects private-use schemes and localhost, accepts IP loopback", as
         body: JSON.stringify({ client_name: "probe", redirect_uris, token_endpoint_auth_method: "none" }),
       });
     assert.equal((await attempt(["com.example.app://cb"])).status, 400);
-    assert.equal((await attempt(["http://localhost:8080/cb"])).status, 400);
+    assert.equal((await attempt(["http://example.com/cb"])).status, 400);
     assert.equal((await attempt(["https://ok.example/cb", "myapp://cb"])).status, 400, "one bad uri fails the registration");
-    const ok = await attempt(["http://127.0.0.1:8080/cb"]);
-    assert.ok(ok.status === 200 || ok.status === 201);
+    const loopback = await attempt(["http://127.0.0.1:8080/cb"]);
+    assert.ok(loopback.status === 200 || loopback.status === 201, await loopback.text());
+    const localhost = await attempt(["http://localhost:8787/callback"]);
+    assert.ok(localhost.status === 200 || localhost.status === 201, await localhost.text());
     const grokbot = await attempt(["grokbot://oauth/callback"]);
-    assert.ok(grokbot.status === 200 || grokbot.status === 201);
+    assert.ok(grokbot.status === 200 || grokbot.status === 201, await grokbot.text());
+  } finally {
+    await srv.close();
+  }
+});
+
+test("BOTP-12 Cursor DCR set: desktop scheme + cloud https + localhost loopback", async () => {
+  const srv = await startOauthServer({ secure: false });
+  try {
+    const res = await srv.go("/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Cursor",
+        redirect_uris: [
+          "cursor://anysphere.cursor-mcp/oauth/callback",
+          "https://www.cursor.com/agents/mcp/oauth/callback",
+          "http://localhost:8787/callback",
+        ],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      }),
+    });
+    const text = await res.text();
+    assert.ok(res.status === 200 || res.status === 201, text);
+    const body = JSON.parse(text) as { redirect_uris?: string[]; application_type?: string };
+    assert.deepEqual(body.redirect_uris, [
+      "cursor://anysphere.cursor-mcp/oauth/callback",
+      "https://www.cursor.com/agents/mcp/oauth/callback",
+      "http://localhost:8787/callback",
+    ]);
+    assert.equal(body.application_type, "native");
   } finally {
     await srv.close();
   }
@@ -98,7 +153,7 @@ test("DCR reject logs scheme and reason, never the URI", async () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         client_name: "probe",
-        redirect_uris: ["http://localhost:8080/cb"],
+        redirect_uris: ["http://example.com/cb"],
         token_endpoint_auth_method: "none",
       }),
     });
@@ -106,7 +161,7 @@ test("DCR reject logs scheme and reason, never the URI", async () => {
     const joined = lines.join("\n");
     assert.match(joined, /dcr_redirect_rejected/);
     assert.match(joined, /"scheme":"http"/);
-    assert.doesNotMatch(joined, /localhost:8080/);
+    assert.doesNotMatch(joined, /example\.com/);
   } finally {
     console.error = original;
     await srv.close();
@@ -114,10 +169,10 @@ test("DCR reject logs scheme and reason, never the URI", async () => {
 });
 
 test("redirectRejectFields never includes the URI", () => {
-  const fields = redirectRejectFields("http://localhost:8787/callback", "redirect_uri must be https, loopback http");
+  const fields = redirectRejectFields("http://example.com/cb", "redirect_uri must be https, loopback http");
   assert.equal(fields.scheme, "http");
   assert.ok(fields.reason);
-  assert.doesNotMatch(JSON.stringify(fields), /localhost/);
+  assert.doesNotMatch(JSON.stringify(fields), /example/);
   const bad = redirectRejectFields("not a url", "invalid redirect_uri");
   assert.equal(bad.scheme, undefined);
   assert.equal(bad.reason, "invalid redirect_uri");
