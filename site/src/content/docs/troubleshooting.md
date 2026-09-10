@@ -21,7 +21,9 @@ order: 1
 
 ## The connect card keeps appearing
 
-**Grok with a model token.** The `Authorization: Bearer avm_...` header is enough. `initialize` and `tools/list` succeed without OAuth. Grok Bot in the cloud cannot finish an OAuth card (its callback is `http://localhost` or a local app scheme). Skip the card. If vault calls still fail, the header is missing, revoked, or rotated (Access shows the last four characters).
+**Grok Bot Authorize spins, then Retry, no browser.** Unauthenticated `initialize` must be 401 with `WWW-Authenticate` `resource_metadata`. A 200 handshake leaves the host with `no_auth_link`. Remove the connector, add `https://botpasses.com/mcp` again with no header, and complete Authorize in the browser (sign-in on botpasses.com, then Allow). The host should return through `https://www.cursor.com/agents/mcp/oauth/callback`. If you would rather skip the card, put `Authorization: Bearer avm_...` on the connector instead.
+
+**Grok with a model token.** The `Authorization: Bearer avm_...` header is enough. `initialize` and `tools/list` succeed without a connect card. If vault calls still fail, the header is missing, revoked, or rotated (Access shows the last four characters).
 
 **OAuth clients (Claude, Cursor, ChatGPT).** A card that returns after every session usually means the client could not finish dynamic client registration or the redirect back. Botpasses accepts `https`, RFC 8252 loopback `http` (`127.0.0.1`, `[::1]`, `localhost`), and desktop schemes such as `cursor://` and `grokbot://`. It rejects `javascript:`, `data:`, and `file:`. Remove the server entry in the client, add it again, and complete the browser sign-in on botpasses.com in one go. If the agent was revoked in the Access panel, the client must connect again; that is expected.
 

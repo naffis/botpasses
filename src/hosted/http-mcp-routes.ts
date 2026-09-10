@@ -7,7 +7,7 @@ import { HttpError } from "./errors.ts";
 import { requireModelOrOperator, type ModelPrincipal, type Principal } from "./auth.ts";
 import { json, originIsLoopback, readJson, sendError } from "./http-util.ts";
 import type { HostedKernel } from "./kernel.ts";
-import { handleHostedMcpRpc, isMcpHandshakeMethod, type JsonRpcRequest } from "./mcp.ts";
+import { handleHostedMcpRpc, type JsonRpcRequest } from "./mcp.ts";
 import type { OperatorIdentity } from "./operator-identity.ts";
 import { securityHeaders } from "./security-headers.ts";
 
@@ -25,10 +25,11 @@ export type McpRouteOpts = {
 };
 
 /**
- * Handshake methods answer without a principal so hosts with only an `avm_` header see no
- * connect card. GET /mcp (SSE) and tools/call still 401 with WWW-Authenticate so a host
- * that opened the stream can start OAuth. Everything else needs a model principal;
- * operator cookies become the stdio shim.
+ * Every POST /mcp method needs a model principal. An anonymous `initialize` 200 is why
+ * Grok Bot's AuthenticateMcpServer returned `no_auth_link` (BOTP-13): the host builds
+ * the browser URL from a 401 on that first JSON-RPC, not from GET /mcp. A preconfigured
+ * `avm_` Bearer still skips the connect card because the host sends the header. Operator
+ * cookies become the stdio shim.
  */
 export async function handleMcpPost(
   req: IncomingMessage,
@@ -39,11 +40,6 @@ export async function handleMcpPost(
 ): Promise<void> {
   const body = (await readJson(req)) as JsonRpcRequest;
   const deps = { kernel: opts.kernel, fetchImpl: opts.fetchImpl, resolveAddresses: opts.resolveAddresses };
-  if (!principal && isMcpHandshakeMethod(body.method)) {
-    const anon: ModelPrincipal = { channel: "model", orgId: "anon", clientId: "anon", environment: "staging" };
-    await respond(res, await handleHostedMcpRpc({ ...deps, principal: anon }, body));
-    return;
-  }
   let model: ModelPrincipal;
   try {
     assertCookieMcpRequest(req, principal, opts);

@@ -107,7 +107,7 @@ Policies: `prompt` (one successful call, then consumed; a failed call keeps it u
 
 ## MCP
 
-`POST /mcp` JSON-RPC with `http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`. There is no `get_secret`. `GET /mcp` is a server-sent-events keepalive stream and needs a model or operator token (401 with `WWW-Authenticate` `resource_metadata` if it is missing, so Streamable HTTP hosts can start OAuth). `GET /mcp/tools` returns the tool list. See [MCP tools](/docs/reference/mcp-tools).
+`POST /mcp` JSON-RPC with `http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`. There is no `get_secret`. Unauthenticated `POST /mcp` (including `initialize`) and `GET /mcp` (SSE keepalive) are 401 with `WWW-Authenticate` `resource_metadata` and `scope="mcp"`, so Streamable HTTP hosts including Grok Bot can start OAuth. `GET /mcp/tools` returns the tool list. See [MCP tools](/docs/reference/mcp-tools).
 
 ## OAuth (botpasses.com is the authorization server)
 

@@ -99,15 +99,15 @@ export function protectedResourceMetadata(publicUrl: string): ProtectedResourceM
 
 export function mcpWwwAuthenticate(publicUrl: string, realm: string): string {
   const metadata = protectedResourceMetadataUrl(publicUrl);
-  return `Bearer realm="${realm}", resource_metadata="${metadata}"`;
+  return `Bearer realm="${realm}", resource_metadata="${metadata}", scope="mcp"`;
 }
 
 /**
- * Every `/mcp` 401, including GET/HEAD SSE listen, carries PRM. Streamable HTTP hosts
- * open the event stream after `initialize`; without `resource_metadata` they set
- * needsAuth and show Authorize → Retry with no browser (BOTP-13). Handshake POST
- * methods may still answer without a principal so a preconfigured `avm_` token does
- * not force a connect card. Non-MCP 401s still get a Bearer realm.
+ * Every `/mcp` 401, including POST `initialize` and GET/HEAD SSE listen, carries PRM
+ * and `scope="mcp"`. Grok Bot builds the Authorize URL from a 401 on `initialize`;
+ * a 200 there yields `no_auth_link` and Authorize → Retry with no browser (BOTP-13).
+ * A preconfigured `avm_` Bearer still skips the card because the host sends it.
+ * Non-MCP 401s still get a Bearer realm.
  */
 export function wwwAuthenticateFor401(
   _method: string,
