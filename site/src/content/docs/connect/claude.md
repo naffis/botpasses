@@ -27,6 +27,8 @@ Ask for the task in plain language: "check my Stripe balance" or "get my Spotify
 - If the credential needs your approval, Claude shows an 8-digit code and asks you to approve in the [console](/console) Inbox or with the code. Approve, then tell Claude to retry (or it retries on its own).
 - If nothing is stored for that API, Claude gives you a `collect_url`. Open it, sign in, and type the key on botpasses.com. Do not paste it into the chat.
 
+After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so Claude walks Collect and Connect. You type secrets on botpasses.com, never in chat.
+
 ## What Claude can and cannot do
 
 Claude sees credential names, the last four characters, approval status, and redacted API responses. It cannot read a value, and there is no tool that returns one. Revoke Claude at any time from the console **Access** panel; its tokens stop working on the next call.

@@ -7,6 +7,30 @@ order: 2
 
 There are two ways to use Botpasses.
 
+Paste the [local machine prompt](/docs/prompts#local) into an agent on this laptop if you want it to clone the repo, init the vault, and write the MCP snippet. Do not paste the master key into chat.
+
+## Copy-paste prompt
+
+```
+Set up a local Botpasses vault on this machine and wire it into my MCP client. Secrets must never enter chat.
+
+Facts:
+- Repo: https://github.com/naffis/botpasses (MIT). npm package not published yet; run CLI from a clone.
+- Need Node.js 22.14+.
+- Local home: set VAULT_HOME to an absolute path (e.g. $PWD/.botpasses or $HOME/.botpasses).
+- Local MCP exposes the same six tools as hosted: list_items, find_items, request_grant, list_grants, setup, http_request. Values inject only into approved calls or vault run child env.
+
+Steps:
+1. Clone (or reuse) the repo, npm install, export VAULT_HOME to an absolute path, run npx vault init if the vault does not exist. Do not print the master key into chat; tell me where it lives and that I must keep VAULT_MASTER_KEY out of transcripts.
+2. Show me the mcp.json snippet for my client (Cursor ~/.cursor/mcp.json or project .cursor/mcp.json) using command npx with args ["vault","mcp"] and env names VAULT_HOME and VAULT_MASTER_KEY (references only, never a literal key). I paste or approve the file edit; you do not echo the master key value in the reply.
+3. After MCP connects, call list_items to prove the server is up.
+4. For the first secret I name (or Stripe test key if I say so), use setup so I get a collect_url, or tell me to run npx vault set NAME in my own terminal so the CLI can prompt. Do not accept the value in this chat. Do not write a command that contains the secret. Then vault grant --secret NAME --agent <name my client sends on initialize> --tool http_request (once or standing as I choose).
+5. Smoke http_request to an allowlisted host I approve. Report status only.
+6. Point me at https://botpasses.com/docs/install and https://botpasses.com/docs/reference/cli for vault run (child process inject) when I need CLI scripts instead of MCP.
+
+If I already have a hosted account and only need stdio to hosted: use VAULT_PUBLIC_URL=https://botpasses.com, vault login, vault mcp --user-jwt. Still never paste JWTs into chat; use env on the machine.
+```
+
 ## Hosted (recommended)
 
 Nothing to install. [Create an account](/sign-up) on botpasses.com, then follow [Start](/docs/start). Agents connect to `https://botpasses.com/mcp`.

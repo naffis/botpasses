@@ -9,6 +9,39 @@ The hosted process is one Node.js service. The reference deployment is one Fly M
 
 This page names what you need. The operational runbooks live in the repository under `docs/ops` ([cutover](https://github.com/naffis/botpasses/blob/dev/docs/ops/botpasses-cutover.md), [KEK rotation](https://github.com/naffis/botpasses/blob/dev/docs/ops/kek-rotation.md), [restore](https://github.com/naffis/botpasses/blob/dev/docs/ops/restore.md)).
 
+Paste the [self-host prompt](/docs/prompts#self-host) into an ops agent so it follows this page and `docs/ops` instead of inventing steps. Do not paste secret values into chat.
+
+## Copy-paste prompt
+
+```
+Help me deploy a self-hosted Botpasses plane from https://github.com/naffis/botpasses. Goal: a private grant-vault my agents hit at our origin (not necessarily botpasses.com). Follow docs/self-hosting and docs/ops in the repo. Do not invent secret values; ask me to set them in the secret store.
+
+Reference shape (adapt to our cloud if we are not on Fly):
+- One Node process: VAULT_MODE=hosted vault serve (one Machine per plane; in-memory enroll/rate-limit state).
+- Postgres (Neon or equivalent): separate project per plane; pooled DATABASE_URL + direct DATABASE_URL_DIRECT.
+- Edge DNS/WAF (Cloudflare or ours) with SSL full strict.
+- AWS KMS (or approved KMS) wrapping VAULT_KEK_WRAPPED; Fly OIDC or equivalent for AWS_ROLE_ARN.
+- Email provider for codes (Resend pattern: RESEND_API_KEY + VAULT_EMAIL_FROM).
+- Optional: R2/S3 encrypted backups, Sentry without values.
+
+Required config checklist (confirm each is set in secrets, never paste into chat):
+DATABASE_URL, DATABASE_URL_DIRECT, VAULT_PUBLIC_URL (our origin), VAULT_DEPLOY_PLANE (staging|production), VAULT_KEK_WRAPPED, VAULT_KMS_KEY_ID, AWS_ROLE_ARN, VAULT_KEK_REQUIRE_KMS=1 after cutover, VAULT_SESSION_SECRET (>=32 bytes), VAULT_OIDC_PRIVATE_JWK, VAULT_APPROVAL_HMAC (64 hex), bootstrap token pair only for break-glass window, VAULT_TRUST_PROXY as appropriate.
+
+Build:
+npm ci
+npm --prefix site ci && npm --prefix site run build
+VAULT_MODE=hosted VAULT_BIND_HOST=0.0.0.0 PORT=8788 npx vault serve
+Exit 78 means config is wrong; fix from the self-hosting table.
+
+After /health and /ready pass:
+1. Create the first operator account on our VAULT_PUBLIC_URL (email code + TOTP).
+2. Issue a model/agent token or complete OAuth for our MCP clients against https://<our-origin>/mcp.
+3. Give developers the hosted agent bootstrap prompt, with every botpasses.com URL replaced by our origin (including /connect/callback on provider apps).
+4. Write a short internal runbook: who holds KMS, how to revoke an agent, how to rotate KEK (vault kek-rotate), backup restore pointer under docs/ops.
+
+Constraints: do not scale to two Machines without moving in-memory state to the database. Do not branch production Postgres from staging. Never log or return credential values.
+```
+
 ## Components
 
 | Component | Role |

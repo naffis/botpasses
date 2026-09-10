@@ -27,6 +27,8 @@ Pick the client you use. Each page has the copy-paste config.
 
 Any other MCP client that supports remote servers over HTTP works with the URL `https://botpasses.com/mcp` and OAuth sign-in on botpasses.com.
 
+Then paste the [hosted agent prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat. Setting up a laptop vault instead? Use the [local prompt](/docs/prompts#local). The full set is on [Copy-paste prompts](/docs/prompts).
+
 ## 3. Set up a credential
 
 Ask the connected agent in plain language: "Set up Spotify so you can call the API for me." The agent calls `setup` and gives you a Botpasses link. Open it, type the Client ID and secret there (never in chat), and check **Always allow this agent to use this credential** if you want that agent to keep using it. For Spotify and Google you then Connect the user account from the Inbox.

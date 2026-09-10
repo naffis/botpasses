@@ -25,6 +25,8 @@ Ask for the task in plain language. ChatGPT calls `http_request`; Botpasses atta
 - Pending approval: ChatGPT shows an 8-digit code. Approve in the [console](/console) Inbox or with the code, then retry.
 - Missing credential: ChatGPT shows a `collect_url`. Open it, sign in, and type the key on botpasses.com. Never paste it into the chat.
 
+After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so ChatGPT walks Collect and Connect. You type secrets on botpasses.com, never in chat.
+
 ## Notes
 
 - Access tokens are short-lived JWTs bound to `https://botpasses.com/mcp`. ChatGPT refreshes them; refresh tokens rotate.

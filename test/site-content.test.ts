@@ -31,6 +31,7 @@ const REQUIRED_PAGES = [
   "404.html",
   "docs.html",
   "docs/start.html",
+  "docs/prompts.html",
   "docs/install.html",
   "docs/how-to/store-a-secret.html",
   "docs/how-to/guided-setup.html",
@@ -72,6 +73,13 @@ test("homepage sells the product and links the right places", () => {
   }
   assert.match(home, /<script type="module" src="\/_astro\/[^"]+\.js"/);
   assert.match(home, /Create account/);
+  assert.match(home, /Copy a setup prompt/);
+  assert.match(home, /data-copy-prompt="hosted"/);
+  assert.match(home, /data-copy-prompt="local"/);
+  assert.match(home, /data-copy-prompt="self-host"/);
+  assert.match(home, /href="\/docs\/prompts#hosted"/);
+  assert.match(home, /href="\/docs\/prompts#local"/);
+  assert.match(home, /href="\/docs\/prompts#self-host"/);
   assert.doesNotMatch(home, /Operator token/);
   assert.match(home, /How it works/);
   assert.match(text(home), /"name": "http_request"/);
@@ -171,10 +179,31 @@ test("docs pages keep their tested content", () => {
   assert.match(start, /2\. Connect an agent/);
   assert.match(start, /3\. Set up a credential/);
   assert.match(start, /Set up Spotify so you can call the API for me/);
+  assert.match(start, /hosted agent prompt/);
+  assert.match(page("docs/start.html"), /href="\/docs\/prompts#hosted"/);
+  assert.match(page("docs/start.html"), /href="\/docs\/prompts#local"/);
+  const promptsPage = text(page("docs/prompts.html"));
+  assert.match(promptsPage, /Copy-paste prompts/);
+  assert.match(promptsPage, /There is no get_secret/);
+  assert.match(promptsPage, /VAULT_HOME/);
+  assert.match(promptsPage, /VAULT_KEK_REQUIRE_KMS=1/);
+  assert.match(promptsPage, /First API only/);
+  assert.match(promptsPage, /Grok redirect_uri/);
+  const nav = page("docs/prompts.html");
+  assert.match(nav, /aria-current="page">Copy-paste prompts</);
   const guided = text(page("docs/how-to/guided-setup.html"));
   assert.match(guided, /setup/);
   assert.match(guided, /Always allow this agent to use this credential/);
   assert.match(guided, /https:\/\/botpasses\.com\/connect\/callback/);
+  assert.match(guided, /There is no get_secret/);
+  assert.match(guided, /I will type secrets on Botpasses only/);
+  const install = text(page("docs/install.html"));
+  assert.match(install, /Set up a local Botpasses vault on this machine/);
+  const selfHost = text(page("docs/self-hosting.html"));
+  assert.match(selfHost, /Help me deploy a self-hosted Botpasses plane/);
+  const grokPage = page("docs/connect/grok.html");
+  assert.match(grokPage, /href="\/docs\/prompts#hosted"/);
+  assert.match(grokPage, /href="\/docs\/prompts#grok-redirect_uri"/);
   const mcp = page("docs/reference/mcp-tools.html");
   assert.match(mcp, /http_request/);
   assert.match(mcp, /setup/);
@@ -198,6 +227,7 @@ test("docs pages keep their tested content", () => {
   const index = page("docs.html");
   assert.match(index, /MCP tools/);
   assert.match(index, /HTTP API/);
+  assert.match(index, /Copy-paste prompts/);
   const changelog = page("changelog.html");
   assert.match(changelog, /0\.4\.1/);
   assert.match(changelog, /0\.2\.0/);

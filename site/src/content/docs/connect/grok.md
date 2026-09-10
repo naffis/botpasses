@@ -23,6 +23,8 @@ Grok Bot runs in a cloud VM, so a local stdio server is not reachable. Use the r
 
 Save the connector. Then ask in plain language ("get my Spotify profile"). Grok calls `http_request` in the same turn. Approve in the Inbox if asked.
 
+After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so Grok walks Collect and Connect. You type secrets on botpasses.com, never in chat. If `tools/call` fails with `redirect_uri` or Model OAuth required, use the [Grok redirect_uri prompt](/docs/prompts#grok-redirect_uri). Put the `avm_` token in the client's secret or env field, not in chat.
+
 ## 2b. Grok Build (CLI)
 
 ```bash
@@ -31,13 +33,15 @@ grok mcp add --transport http botpasses https://botpasses.com/mcp \
   --header "Authorization: Bearer ${BOTPASSES_MODEL_TOKEN}"
 ```
 
+Then paste a [hosted bootstrap prompt](/docs/prompts#hosted). Keep the token in the env field, not in chat.
+
 ## What not to paste
 
 Do not paste an operator session, an OAuth client secret, or any API key into Grok. The model token is the only thing Grok needs, and it cannot read values: it can list names, request approvals, and call `http_request`.
 
 ## OAuth connect cards
 
-Grok Bot in the cloud cannot finish OAuth. Registration may accept `http://localhost` or `grokbot://`, but a cloud VM cannot complete a local redirect. Put the model token on the connector and skip the card. If a card still appears after the header is set, see [Troubleshooting](/docs/troubleshooting#the-connect-card-keeps-appearing).
+Grok Bot in the cloud cannot finish OAuth. Registration may accept `http://localhost` or `grokbot://`, but a cloud VM cannot complete a local redirect. Put the model token on the connector and skip the card. If a card still appears after the header is set, see [Troubleshooting](/docs/troubleshooting#the-connect-card-keeps-appearing). If `tools/call` fails with `redirect_uri`, paste the [Grok redirect_uri prompt](/docs/prompts#grok-redirect_uri).
 
 ## Spotify and other OAuth apps
 
