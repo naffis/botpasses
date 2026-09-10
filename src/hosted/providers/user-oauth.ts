@@ -26,7 +26,7 @@ export type ProviderOauthState = {
   redirectUri: string;
   codeVerifier: string;
   exp: number;
-  /** Botpasses model client that gets an `item_standing` policy on the refresh item after connect. */
+  /** Botpasses model client that gets `item_standing` on the source credential and the refresh item after connect. */
   agentClientId?: string;
   /** The inbox connect need this flow answers, fulfilled by the callback. */
   needId?: string;

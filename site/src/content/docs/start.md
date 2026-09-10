@@ -27,7 +27,7 @@ Pick the client you use. Each page has the copy-paste config.
 
 Any other MCP client that supports remote servers over HTTP works with the URL `https://botpasses.com/mcp` and OAuth sign-in on botpasses.com.
 
-Then paste the [hosted agent prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat. Setting up a laptop CLI vault instead? Use the [local prompt](/docs/prompts#local). To run the hosted kernel on this laptop (console, OTP, MCP on loopback) run `npm run hosted:dev` from a clone; see [Install](/docs/install). The full set is on [Copy-paste prompts](/docs/prompts).
+Then paste the [hosted agent prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat. A laptop CLI vault (`VAULT_HOME`) uses the [local prompt](/docs/prompts#local). The laptop hosted kernel (`npm run hosted:dev`) is the same console and MCP as botpasses.com on `http://127.0.0.1:8788`; see [Install](/docs/install). The full set is on [Copy-paste prompts](/docs/prompts).
 
 ## 3. Set up a credential
 
@@ -41,6 +41,6 @@ Ask the agent in plain language: "check my Stripe balance". The agent calls the 
 
 If nothing is stored for that API, the agent gets a `collect_url`. Open it, sign in, and type the value on botpasses.com. Never paste a secret into chat.
 
-## Local CLI
+## Laptop and self-host
 
-You can also run Botpasses locally with SQLite and no account. See [Install](/docs/install) and the [CLI reference](/docs/reference/cli).
+Two laptop paths: `npm run hosted:dev` (hosted console and OTP on loopback) or a CLI vault under `VAULT_HOME` (no account). Self-host the same hosted process on any Postgres 16. See [Install](/docs/install), the [CLI reference](/docs/reference/cli), and [Self-hosting](/docs/self-hosting).

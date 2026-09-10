@@ -8,7 +8,7 @@ order: 3
 
 Paste one of these into your agent instead of inventing setup steps. The agent walks Collect and Connect. You type secrets on botpasses.com, never in chat.
 
-Use [Hosted](#hosted) after you add `https://botpasses.com/mcp`. [Local](#local) is a laptop SQLite vault with no account. [Self-host](#self-host) deploys the same hosted process on your origin.
+Use [Hosted](#hosted) after you add `https://botpasses.com/mcp`. [Local](#local) is a laptop CLI vault (`VAULT_HOME`) with no account. To run the hosted kernel on this laptop (console, OTP, MCP on loopback) see [Install](/docs/install) (`npm run hosted:dev`). [Self-host](#self-host) deploys the same hosted process on any Postgres 16 and an `https` origin you control.
 
 ## Hosted
 
@@ -31,7 +31,7 @@ Do this end to end. Pause and give me a link or checkbox whenever a human step i
 
 2. Call the setup tool for the first API I name (default: Spotify if I do not name one). Prefer provider=spotify|stripe|github|google|slack, or host= for other APIs.
 
-3. When setup returns collect_url, give me that URL only. Tell me to open it, sign in, type the credential there, and never paste the value here. For Client ID and secret kinds, remind me the redirect URI on the provider app is https://botpasses.com/connect/callback.
+3. When setup returns collect_url, give me that URL only. Tell me to open it, sign in, type the credential there, and never paste the value here. For Client ID and secret kinds, remind me the redirect URI on the provider app is the one Collect shows: https://botpasses.com/connect/callback on production, https://staging.botpasses.com/connect/callback on staging, and http://127.0.0.1:8788/connect/callback on npm run hosted:dev. Never use http://127.0.0.1:8888/callback on a hosted plane; that URI is the CLI vault (vault serve) only.
 
 4. If setup or http_request returns connect_url (user OAuth, e.g. Spotify /v1/me), give me that console link and wait until I confirm Connect is done.
 
@@ -46,7 +46,7 @@ If anything fails (need_item, host_mismatch, mfa_required, 429, redirect_uri), u
 
 ## Local
 
-For a laptop vault with SQLite. No botpasses.com account required. Same MCP tools as hosted.
+For a laptop CLI vault with SQLite (VAULT_HOME). No botpasses.com account. Same MCP tools as hosted. The laptop hosted kernel is npm run hosted:dev; see Install.
 
 ```
 Set up a local Botpasses vault on this machine and wire it into my MCP client. Secrets must never enter chat.
@@ -56,6 +56,7 @@ Facts:
 - Need Node.js 22.14+.
 - Local home: set VAULT_HOME to an absolute path (e.g. $PWD/.botpasses or $HOME/.botpasses).
 - Local MCP exposes the same six tools as hosted: list_items, find_items, request_grant, list_grants, setup, http_request. Values inject only into approved calls or vault run child env.
+- The hosted kernel on a laptop is npm run hosted:dev (console, OTP, sqlite-hosted at http://127.0.0.1:8788). That is not this VAULT_HOME vault. Its connect URI is http://127.0.0.1:8788/connect/callback, not :8888.
 
 Steps:
 1. Clone (or reuse) the repo, npm install, export VAULT_HOME to an absolute path, run npx vault init if the vault does not exist. Do not print the master key into chat; tell me where it lives and that I must keep VAULT_MASTER_KEY out of transcripts.

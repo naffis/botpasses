@@ -31,7 +31,7 @@ Do this end to end. Pause and give me a link or checkbox whenever a human step i
 
 2. Call the setup tool for the first API I name (default: Spotify if I do not name one). Prefer provider=spotify|stripe|github|google|slack, or host= for other APIs.
 
-3. When setup returns collect_url, give me that URL only. Tell me to open it, sign in, type the credential there, and never paste the value here. For Client ID and secret kinds, remind me the redirect URI on the provider app is https://botpasses.com/connect/callback.
+3. When setup returns collect_url, give me that URL only. Tell me to open it, sign in, type the credential there, and never paste the value here. For Client ID and secret kinds, remind me the redirect URI on the provider app is the one Collect shows: https://botpasses.com/connect/callback on production, https://staging.botpasses.com/connect/callback on staging, and http://127.0.0.1:8788/connect/callback on npm run hosted:dev. Never use http://127.0.0.1:8888/callback on a hosted plane; that URI is the CLI vault (vault serve) only.
 
 4. If setup or http_request returns connect_url (user OAuth, e.g. Spotify /v1/me), give me that console link and wait until I confirm Connect is done.
 
@@ -74,7 +74,7 @@ For a known provider the form is prefilled:
 
 Check **Always allow this agent to use this credential** if you want that agent to keep using it without a new Inbox card each time. The box starts unchecked.
 
-When Kind is Client ID and secret, Collect shows the redirect URI to add on the app. On production it is `https://botpasses.com/connect/callback`. Same URI for every provider.
+When Kind is Client ID and secret, Collect shows the redirect URI to add on the app. On production it is `https://botpasses.com/connect/callback`, on staging `https://staging.botpasses.com/connect/callback`, and on `npm run hosted:dev` it is `http://127.0.0.1:8788/connect/callback`. The CLI vault (`vault serve`) still uses `http://127.0.0.1:8888/callback`. Same URI for every provider on a given plane.
 
 ## Connect a user account
 
