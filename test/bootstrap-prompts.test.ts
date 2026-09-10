@@ -30,6 +30,7 @@ test("bootstrap prompts cover hosted, local, self-host, and the four extras", ()
     assert.doesNotMatch(p.blurb, /—/, `${p.id} blurb em-dash`);
     assert.doesNotMatch(p.text, /LastPass/i, p.id);
     assert.doesNotMatch(p.blurb, /LastPass/i, p.id);
+    assert.doesNotMatch(p.text, /THE_SECRET|printf '%s'/, `${p.id} must not model a secret in argv`);
   }
   assert.equal(promptById("hosted").heading, "Hosted");
   assert.throws(() => promptById("missing" as BootstrapPromptId), /unknown bootstrap prompt/);
@@ -61,4 +62,5 @@ test("docs markdown embeds the shared prompt text", () => {
     assert.match(read(rel), /\/docs\/prompts#hosted/, rel);
   }
   assert.match(read("site/src/content/docs/connect/grok.md"), /\/docs\/prompts#grok-redirect_uri/);
+  assert.match(read("site/src/content/docs/connect/grok.md"), /http:\/\/localhost/);
 });

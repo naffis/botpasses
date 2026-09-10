@@ -20,16 +20,19 @@ function isPromptId(value: string): value is BootstrapPromptId {
 
 async function writeClipboard(text: string): Promise<boolean> {
   if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") return false;
+  let timer = 0;
   try {
     await Promise.race([
       navigator.clipboard.writeText(text),
       new Promise<never>((_, reject) => {
-        window.setTimeout(() => reject(new Error("clipboard timeout")), CLIPBOARD_MS);
+        timer = window.setTimeout(() => reject(new Error("clipboard timeout")), CLIPBOARD_MS);
       }),
     ]);
     return true;
   } catch {
     return false;
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 

@@ -68,9 +68,9 @@ Facts:
 
 Steps:
 1. Clone (or reuse) the repo, npm install, export VAULT_HOME to an absolute path, run npx vault init if the vault does not exist. Do not print the master key into chat; tell me where it lives and that I must keep VAULT_MASTER_KEY out of transcripts.
-2. Show me the mcp.json snippet for my client (Cursor ~/.cursor/mcp.json or project .cursor/mcp.json) using command npx with args ["vault","mcp"] and env VAULT_HOME + VAULT_MASTER_KEY. I paste or approve the file edit; you do not echo the master key value in the reply.
+2. Show me the mcp.json snippet for my client (Cursor ~/.cursor/mcp.json or project .cursor/mcp.json) using command npx with args ["vault","mcp"] and env names VAULT_HOME and VAULT_MASTER_KEY (references only, never a literal key). I paste or approve the file edit; you do not echo the master key value in the reply.
 3. After MCP connects, call list_items to prove the server is up.
-4. For the first secret I name (or Stripe test key if I say so), use setup or walk me through: printf '%s' 'THE_SECRET' | npx vault set NAME with me supplying the secret via a secure local path or terminal, never this chat. Then vault grant --secret NAME --agent <name my client sends on initialize> --tool http_request (once or standing as I choose).
+4. For the first secret I name (or Stripe test key if I say so), use setup so I get a collect_url, or tell me to run npx vault set NAME in my own terminal so the CLI can prompt. Do not accept the value in this chat. Do not write a command that contains the secret. Then vault grant --secret NAME --agent <name my client sends on initialize> --tool http_request (once or standing as I choose).
 5. Smoke http_request to an allowlisted host I approve. Report status only.
 6. Point me at https://botpasses.com/docs/install and https://botpasses.com/docs/reference/cli for vault run (child process inject) when I need CLI scripts instead of MCP.
 
