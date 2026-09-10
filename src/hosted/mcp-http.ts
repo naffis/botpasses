@@ -66,7 +66,7 @@ type ScopeDeniedPayload = Record<string, unknown> & { status: "scope_denied"; it
  * A user-only path called with the app credential and no `<ITEM>_REFRESH` to exchange: refused
  * before dialing (the origin would answer 401 and spend the approval). `connect_url` is the
  * console deep link that opens the connect dialog for `item_name` with this agent and the inbox
- * need carried along, so the operator's connect also grants the agent the refresh item.
+ * need carried along, so the operator's connect also stands this agent on the source credential.
  */
 export type UserConnectRequired = {
   status: "user_connect_required";
@@ -332,7 +332,7 @@ export async function runHttpRequest(
     if (sentToOrigin(result)) {
       await audit("inject");
     } else {
-      // A structured refusal (client_id_required, a pending refresh grant): nothing was sent.
+      // A structured refusal (client_id_required, user_connect_required): nothing was sent.
       await releaseUnsentGrant(deps.kernel, prepared);
       await audit("inject_denied");
     }
@@ -576,13 +576,12 @@ async function ensureAppToken(
 
 /**
  * A path that needs a user token: exchange the stored `<ITEM>_REFRESH` item (if the org has
- * one) for an access token and call with that. A cached access token is used without touching
- * the refresh item's approval. Without a cache hit the refresh item needs an active grant for
- * this client; when it has none, the result is the pending grant for `<ITEM>_REFRESH` so the
- * model asks the operator instead of silently falling back to the app token. The exchange
- * authenticates the app with `item` (the client secret the connect flow used, already granted
- * for this call) placed per the provider's token auth. Returns undefined only when there is no
- * refresh item or no client id, so the caller falls back to the app-token path and its hint.
+ * one) for an access token and call with that. The caller already holds a grant on `item` for
+ * this API call; the mint is the same sibling read as `findClientSecretSibling`, not a second
+ * granted hop. A cached access token skips the exchange. Planting `POST tokenHost/tokenPath`
+ * as `requested_scope` is what made Always-allow stick to the token host (BOTP-14). Returns
+ * undefined only when there is no refresh item or no client id, so the caller falls back to
+ * the app-token path and its hint.
  */
 async function tryUserToken(
   deps: ConnectorCallDeps,
@@ -593,7 +592,7 @@ async function tryUserToken(
   environment: VaultEnvName,
   host: string,
   hintMessage: string,
-): Promise<OriginPayload | GrantHalt | undefined> {
+): Promise<OriginPayload | undefined> {
   const refreshName = refreshItemName(item.name);
   const stored = await deps.kernel.findStoredItem(deps.principal.orgId, environment, refreshName);
   if (!stored) return undefined;
@@ -606,34 +605,12 @@ async function tryUserToken(
     const origin = await executeConnector(itemWithAccessToken(item, cached.accessToken), call, connectorOpts(deps, target));
     return originPayload(origin, { user_token: true, token_last4: cached.last4 });
   }
-  const tokenRequest = { host: provider.tokenHost, method: "POST", path: provider.tokenPath };
-  const prepareRefresh = () =>
-    deps.kernel.prepareConnector({
-      orgId: deps.principal.orgId,
-      clientId: deps.principal.clientId,
-      itemName: refreshName,
-      environment,
-      auditAfterSend: true,
-      request: tokenRequest,
-    });
-  let refreshItem: ConnectorItem;
-  try {
-    refreshItem = await prepareRefresh();
-  } catch (err) {
-    if (isNeedItemError(err)) return undefined;
-    if (!isInjectDenied(err)) throw err;
-    const halt = await refreshGrantHalt(deps, refreshName, environment, target, tokenRequest);
-    if (halt.status !== "active") return halt;
-    // A standing policy activated the grant on request: proceed as if it had been there.
-    refreshItem = await prepareRefresh();
-  }
+  const decrypted = await deps.kernel.decryptItem(deps.principal.orgId, refreshKey);
+  const refreshItem: ConnectorItem = { ...decrypted, itemId: refreshKey };
   let exchange: Awaited<ReturnType<typeof refreshAccessToken>>;
   try {
     exchange = await refreshAccessToken(provider, refreshItem, item, clientId, connectorOpts(deps, target));
   } catch (err) {
-    if (sendNeverLeft(err) && refreshItem.grantPolicy === "prompt") {
-      await deps.kernel.reactivatePromptGrant(refreshItem.grantId);
-    }
     await deps.kernel.auditInject(deps.principal.orgId, deps.principal.clientId, refreshName, failureOutcome(err));
     throw err;
   }
@@ -723,32 +700,6 @@ async function userConnectRequired(
       `so nothing was sent and no approval was spent. Give the operator connect_url: it opens the Botpasses console, where they connect a ` +
       `${provider.displayName} account for ${item.name} and allow this agent to use it (stored as ${refreshName}). ` +
       "Do not retry until they confirm; then retry the same call once.",
-  };
-}
-
-/** The refresh item exists but this client has no active grant for it: ask, and say so. */
-async function refreshGrantHalt(
-  deps: ConnectorCallDeps,
-  refreshName: string,
-  environment: VaultEnvName,
-  target: ConnectorTarget,
-  request: { host: string; method: string; path: string },
-): Promise<GrantHalt> {
-  const result = await deps.kernel.requestGrant({
-    orgId: deps.principal.orgId,
-    clientId: deps.principal.clientId,
-    itemName: refreshName,
-    environment,
-    taskDescription: target.taskDescription,
-    request,
-  });
-  return {
-    grant_id: result.grant.id,
-    status: result.grant.status,
-    approval_code: result.code,
-    notify_failed: result.notifyFailed ?? false,
-    item_name: refreshName,
-    hint: `${refreshName} holds the connected account's refresh token. This call needs a user token, so the operator must approve ${refreshName} for this agent. After approval, retry the same call.`,
   };
 }
 

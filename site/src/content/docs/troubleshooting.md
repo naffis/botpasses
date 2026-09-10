@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Fixes for host_mismatch, mfa_required, a connect card that keeps appearing, 409 on a reused approval code, need_item and collect_url, and 429 rate limits.
+description: Fixes for host_mismatch, mfa_required, a connect card that keeps appearing, 409, need_item, 429, hosted:dev on port 8888, SQLITE_BUSY, and a missing laptop OTP.
 section: help
 order: 1
 ---
@@ -50,6 +50,30 @@ If you already stored the credential and still get `need_item`, the agent is pro
 **Why.** 30 new approval and collect requests per organisation per hour; 5 email codes per address per 15 minutes; 20 OAuth registrations per IP per hour. Full list: [Rate limits](/docs/reference/rate-limits).
 
 **Fix.** Wait for the window. Approve the pending request that already exists instead of asking the agent to request again.
+
+## hosted:dev connect goes to port 8888
+
+**What you see.** After `npm run hosted:dev`, a provider app redirects to `http://127.0.0.1:8888/callback` and nothing answers.
+
+**Why.** Port 8888 is the CLI vault (`vault serve`) callback. The hosted kernel, including the laptop plane, always uses `{origin}/connect/callback`.
+
+**Fix.** Add `http://127.0.0.1:8788/connect/callback` on the provider app (or the URI Collect shows). Point the MCP client at `http://127.0.0.1:8788/mcp`. Do not copy a CLI-vault snippet onto a hosted plane.
+
+## SQLITE_BUSY on hosted:dev
+
+**What you see.** The laptop hosted kernel logs `SQLITE_BUSY` or refuses a second writer.
+
+**Why.** sqlite-hosted is one process per file. A leftover `hosted:dev` or a second `--postgres`-less start shares `.botpasses-hosted/hosted.sqlite`.
+
+**Fix.** Stop the other process. Or set `VAULT_HOSTED_SQLITE` to a different path. `npm run hosted:dev` is refused when `FLY_APP_NAME` is set.
+
+## No email code on hosted:dev
+
+**What you see.** Sign-in says a code was sent, but nothing arrives in your inbox.
+
+**Why.** `npm run hosted:dev` does not send mail. The 8-digit code is printed on the terminal that started it.
+
+**Fix.** Read that terminal. Structured logs never contain the code.
 
 ## The agent asks me to paste the key
 
