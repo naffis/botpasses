@@ -1,5 +1,17 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { isMcpClientSurface } from "./oauth-metadata.ts";
+import { isPublicSitePath } from "./static-site.ts";
+
+/**
+ * World-readable marketing and discovery URLs. A foreign browser Origin must not
+ * 403 GET/HEAD/OPTIONS here: unfurlers and `crossorigin` image tags send one.
+ * Privileged routes (`/api`, `/console`, `/collect`, auth) stay Origin-locked.
+ */
+export function publicSiteAllowsForeignOrigin(path: string, method: string): boolean {
+  const verb = method.toUpperCase();
+  if (verb !== "GET" && verb !== "HEAD" && verb !== "OPTIONS") return false;
+  return isPublicSitePath(path);
+}
 
 export type CorsBind = {
   req: IncomingMessage;
@@ -21,7 +33,10 @@ export function bindCors(res: ServerResponse, ctx: CorsBind): void {
   ) => {
     const hasReason = typeof reasonOrHeaders === "string";
     const raw = headerBag(hasReason ? maybeHeaders : reasonOrHeaders);
-    if (isMcpClientSurface(ctx.path)) {
+    if (
+      isMcpClientSurface(ctx.path) ||
+      publicSiteAllowsForeignOrigin(ctx.path, ctx.req.method ?? "GET")
+    ) {
       for (const [k, v] of Object.entries(corsHeaders(res))) {
         if (raw[k] === undefined && raw[k.toLowerCase()] === undefined) raw[k] = v;
       }
@@ -75,6 +90,7 @@ export function originOk(req: IncomingMessage, allowed: string[], path: string):
   const host = req.headers.host ?? "";
   if (!hostAllowed(host, allowed)) return false;
   if (isMcpClientSurface(path)) return true;
+  if (publicSiteAllowsForeignOrigin(path, req.method ?? "GET")) return true;
   const origin = req.headers.origin;
   if (!origin) return true;
   try {
@@ -95,7 +111,13 @@ export function corsHeaders(res: ServerResponse): Record<string, string> {
     "access-control-expose-headers": "WWW-Authenticate, Mcp-Session-Id",
   };
   const origin = typeof ctx?.req.headers.origin === "string" ? ctx.req.headers.origin : "";
-  if (origin && ctx && (originAllowed(origin, ctx.allowed) || isMcpClientSurface(ctx.path))) {
+  if (
+    origin &&
+    ctx &&
+    (originAllowed(origin, ctx.allowed) ||
+      isMcpClientSurface(ctx.path) ||
+      publicSiteAllowsForeignOrigin(ctx.path, ctx.req.method ?? "GET"))
+  ) {
     headers["access-control-allow-origin"] = origin;
   }
   return headers;

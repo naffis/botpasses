@@ -11,6 +11,7 @@ import { assertSafePublicObject } from "../redact.ts";
 import type { ClientRecord, EnvironmentRecord, HostedGrantRecord, ItemKind, ItemPublic, ItemRecord, VaultEnvName } from "../hosted-types.ts";
 import { ITEM_AAD_VERSION } from "../store/rows.ts";
 import type { LegacyAadCursor, VaultStore } from "../store/types.ts";
+import type { DeployPlane } from "../brand.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
 import { HttpError, type NeedItemError } from "./errors.ts";
 import { itemAad, legacyItemAad } from "./item-aad.ts";
@@ -25,7 +26,7 @@ export const MAX_ITEM_BYTES = 64 * 1024;
 export type ItemHost = {
   store: VaultStore;
   now: () => Date;
-  deployPlane: "staging" | "production";
+  deployPlane: DeployPlane;
   /** 404 when this deploy plane may not serve the environment (production items on staging). */
   assertPlane: (name: VaultEnvName) => void;
   envFor: (orgId: string, name: VaultEnvName) => Promise<EnvironmentRecord>;

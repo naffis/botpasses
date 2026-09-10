@@ -1,7 +1,8 @@
+import type { DeployPlane } from "../brand.ts";
 import { environmentsForDeployPlane } from "./deploy-plane.ts";
 import type { VaultEnvName } from "../hosted-types.ts";
 
-export function envOptionsHtml(plane: VaultEnvName, selected: VaultEnvName): string {
+export function envOptionsHtml(plane: DeployPlane, selected: VaultEnvName): string {
   return environmentsForDeployPlane(plane)
     .map((e) => `<option value="${e}"${e === selected ? " selected" : ""}>${e}</option>`)
     .join("");
@@ -27,7 +28,7 @@ function inboxPanel(): string {
         </section>`;
 }
 
-function credentialsPanel(plane: VaultEnvName): string {
+function credentialsPanel(plane: DeployPlane): string {
   const envFilter = environmentsForDeployPlane(plane)
     .map((e) => `<option value="${e}">${e}</option>`)
     .join("");
@@ -71,7 +72,7 @@ function credentialsPanel(plane: VaultEnvName): string {
         </section>`;
 }
 
-function agentsPanel(plane: VaultEnvName, defaultEnv: VaultEnvName): string {
+function agentsPanel(plane: DeployPlane, defaultEnv: VaultEnvName): string {
   return `<section class="panel" data-panel="agents" aria-labelledby="page-title">
           <div class="card connect-card" data-testid="connect-card">
             <h2>Connect an agent</h2>
@@ -150,6 +151,6 @@ function accountPanel(): string {
 }
 
 /** The four routed panels inside `<main>`. */
-export function consolePanelsHtml(plane: VaultEnvName, defaultEnv: VaultEnvName): string {
+export function consolePanelsHtml(plane: DeployPlane, defaultEnv: VaultEnvName): string {
   return [inboxPanel(), credentialsPanel(plane), agentsPanel(plane, defaultEnv), accountPanel()].join("\n        ");
 }

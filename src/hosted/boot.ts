@@ -233,11 +233,8 @@ export function hostedModeError(env: NodeJS.ProcessEnv): string | undefined {
  */
 export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.VAULT_MODE !== "hosted") return undefined;
-  if (!env.DATABASE_URL) {
-    return "VAULT_MODE=hosted requires DATABASE_URL (Neon pooled).";
-  }
   if (env.VAULT_HOME) {
-    return "VAULT_MODE=hosted refuses VAULT_HOME; do not open sqlite on the Machine.";
+    return "VAULT_MODE=hosted refuses VAULT_HOME; do not open the CLI sqlite vault in hosted mode.";
   }
   // Header principals exist for the test suite only; the hosted process never installs them,
   // so the flag is refused whether or not a plane is named.
@@ -246,6 +243,12 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   }
   const plane = deployPlaneRaw(env);
   if (!plane) return DEPLOY_PLANE_REQUIRED;
+  if (plane === "dev" && env.FLY_APP_NAME?.trim()) {
+    return "VAULT_DEPLOY_PLANE=dev refuses FLY_APP_NAME. Self-host on Fly uses staging or production plus Postgres.";
+  }
+  if (plane !== "dev" && !env.DATABASE_URL) {
+    return "VAULT_MODE=hosted requires DATABASE_URL (Postgres URL).";
+  }
   const kekErr = hostedKekBootError(env);
   if (kekErr) return kekErr;
   if (env.RESEND_API_KEY && !env.VAULT_EMAIL_FROM?.trim()) {
@@ -264,7 +267,7 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (!pub) {
     return `VAULT_MODE=hosted requires VAULT_PUBLIC_URL=${originForPlane(plane)}.`;
   }
-  const originErr = publicOriginError(pub, { plane, allowLoopback: false });
+  const originErr = publicOriginError(pub, { plane, allowLoopback: plane === "dev" });
   if (originErr) return originErr;
   const session = env.VAULT_SESSION_SECRET ?? "";
   if (Buffer.byteLength(session) < 32) {
@@ -278,11 +281,20 @@ export function hostedBootError(env: NodeJS.ProcessEnv = process.env): string | 
   if (env.VAULT_OIDC_PREVIOUS_JWK?.trim() && !parseOidcPrivateJwk(env.VAULT_OIDC_PREVIOUS_JWK)) {
     return "VAULT_OIDC_PREVIOUS_JWK is set but is not a private RS256 JWK.";
   }
-  const siteRoot = env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist");
-  if (!existsSync(resolve(siteRoot, "index.html"))) {
-    return "VAULT_MODE=hosted requires site/dist/index.html (build the Astro site).";
+  if (plane !== "dev") {
+    const siteRoot = env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist");
+    if (!existsSync(resolve(siteRoot, "index.html"))) {
+      return "VAULT_MODE=hosted requires site/dist/index.html (build the Astro site).";
+    }
   }
   return undefined;
+}
+
+/** Bind address: plane `dev` defaults to loopback; staging/production default to all interfaces. */
+export function bindHostForPlane(env: NodeJS.ProcessEnv): string {
+  const explicit = env.VAULT_BIND_HOST?.trim();
+  if (explicit) return explicit;
+  return deployPlaneRaw(env) === "dev" ? "127.0.0.1" : "0.0.0.0";
 }
 
 const APPROVAL_HMAC_RE = /^[0-9a-f]{64}$/;
@@ -312,10 +324,15 @@ export function previousKekBootError(env: NodeJS.ProcessEnv): string | undefined
   if (!raw && !wrapped) return undefined;
   if (raw && wrapped) return "Set VAULT_KEK_PREVIOUS or VAULT_KEK_PREVIOUS_WRAPPED, not both.";
   if (wrapped) {
+    if (plane === "dev") {
+      return "VAULT_DEPLOY_PLANE=dev refuses VAULT_KEK_PREVIOUS_WRAPPED; use raw VAULT_KEK_PREVIOUS.";
+    }
     if (!plane || !env.VAULT_KMS_KEY_ID?.trim()) {
       return "VAULT_KEK_PREVIOUS_WRAPPED requires VAULT_DEPLOY_PLANE and VAULT_KMS_KEY_ID.";
     }
-    if (!env.FLY_APP_NAME?.trim()) return "VAULT_KEK_PREVIOUS_WRAPPED requires FLY_APP_NAME.";
+    if (!env.FLY_APP_NAME?.trim() && !env.VAULT_KMS_APP_ID?.trim()) {
+      return "VAULT_KEK_PREVIOUS_WRAPPED requires VAULT_KMS_APP_ID or FLY_APP_NAME.";
+    }
     return undefined;
   }
   if (plane && env.VAULT_KEK_REQUIRE_KMS === "1") {
@@ -334,9 +351,16 @@ export function hostedKekBootError(env: NodeJS.ProcessEnv): string | undefined {
   const wrapped = Boolean(env.VAULT_KEK_WRAPPED?.trim() && env.VAULT_KMS_KEY_ID?.trim());
   const raw = Boolean(env.VAULT_KEK?.trim());
   const requireKms = env.VAULT_KEK_REQUIRE_KMS === "1";
+  if (plane === "dev") {
+    if (env.VAULT_KEK_WRAPPED?.trim() || requireKms) {
+      return "VAULT_DEPLOY_PLANE=dev requires a raw VAULT_KEK and refuses VAULT_KEK_WRAPPED and VAULT_KEK_REQUIRE_KMS=1.";
+    }
+    if (!raw) return "VAULT_MODE=hosted requires VAULT_KEK.";
+    return undefined;
+  }
   if (plane) {
-    if (wrapped && !env.FLY_APP_NAME?.trim()) {
-      return "VAULT_MODE=hosted KMS unwrap requires FLY_APP_NAME.";
+    if (wrapped && !env.FLY_APP_NAME?.trim() && !env.VAULT_KMS_APP_ID?.trim()) {
+      return "VAULT_MODE=hosted KMS unwrap requires VAULT_KMS_APP_ID or FLY_APP_NAME.";
     }
     if (wrapped) return undefined;
     if (raw && !requireKms) return undefined;

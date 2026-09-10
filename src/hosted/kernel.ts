@@ -5,7 +5,7 @@
  * take a host object; this class builds those hosts and keeps the public method names stable.
  */
 import { randomUUID } from "node:crypto";
-import { resolvePublicOrigin } from "../brand.ts";
+import { resolvePublicOrigin, type DeployPlane } from "../brand.ts";
 import type { Envelope } from "../crypto.ts";
 import { assertSafePublicObject } from "../redact.ts";
 import type {
@@ -51,7 +51,7 @@ export type HostedKernelOpts = {
   sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
   publicUrl?: string;
   approvalHmac?: Buffer;
-  deployPlane?: "staging" | "production";
+  deployPlane?: DeployPlane;
   limiter?: OrgRateLimiter;
   /** Plan limits (3.9). Defaults to the free tier with the `VAULT_PLAN_LIMITS_JSON` override. */
   planLimits?: PlanLimits;
@@ -67,7 +67,7 @@ export class HostedKernel {
   readonly sendEmail: HostedKernelOpts["sendEmail"];
   readonly publicUrl: string;
   readonly approvalHmac: Buffer | undefined;
-  readonly deployPlane: "staging" | "production";
+  readonly deployPlane: DeployPlane;
   readonly limiter: OrgRateLimiter;
   readonly planLimits: PlanLimits;
   readonly keys: IdentityKeyring;

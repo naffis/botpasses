@@ -44,6 +44,8 @@ const cssName = (key: string) => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLower
   <p>
     Brand navy is <code>{BRAND_NAVY}</code>. Brand teal is <code>{BRAND_TEAL}</code>. Dark surfaces sit
     on navy; the action accent is teal. Light theme uses a darker teal so text on white stays AA.
+    Docs code fences use these same tokens through <code>--astro-code-*</code>; they do not ship a
+    separate highlighter palette.
   </p>
   <div class="swatches">
     {tokens.map(([name, hex]) => (

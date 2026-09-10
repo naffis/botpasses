@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { STAGING_ORIGIN } from "../src/brand.ts";
+import { PRODUCTION_ORIGIN, STAGING_ORIGIN } from "../src/brand.ts";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
-import { hostedBootError, HOSTED_CONFIG_EXIT } from "../src/hosted/boot.ts";
+import { bindHostForPlane, hostedBootError, HOSTED_CONFIG_EXIT } from "../src/hosted/boot.ts";
+import { usedRawKekFallback } from "../src/hosted/kms.ts";
+import { defaultConnectRedirect } from "../src/hosted/providers/connect-redirect.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { testAuthResolver } from "../src/hosted/auth.ts";
 import { createHostedServer, KEEPALIVE_MS } from "../src/hosted/http.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
@@ -601,6 +605,133 @@ test("AC-13 operator revoke; MCP tools omit revoke_grant", async () => {
   }
 });
 
+function devBootEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    VAULT_MODE: "hosted",
+    VAULT_DEPLOY_PLANE: "dev",
+    VAULT_PUBLIC_URL: "http://127.0.0.1:8788",
+    VAULT_KEK: "aa".repeat(32),
+    VAULT_SESSION_SECRET: TEST_SESSION_SECRET,
+    VAULT_OIDC_PRIVATE_JWK: testOidcPrivateJwk(),
+    VAULT_SITE_ROOT: mkdtempSync(join(tmpdir(), "bp-nosite-")),
+    ...extra,
+  };
+}
+
+test("dev plane boots without DATABASE_URL or site/dist; refuses VAULT_HOME and FLY_APP_NAME", () => {
+  assert.equal(hostedBootError(devBootEnv()), undefined);
+  assert.match(hostedBootError(devBootEnv({ VAULT_HOME: "/tmp/x" })) ?? "", /VAULT_HOME/);
+  assert.match(hostedBootError(devBootEnv({ FLY_APP_NAME: "botpasses-staging" })) ?? "", /FLY_APP_NAME|dev/);
+  assert.match(hostedBootError(devBootEnv({ VAULT_KEK_WRAPPED: "d3JhcA==", VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x" })) ?? "", /VAULT_KEK/);
+  assert.match(hostedBootError(devBootEnv({ VAULT_PUBLIC_URL: PRODUCTION_ORIGIN })) ?? "", /127\.0\.0\.1|localhost|dev/);
+  assert.match(hostedBootError(devBootEnv({ VAULT_PUBLIC_URL: "http://[::1]:8788" })) ?? "", /127\.0\.0\.1|localhost|dev|URL/);
+  assert.match(
+    hostedBootError(
+      hostedBootEnv({
+        VAULT_KEK: "aa".repeat(32),
+        VAULT_PUBLIC_URL: "http://127.0.0.1:8788",
+      }),
+    ) ?? "",
+    /127\.0\.0\.1|staging\.botpasses\.com|VAULT_PUBLIC_URL/,
+  );
+  const noDb = hostedBootEnv();
+  delete noDb.DATABASE_URL;
+  assert.match(hostedBootError(noDb) ?? "", /DATABASE_URL|Postgres/);
+});
+
+test("usedRawKekFallback fires only on staging and production", () => {
+  assert.equal(usedRawKekFallback(devBootEnv()), false);
+  assert.equal(usedRawKekFallback(hostedBootEnv({ VAULT_KEK: "aa".repeat(32) })), true);
+  assert.equal(
+    usedRawKekFallback(
+      hostedBootEnv({
+        VAULT_DEPLOY_PLANE: "production",
+        VAULT_PUBLIC_URL: PRODUCTION_ORIGIN,
+        VAULT_KEK: "aa".repeat(32),
+        VAULT_KEK_WRAPPED: "d3JhcA==",
+        VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
+      }),
+    ),
+    false,
+  );
+});
+
+test("dev bind defaults to loopback; staging defaults to all interfaces", () => {
+  assert.equal(bindHostForPlane({ VAULT_DEPLOY_PLANE: "dev" }), "127.0.0.1");
+  assert.equal(bindHostForPlane({ VAULT_DEPLOY_PLANE: "staging" }), "0.0.0.0");
+  assert.equal(bindHostForPlane({ VAULT_DEPLOY_PLANE: "dev", VAULT_BIND_HOST: "0.0.0.0" }), "0.0.0.0");
+});
+
+test("hosted connect redirect on loopback stays on the hosted origin", () => {
+  assert.equal(defaultConnectRedirect("http://127.0.0.1:8788"), "http://127.0.0.1:8788/connect/callback");
+});
+
+test("loopback hosted server issues bp_session without Secure when secureCookies is derived", async () => {
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "cookie.sqlite"));
+  const kek = parseMasterKey(generateMasterKey());
+  const emails: { to: string; html: string }[] = [];
+  const kernel = new HostedKernel({
+    store,
+    kek,
+    sendEmail: async (to, _s, html) => {
+      emails.push({ to, html });
+    },
+    publicUrl: "http://127.0.0.1:8788",
+    deployPlane: "dev",
+  });
+  const { OperatorIdentity } = await import("../src/hosted/operator-identity.ts");
+  const { identityAuthResolver } = await import("../src/hosted/identity.ts");
+  const identity = new OperatorIdentity({
+    store,
+    sessionSecret: TEST_SESSION_SECRET,
+    kek,
+    sendEmail: async (to, _s, html) => {
+      emails.push({ to, html });
+    },
+  });
+  const http = createHostedServer({
+    kernel,
+    host: "127.0.0.1",
+    port: 0,
+    publicUrl: "http://127.0.0.1:0",
+    identity,
+    authResolver: identityAuthResolver({
+      identity,
+      kernel,
+      secureCookies: false,
+      issuer: "http://127.0.0.1:8788",
+    }),
+  });
+  try {
+    const addr = await http.listen();
+    const sent = await fetch(`http://${addr.host}:${addr.port}/api/auth/otp/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "op@example.com" }),
+    });
+    assert.equal(sent.status, 200);
+    const mail = emails.at(-1);
+    assert.ok(mail);
+    const code = />(\d{8})</.exec(mail.html)?.[1];
+    assert.ok(code);
+    const verified = await fetch(`http://${addr.host}:${addr.port}/api/auth/otp/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "op@example.com", otp: code }),
+    });
+    assert.equal(verified.status, 200);
+    const cookie = verified.headers.get("set-cookie") ?? "";
+    assert.match(cookie, /bp_session=/);
+    assert.doesNotMatch(cookie, /__Host-bp_session=/);
+    assert.doesNotMatch(cookie, /Secure/);
+  } finally {
+    await http.close();
+    await store.close();
+    cleanup(home);
+  }
+});
+
 test("AC-11 hosted boot refuses sqlite when VAULT_HOME is set", () => {
   const oidc = testOidcPrivateJwk();
   const err = hostedBootError({
@@ -732,6 +863,28 @@ test("AC-02c both wrapped and raw prefer wrapped and do not fail boot", () => {
         VAULT_KEK_WRAPPED: "d3JhcA==",
         VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
         FLY_APP_NAME: "botpasses-staging",
+      }),
+    ),
+    undefined,
+  );
+});
+
+test("R-11 wrapped KEK requires VAULT_KMS_APP_ID or FLY_APP_NAME", () => {
+  assert.match(
+    hostedBootError(
+      hostedBootEnv({
+        VAULT_KEK_WRAPPED: "d3JhcA==",
+        VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
+      }),
+    ) ?? "",
+    /VAULT_KMS_APP_ID|FLY_APP_NAME/,
+  );
+  assert.equal(
+    hostedBootError(
+      hostedBootEnv({
+        VAULT_KEK_WRAPPED: "d3JhcA==",
+        VAULT_KMS_KEY_ID: "arn:aws:kms:us-east-1:1:key/x",
+        VAULT_KMS_APP_ID: "self-host",
       }),
     ),
     undefined,

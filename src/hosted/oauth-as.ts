@@ -2,6 +2,7 @@ import { hkdfSync } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import Provider, { errors as oidcErrors, type Grant, type ProviderCallback, type ProviderContext } from "oidc-provider";
 import type { VaultEnvName } from "../hosted-types.ts";
+import { defaultEnvironmentForDeployPlane } from "./deploy-plane.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
 import { createStoreAdapter } from "./oidc-adapter.ts";
@@ -60,7 +61,7 @@ export type OauthAsOpts = {
   previousJwk?: OidcPrivateJwk;
   /** Hosted: cookies are Secure and the provider trusts X-Forwarded-Proto from the edge. */
   secureCookies: boolean;
-  /** Vault environment new OAuth clients are bound to. Defaults to `kernel.deployPlane`. */
+  /** Vault environment new OAuth clients are bound to. Defaults via `defaultEnvironmentForDeployPlane`. */
   deployPlane?: VaultEnvName;
   /** Outbound fetch for CIMD, jwks_uri, sector_identifier_uri. Defaults to the SSRF-pinned fetch. */
   fetchImpl?: PinnedFetch;
@@ -199,7 +200,7 @@ function signingKey(jwk: OidcPrivateJwk): Record<string, unknown> {
 export function createOauthProvider(opts: OauthAsOpts): Provider {
   const issuer = opts.issuer.replace(/\/$/, "");
   const audience = mcpAud(issuer);
-  const environment = opts.deployPlane ?? opts.kernel.deployPlane;
+  const environment = opts.deployPlane ?? defaultEnvironmentForDeployPlane(opts.kernel.deployPlane);
   const Adapter = createStoreAdapter(opts.kernel.store, opts.oidcDirectory);
   const keySet: OidcKeySet = { current: opts.jwk, previous: opts.previousJwk };
   const currentKid = oidcKid(opts.jwk);

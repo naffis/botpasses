@@ -1,11 +1,16 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { hostedDeployPlane, PRODUCT_NAME, resolvePublicOrigin } from "../brand.ts";
+import { createDevMailer } from "./dev-mailer.ts";
+import { openHostedStore } from "./hosted-store.ts";
+import type { VaultStore } from "../store/types.ts";
 import { zeroKey } from "../crypto.ts";
 import { HostedKernel } from "./kernel.ts";
 import { createHostedServer } from "./http.ts";
 import { createResendSender } from "./email.ts";
 import {
   assertHostedBoot,
+  bindHostForPlane,
   createShutdown,
   HOSTED_CONFIG_EXIT,
   installProcessGuards,
@@ -17,7 +22,6 @@ import {
 import type { RebindOptions, RebindResult } from "./kernel-items.ts";
 import { selectKekProvider, selectPreviousKekProvider, usedRawKekFallback } from "./kms.ts";
 import { logVaultEvent, packageVersion } from "./observe.ts";
-import { PostgresStore } from "../store/postgres.ts";
 import { hostedAuthResolver } from "./auth.ts";
 import { OperatorIdentity } from "./operator-identity.ts";
 import { identityAuthResolver } from "./identity.ts";
@@ -65,13 +69,13 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     // Not fatal: the plane still serves. Loud, because a plane without error reporting is blind.
     logVaultEvent("sentry_dsn_missing", { plane: deployPlane });
   }
-  let store: PostgresStore;
+  let store: VaultStore;
   try {
-    store = await PostgresStore.open(env.DATABASE_URL ?? "", { plane: deployPlane });
+    store = await openHostedStore(env);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(
-      `Postgres open failed: ${message}. Check DATABASE_URL (Neon pooled host, sslmode=require) and that the release_command migrated the schema.`,
+      `Store open failed: ${message}. Check DATABASE_URL (Postgres URL, sslmode=require) or the hosted-dev sqlite path.`,
     );
     zeroKey(kek);
     if (previousKek) zeroKey(previousKek);
@@ -79,11 +83,14 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   }
   const sendEmail = env.RESEND_API_KEY
     ? createResendSender(env.RESEND_API_KEY, env.VAULT_EMAIL_FROM ?? "")
-    : undefined;
+    : deployPlane === "dev"
+      ? createDevMailer()
+      : undefined;
   const publicUrl = resolvePublicOrigin(env.VAULT_PUBLIC_URL ?? "", {
     plane: deployPlane,
-    allowLoopback: false,
+    allowLoopback: deployPlane === "dev",
   });
+  const secureCookies = publicUrl.startsWith("https:");
   const kernel = new HostedKernel({
     store,
     kek,
@@ -94,7 +101,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     approvalHmac: env.VAULT_APPROVAL_HMAC?.trim() ? Buffer.from(env.VAULT_APPROVAL_HMAC.trim(), "hex") : undefined,
     deployPlane,
   });
-  const host = env.VAULT_BIND_HOST ?? "0.0.0.0";
+  const host = bindHostForPlane(env);
   const sessionSecret = env.VAULT_SESSION_SECRET ?? "";
   const identity = new OperatorIdentity({ store, sessionSecret, kek, previousKek, sendEmail });
   // Both shapes were checked by hostedBootError before the KEK was unwrapped.
@@ -107,7 +114,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
         sessionSecret,
         jwk,
         previousJwk,
-        secureCookies: true,
+        secureCookies,
         oidcDirectory: kernel.oidc,
       })
     : undefined;
@@ -116,12 +123,15 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
   const inner = identityAuthResolver({
     identity,
     kernel,
-    secureCookies: true,
+    secureCookies,
     oidcJwk: jwk,
     oidcPreviousJwk: previousJwk,
     issuer: publicUrl.replace(/\/$/, ""),
   });
   const authResolver = hostedAuthResolver(env, inner);
+  const configuredSite = env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist");
+  const siteRoot =
+    deployPlane === "dev" && !existsSync(resolve(configuredSite, "index.html")) ? undefined : configuredSite;
   const http = createHostedServer({
     kernel,
     host,
@@ -130,8 +140,8 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     authResolver,
     identity,
     oidcProvider,
-    secureCookies: true,
-    siteRoot: env.VAULT_SITE_ROOT?.trim() || resolve(process.cwd(), "site/dist"),
+    secureCookies,
+    siteRoot,
     deployPlane,
   });
   await serveHosted({

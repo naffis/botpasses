@@ -172,6 +172,7 @@ test("docs pages keep their tested content", () => {
   const oauthHowTo = text(page("docs/how-to/use-an-oauth-client-secret.html"));
   assert.match(oauthHowTo, /https:\/\/botpasses\.com\/connect\/callback/);
   assert.match(oauthHowTo, /https:\/\/staging\.botpasses\.com\/connect\/callback/);
+  assert.match(oauthHowTo, /http:\/\/127\.0\.0\.1:8788\/connect\/callback/);
   assert.match(oauthHowTo, /http:\/\/127\.0\.0\.1:8888\/callback/);
   const revoke = page("docs/how-to/revoke-access.html");
   assert.match(revoke, /Access/);
@@ -199,8 +200,15 @@ test("docs pages keep their tested content", () => {
   assert.match(guided, /I will type secrets on Botpasses only/);
   const install = text(page("docs/install.html"));
   assert.match(install, /Set up a local Botpasses vault on this machine/);
+  assert.match(install, /npm run hosted:dev/);
+  assert.match(install, /SQLITE_BUSY/);
+  assert.match(text(page("docs/reference/cli.html")), /SQLITE_BUSY/);
   const selfHost = text(page("docs/self-hosting.html"));
   assert.match(selfHost, /Help me deploy a self-hosted Botpasses plane/);
+  assert.match(selfHost, /Postgres 16 \(any vendor\)/);
+  assert.match(selfHost, /npm run hosted:dev/);
+  assert.match(selfHost, /SQLITE_BUSY/);
+  assert.match(selfHost, /our https origin/);
   const grokPage = page("docs/connect/grok.html");
   assert.match(grokPage, /href="\/docs\/prompts#hosted"/);
   assert.match(grokPage, /href="\/docs\/prompts#grok-redirect_uri"/);
@@ -232,4 +240,21 @@ test("docs pages keep their tested content", () => {
   assert.match(changelog, /0\.4\.1/);
   assert.match(changelog, /0\.2\.0/);
   assert.match(changelog, /id="unreleased"/);
+});
+
+test("docs code blocks paint brand --astro-code tokens, not a highlighter hex palette", () => {
+  const html = page("docs/self-hosting.html");
+  assert.match(html, /--astro-code-foreground:\s*var\(--fg\)/);
+  assert.match(html, /--astro-code-background:\s*var\(--bg-elev\)/);
+  assert.doesNotMatch(html, /github-dark|github-light|--shiki-dark:/);
+  const opens = html.match(/<pre[^>]*class="[^"]*astro-code[^"]*"[^>]*>/g) ?? [];
+  assert.ok(opens.length > 0, "expected a Shiki code block");
+  for (const open of opens) {
+    const colors = [...open.matchAll(/(?:^|[^-])color:\s*([^;"]+)/g)].flatMap((m) => (m[1] ? [m[1]] : []));
+    for (const color of colors) {
+      assert.match(color, /^var\(--astro-code-/, `${open} painted ${color}`);
+    }
+  }
+  const bash = page("docs/install.html");
+  assert.match(bash, /var\(--astro-code-token-/);
 });

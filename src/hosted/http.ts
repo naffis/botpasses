@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { logRequest, logVaultEvent, redactMessage, requestIdFrom } from "./observe.ts";
 import { runsOnFly } from "./identity-limiter.ts";
 import type { AddressInfo } from "node:net";
-import { HEALTH_PRODUCT } from "../brand.ts";
+import { HEALTH_PRODUCT, type DeployPlane } from "../brand.ts";
 import {
   requireModelOrOperator,
   requireOperator,
@@ -46,7 +46,14 @@ import type { OperatorIdentity } from "./operator-identity.ts";
 import { assertDcrIp, assertDeviceAttempt, handleOauth, isOauthPath } from "./oauth-as.ts";
 import { handleConsentGet, handleConsentPost } from "./oauth-interactions.ts";
 import { isMcpClientSurface, isOauthDiscoveryPath, oauthDiscoveryDocument } from "./oauth-metadata.ts";
-import { bindCors, corsHeaders, hostAllowlist, originAllowed, originOk } from "./http-cors.ts";
+import {
+  bindCors,
+  corsHeaders,
+  hostAllowlist,
+  originAllowed,
+  originOk,
+  publicSiteAllowsForeignOrigin,
+} from "./http-cors.ts";
 import type Provider from "oidc-provider";
 
 /**
@@ -86,7 +93,7 @@ export type HostedHttpOpts = {
   resolveAddresses?: (hostname: string) => Promise<string[]>;
   allowedHosts?: string[];
   siteRoot?: string;
-  deployPlane?: "staging" | "production";
+  deployPlane?: DeployPlane;
   identity?: OperatorIdentity;
   oidcProvider?: Provider;
   secureCookies?: boolean;
@@ -176,7 +183,12 @@ export function createHostedServer(opts: HostedHttpOpts) {
 
     bindCors(res, { req, path, allowed, testMode, publicUrl });
     const originHdr = typeof req.headers.origin === "string" ? req.headers.origin : "";
-    if (originHdr && !originAllowed(originHdr, allowed) && !isMcpClientSurface(path)) {
+    if (
+      originHdr &&
+      !originAllowed(originHdr, allowed) &&
+      !isMcpClientSurface(path) &&
+      !publicSiteAllowsForeignOrigin(path, method)
+    ) {
       res.writeHead(403, {
         "content-type": "application/json; charset=utf-8",
         ...securityHeaders({ html: false }),
@@ -235,7 +247,7 @@ export function createHostedServer(opts: HostedHttpOpts) {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-cache",
         ...securityHeaders({ html: false, cache: false }),
-        ...(deployPlane === "staging" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+        ...(deployPlane !== "production" ? { "x-robots-tag": "noindex, nofollow" } : {}),
       });
       res.end(robotsTxt(deployPlane));
       return;
@@ -244,7 +256,13 @@ export function createHostedServer(opts: HostedHttpOpts) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
     }
-    if (!allowLoopback && originHdr && originIsLoopback(originHdr) && !isMcpClientSurface(path)) {
+    if (
+      !allowLoopback &&
+      originHdr &&
+      originIsLoopback(originHdr) &&
+      !isMcpClientSurface(path) &&
+      !publicSiteAllowsForeignOrigin(path, method)
+    ) {
       json(res, 403, { error: "Origin/Host not allowed" });
       return;
     }

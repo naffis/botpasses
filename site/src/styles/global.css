@@ -4,8 +4,9 @@
 @import "@fontsource/ibm-plex-mono/400.css";
 
 /*
- * Colour tokens (--bg, --fg, --accent, --warn, --info, ...) are emitted inline by
- * Base.astro from src/brand-visual.ts so the site and the console share one source.
+ * Colour tokens (--bg, --fg, --accent, --warn, --info, --astro-code-*, ...) are
+ * emitted inline by Base.astro from src/brand-visual.ts so the site and the
+ * console share one source. Docs fences use those code aliases, not a GitHub theme.
  */
 :root {
   --font-display: Inter, Helvetica, Arial, sans-serif;
@@ -276,7 +277,10 @@ pre code {
   font-size: 0.9rem;
 }
 
-/* Shiki emits its own background; keep ours so blocks match the palette. */
+/*
+ * Shiki css-variables paints --astro-code-* from brand-visual.ts. Keep the
+ * elevated surface even if a highlighter rule tries to set its own background.
+ */
 .astro-code,
 pre.astro-code {
   background: var(--bg-elev) !important;

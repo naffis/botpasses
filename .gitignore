@@ -6,6 +6,7 @@ dist/
 !.env.ops.example
 .vault/
 .botpasses/
+.botpasses-hosted/
 .agent-vault/
 *.sqlite
 *.sqlite-journal

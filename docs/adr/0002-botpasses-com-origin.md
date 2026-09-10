@@ -1,6 +1,6 @@
 # 0002. Public origins are botpasses.com
 
-- Status: accepted
+- Status: accepted (amended by [0010](0010-hosted-dev-and-portable-origin.md) for plane `dev` and portable self-host origins)
 - Date: 2026-08-31
 - Supersedes: origin hosts in [0001](0001-botpasses-identity.md)
 
@@ -16,7 +16,7 @@ We will use **botpasses.com** as the public zone. Prod origin is `https://botpas
 
 This origin is the OAuth authorization server and resource server. Resend sending domains are those same hosts. From is `Botpasses <noreply@staging.botpasses.com>` on staging and `Botpasses <noreply@botpasses.com>` on production, via `VAULT_EMAIL_FROM`.
 
-Canonical constants live in `src/brand.ts` (`STAGING_ORIGIN`, `PRODUCTION_ORIGIN`). Hosted boot (`VAULT_MODE=hosted`) requires `VAULT_PUBLIC_URL` to equal the plane origin. Loopback is only for local tests and `vault serve`. Platform default hostnames are not a public origin: they must not appear in MCP `collect_url`, CLI login, OAuth resource metadata, approval emails, or operator docs.
+Canonical constants live in `src/brand.ts` (`STAGING_ORIGIN`, `PRODUCTION_ORIGIN`). First-party hosted boot still requires `VAULT_PUBLIC_URL` to equal the plane origin. [0010](0010-hosted-dev-and-portable-origin.md) allows a custom `https` origin on self-hosted staging/production and loopback only on plane `dev` (`npm run hosted:dev`). Loopback is also used for local tests and `vault serve`. Platform default hostnames are not a public origin: they must not appear in MCP `collect_url`, CLI login, OAuth resource metadata, approval emails, or operator docs.
 
 ## Consequences
 
