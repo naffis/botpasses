@@ -40,10 +40,10 @@ test("PRM names MCP resource and header bearer", () => {
   assert.deepEqual(doc.bearer_methods_supported, ["header"]);
 });
 
-test("GET/HEAD /mcp 401 advertise the same PRM as POST /mcp", () => {
+test("GET/HEAD /mcp 401 advertise the same PRM and scope as POST /mcp", () => {
   const realm = "botpasses";
   const expected =
-    /resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp"/;
+    /resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp", scope="mcp"/;
   for (const [method, path] of [
     ["GET", "/mcp"],
     ["HEAD", "/mcp"],
@@ -63,7 +63,7 @@ test("WWW-Authenticate resource_metadata is an absolute path-aware URL", () => {
   const header = mcpWwwAuthenticate(ORIGIN, "botpasses");
   assert.match(
     header,
-    /^Bearer realm="botpasses", resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp"$/,
+    /^Bearer realm="botpasses", resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp", scope="mcp"$/,
   );
   assert.doesNotMatch(header, /resource_metadata="\/\.well-known/);
 });

@@ -393,16 +393,6 @@ export type JsonRpcResponse = {
   error?: { code: number; message: string };
 };
 
-export function isMcpHandshakeMethod(method?: string): boolean {
-  if (!method) return false;
-  return (
-    method === "initialize" ||
-    method === "ping" ||
-    method === "tools/list" ||
-    method.startsWith("notifications/")
-  );
-}
-
 export async function handleHostedMcpRpc(
   deps: HostedMcpDeps,
   req: JsonRpcRequest,

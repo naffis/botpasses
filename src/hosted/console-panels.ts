@@ -96,7 +96,7 @@ function agentsPanel(plane: DeployPlane, defaultEnv: VaultEnvName): string {
             </ol>
             <details class="vendor-tip">
               <summary>Connecting Grok?</summary>
-              <p class="hint">Paste only the token; Grok adds the Bearer prefix. The token is enough, so skip the OAuth connect card. Grok Bot in the cloud cannot finish OAuth. Never paste a client secret or access token into the chat.</p>
+              <p class="hint">Grok Bot can Authorize in the browser (add https://botpasses.com/mcp with no header). To skip the card, paste only this token; Grok adds the Bearer prefix. Never paste a client secret or access token into the chat.</p>
             </details>
           </div>
           <div class="tabs" role="tablist" aria-label="Agents sections" id="agents-tabs">

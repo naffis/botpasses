@@ -1256,36 +1256,39 @@ test("operator session JWT path can call MCP stdio-style on the plane default en
   }
 });
 
-test("unauthenticated handshake succeeds; GET /mcp and tools/call 401 with PRM", async () => {
+test("unauthenticated initialize 401s with the same PRM as GET /mcp (BOTP-13)", async () => {
   const ctx = await setup();
   const prm =
     /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/;
+  const challenge =
+    /Bearer realm="botpasses", resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp", scope="mcp"/;
   try {
     const sse = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
     assert.equal(sse.status, 401, "GET /mcp SSE needs a model or operator principal (S16)");
-    assert.match(sse.headers.get("www-authenticate") ?? "", /Bearer/);
-    assert.match(sse.headers.get("www-authenticate") ?? "", /realm="botpasses"/);
-    assert.match(sse.headers.get("www-authenticate") ?? "", prm, "SSE 401 must start OAuth (BOTP-13)");
+    assert.match(sse.headers.get("www-authenticate") ?? "", challenge, "SSE 401 must start OAuth (BOTP-13)");
     const tools = await fetch(`${ctx.base}/mcp/tools`);
     assert.equal(tools.status, 200);
-    const init = await fetch(`${ctx.base}/mcp`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
-    });
-    assert.equal(init.status, 200);
-    const listed = await fetch(`${ctx.base}/mcp`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
-    });
-    assert.equal(listed.status, 200);
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    for (const [method, id] of [
+      ["initialize", 1],
+      ["ping", 2],
+      ["tools/list", 3],
+    ] as const) {
+      const res = await fetch(`${ctx.base}/mcp`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id, method }),
+      });
+      assert.equal(res.status, 401, `${method} must 401 so Grok Bot can build auth_link`);
+      assert.match(res.headers.get("www-authenticate") ?? "", challenge, method);
+      assert.equal(res.headers.get("www-authenticate"), sse.headers.get("www-authenticate"));
+    }
     const call = await fetch(`${ctx.base}/mcp`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify({
         jsonrpc: "2.0",
-        id: 3,
+        id: 4,
         method: "tools/call",
         params: { name: "http_request", arguments: { method: "GET", path: "/v1/me", host: "api.spotify.com" } },
       }),
@@ -1293,6 +1296,18 @@ test("unauthenticated handshake succeeds; GET /mcp and tools/call 401 with PRM",
     assert.equal(call.status, 401);
     assert.match(call.headers.get("www-authenticate") ?? "", prm);
     assert.equal(call.headers.get("www-authenticate"), sse.headers.get("www-authenticate"));
+    const authed = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...ctx.modelH, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "initialize" }),
+    });
+    assert.equal(authed.status, 200, "avm_ Bearer still completes initialize without a connect card");
+    const listed = await fetch(`${ctx.base}/mcp`, {
+      method: "POST",
+      headers: { ...ctx.modelH, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/list" }),
+    });
+    assert.equal(listed.status, 200);
   } finally {
     await ctx.http.close();
     await ctx.store.close();

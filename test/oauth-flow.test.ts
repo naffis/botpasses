@@ -113,6 +113,53 @@ test("S10/1.4 secure-cookie authorize, consent, code, JWT, MCP, refresh rotation
   }
 });
 
+test("BOTP-13 initialize without Bearer is 401; Cursor/Grok OAuth then list_items", async () => {
+  const srv = await startOauthServer({ secure: true, deployPlane: "staging" });
+  const cloudRedirect = "https://www.cursor.com/agents/mcp/oauth/callback";
+  try {
+    const unauth = await srv.go("/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+    });
+    assert.equal(unauth.status, 401, await unauth.text());
+    const challenge = unauth.headers.get("www-authenticate") ?? "";
+    assert.match(challenge, /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/);
+    assert.match(challenge, /scope="mcp"/);
+
+    const who = await srv.signInReady("grok@example.com");
+    await srv.kernel.createItem({
+      orgId: who.orgId,
+      actor: who.userId,
+      environment: "staging",
+      kind: "secret",
+      name: "GROK_KEY",
+      value: CANARY,
+      allowedHosts: ["api.example.com"],
+      inject: "bearer",
+    });
+    const client = await srv.registerClient({
+      client_name: "Grok Bot",
+      redirect_uris: [
+        "cursor://anysphere.cursor-mcp/oauth/callback",
+        cloudRedirect,
+        "http://localhost:8787/callback",
+        "grokbot://oauth/callback",
+      ],
+    });
+    const { access } = await connect(srv, who, client.client_id, cloudRedirect);
+    const init = await srv.mcp(access, "initialize");
+    assert.equal(init.status, 200, await init.text());
+    const listed = await srv.mcp(access, "tools/call", { name: "list_items", arguments: {} });
+    assert.equal(listed.status, 200);
+    const listedText = await listed.text();
+    assert.doesNotMatch(listedText, new RegExp(CANARY));
+    assert.deepEqual(itemNames(JSON.parse(listedText) as unknown), ["GROK_KEY"]);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("S2/0.2 two operators share one DCR client id: each JWT sees its own org, revoke in A keeps B's refresh alive", async () => {
   const srv = await startOauthServer({ secure: true, deployPlane: "staging" });
   try {
