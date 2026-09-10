@@ -647,6 +647,48 @@ caption {
   max-width: none;
 }
 
+.prompt-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.prompt-card-primary {
+  grid-column: 1 / -1;
+}
+
+.prompt-cards .card p {
+  max-width: none;
+}
+
+.prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.copy-pre {
+  position: relative;
+}
+
+.copy-pre pre {
+  margin: 0;
+  padding-right: 5.5rem;
+}
+
+.copy-pre-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  min-height: 32px;
+  min-width: 44px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.8rem;
+  z-index: 1;
+  background: var(--bg);
+}
+
 /* Docs */
 
 .docs-shell {
@@ -998,6 +1040,7 @@ caption {
   .split,
   .trust-grid,
   .two-up,
+  .prompt-cards,
   .doc-list {
     grid-template-columns: 1fr;
   }

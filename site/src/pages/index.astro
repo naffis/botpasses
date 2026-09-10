@@ -1,5 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
+import CopyButton from "../components/CopyButton.astro";
+import { promptById } from "../lib/bootstrap-prompts.ts";
 import { HERO_SERVICES } from "../lib/hero-services.ts";
 import {
   GITHUB,
@@ -9,6 +11,10 @@ import {
   howToLd,
   softwareApplicationLd,
 } from "../lib/site-meta.ts";
+
+const hostedPrompt = promptById("hosted");
+const localPrompt = promptById("local");
+const selfHostPrompt = promptById("self-host");
 
 const heroServices = HERO_SERVICES.join("|");
 
@@ -128,6 +134,42 @@ const faq = [
       <a class="btn" href="/docs/start">Read the docs</a>
     </div>
     <p class="footer-note">Free while in beta. Open source, MIT.</p>
+  </section>
+
+  <section class="section" aria-labelledby="prompts">
+    <h2 id="prompts">Copy a setup prompt</h2>
+    <p class="section-intro">
+      Paste one of these into your agent instead of inventing setup steps. The agent walks Collect
+      and Connect. You type secrets on botpasses.com, never in chat. Full set:{" "}
+      <a href="/docs/prompts">Copy-paste prompts</a>.
+    </p>
+    <div class="prompt-cards">
+      <article class="card prompt-card-primary">
+        <p class="eyebrow">Hosted</p>
+        <h3>{hostedPrompt.title}</h3>
+        <p>{hostedPrompt.blurb}</p>
+        <div class="prompt-actions">
+          <CopyButton promptId="hosted" primary />
+          <a class="btn" href="/docs/prompts#hosted">Read the prompt</a>
+        </div>
+      </article>
+      <article class="card">
+        <h3>{localPrompt.title}</h3>
+        <p>{localPrompt.blurb}</p>
+        <div class="prompt-actions">
+          <CopyButton promptId="local" />
+          <a class="btn" href="/docs/prompts#local">Full prompt</a>
+        </div>
+      </article>
+      <article class="card">
+        <h3>{selfHostPrompt.title}</h3>
+        <p>{selfHostPrompt.blurb}</p>
+        <div class="prompt-actions">
+          <CopyButton promptId="self-host" />
+          <a class="btn" href="/docs/prompts#self-host">Full prompt</a>
+        </div>
+      </article>
+    </div>
   </section>
 
   <section class="section" aria-labelledby="how">

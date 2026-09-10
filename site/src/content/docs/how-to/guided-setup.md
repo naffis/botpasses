@@ -8,6 +8,48 @@ order: 2
 
 After you [create an account](/docs/start) and [connect an agent](/docs/start), you can ask the agent to set up a provider. The agent does not get the secret.
 
+Or paste a prompt from [Copy-paste prompts](/docs/prompts). The hosted prompt walks the whole flow. The short prompt below is enough when MCP is already connected.
+
+## Copy-paste prompts
+
+Hosted agent (Claude, Cursor, ChatGPT, or Grok after `https://botpasses.com/mcp`):
+
+```
+You are setting up Botpasses for me (https://botpasses.com). Botpasses is a grant-vault for agents: I store API credentials once; you call APIs through MCP; the key is attached inside the vault and must never appear in chat, logs, or your context. There is no get_secret.
+
+Do this end to end. Pause and give me a link or checkbox whenever a human step is required. Do not ask me to paste secrets into this chat.
+
+1. Confirm Botpasses MCP is connected.
+   - Hosted MCP URL: https://botpasses.com/mcp
+   - If tools are missing, tell me which client I am on and open the matching docs:
+     Cursor https://botpasses.com/docs/connect/cursor
+     Claude https://botpasses.com/docs/connect/claude
+     Claude Code https://botpasses.com/docs/connect/claude-code
+     ChatGPT https://botpasses.com/docs/connect/chatgpt
+     Grok https://botpasses.com/docs/connect/grok
+   - Grok often needs a console-issued bearer (avm_…) as Authorization: Bearer <token> (single Bearer, no double Bearer). If tools/call falls into OAuth redirect_uri errors, say so and point me at a one-time model token from the Botpasses console.
+
+2. Call the setup tool for the first API I name (default: Spotify if I do not name one). Prefer provider=spotify|stripe|github|google|slack, or host= for other APIs.
+
+3. When setup returns collect_url, give me that URL only. Tell me to open it, sign in, type the credential there, and never paste the value here. For Client ID and secret kinds, remind me the redirect URI on the provider app is https://botpasses.com/connect/callback.
+
+4. If setup or http_request returns connect_url (user OAuth, e.g. Spotify /v1/me), give me that console link and wait until I confirm Connect is done.
+
+5. Prefer Always-allow only when I say so. Otherwise one-shot Inbox approvals are fine.
+
+6. When status is ready, smoke a read-only call (for Spotify: GET /v1/search or /v1/me after Connect). Report origin status and a short redacted summary. Do not print tokens.
+
+7. Stop with: (a) item name, (b) hosts, (c) whether user Connect is done, (d) one example ask I can type next in plain language.
+
+If anything fails (need_item, host_mismatch, mfa_required, 429, redirect_uri), use https://botpasses.com/docs/troubleshooting and keep secrets out of chat.
+```
+
+First API only:
+
+```
+Botpasses MCP should already be connected. Call setup for <spotify|stripe|github|google|slack or host=…>. Give me collect_url (and connect_url if needed). I will type secrets on Botpasses only. When ready, run one read-only smoke and tell me the item name and a plain-language ask to use next.
+```
+
 ## Ask the agent
 
 In the client you connected (Cursor, Claude, ChatGPT, or Grok), say:

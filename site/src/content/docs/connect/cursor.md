@@ -34,6 +34,8 @@ The server shows its tools once connected. Do not paste an operator token or any
 
 Ask the agent for the task in plain language. It calls `http_request`. Pending approvals show an 8-digit code you approve in the [console](/console) Inbox. A missing credential returns a `collect_url` to open in a browser.
 
+After MCP is connected, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat. For a laptop vault, use the [local prompt](/docs/prompts#local).
+
 ## Stdio (local vault, no account)
 
 ```json

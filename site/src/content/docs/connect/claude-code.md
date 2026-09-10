@@ -31,6 +31,8 @@ Ask for the task: "list my open Stripe disputes". Claude Code calls `http_reques
 - Pending approval: Claude Code shows an 8-digit code. Approve in the [console](/console) Inbox or type the code under **Approve by code**. Then let it retry.
 - Missing credential: it shows a `collect_url`. Open it in a browser, sign in, and store the key there. Never paste a key into the terminal chat.
 
+After MCP is connected, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat.
+
 ## Team projects
 
 You can commit a project-scoped server entry in `.mcp.json` at the repo root. Each person authenticates on their own account; the file holds only the URL.

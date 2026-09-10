@@ -242,6 +242,8 @@ test("llms.txt and security.txt ship with the site", () => {
   assert.match(llms, /http_request/);
   assert.match(llms, /grant-vault/);
   assert.match(llms, /guided-setup/);
+  assert.match(llms, /Copy-paste prompts/);
+  assert.match(llms, /\/docs\/prompts/);
   assert.match(llms, /llms-full\.txt/);
   for (const link of llms.matchAll(/\]\((https:\/\/botpasses\.com[^)]*)\)/g)) {
     const path = (link[1] ?? "").replace(SITE, "");
@@ -253,6 +255,8 @@ test("llms.txt and security.txt ship with the site", () => {
   assert.match(full, /^# Botpasses/);
   assert.match(full, /http_request/);
   assert.match(full, /Guided setup/);
+  assert.match(full, /Copy-paste prompts/);
+  assert.match(full, /There is no get_secret/);
   assert.match(full, /get_secret/);
   const sec = readFileSync(join(dist, ".well-known/security.txt"), "utf8");
   assert.match(sec, /^Contact: mailto:security@botpasses\.com$/m);
