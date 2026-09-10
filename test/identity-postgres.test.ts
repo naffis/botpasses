@@ -129,6 +129,14 @@ test("identity on Postgres: enroll, pending session rotation, lockout, backup co
     await store.deleteUnusedBackupCodes(pending.user.id);
     assert.equal((await identityB.accountSummary(pending.user.id)).backup_codes_remaining, 0);
   } finally {
-    await store.close();
+    try {
+      // Do not leave a rotation KEK on the shared CI database for later files.
+      const admin = new Client({ connectionString: dbUrl });
+      await admin.connect();
+      await admin.query("DELETE FROM identity_keys WHERE id = 'identity'");
+      await admin.end();
+    } finally {
+      await store.close();
+    }
   }
 });

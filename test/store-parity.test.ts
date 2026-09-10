@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
-import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import type { AccessEventRecord, UserRecord } from "../src/hosted-types.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { PostgresStore } from "../src/store/postgres.ts";
@@ -15,6 +14,7 @@ import { ITEM_AAD_VERSION } from "../src/store/rows.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import type { OperatorSessionRow, VaultStore } from "../src/store/types.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
+import { TEST_PLANE_KEK, ensureSharedIdentityKey } from "./helpers/plane-kek.ts";
 
 type Backend = { name: string; open: () => Promise<{ store: VaultStore; done: () => Promise<void> }> };
 
@@ -40,6 +40,7 @@ if (process.env.DATABASE_URL) {
     name: "postgres",
     open: async () => {
       const store = await PostgresStore.open(url);
+      await ensureSharedIdentityKey(store);
       return { store, done: () => store.close() };
     },
   });
@@ -85,7 +86,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("it");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const { orgId } = await kernel.createOrg(id("org"), id("owner"));
       const created = await kernel.createItem({
         orgId,
@@ -134,7 +135,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("gr");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const owner = id("owner");
       const { orgId } = await kernel.createOrg(id("org"), owner);
       const item = await kernel.createItem({
@@ -198,7 +199,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("cl");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const owner = id("owner");
       const { orgId } = await kernel.createOrg(id("org"), owner);
       const { client, plaintext } = await kernel.createModelClient({ orgId, name: "m", environment: "staging", issueBearer: true });
@@ -413,7 +414,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("ae");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const { orgId } = await kernel.createOrg(id("org"), id("owner"));
       const { client } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
       const event = (n: string, clientId: string | null): AccessEventRecord => ({
@@ -448,7 +449,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("tm");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()), publicUrl: "http://127.0.0.1:8788" });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK, publicUrl: "http://127.0.0.1:8788" });
       const owner = id("owner");
       const invitee = id("invitee");
       const inviteeEmail = `${id("inv")}@example.com`;
@@ -514,7 +515,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("nd");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const { orgId } = await kernel.createOrg(id("org"), id("owner"));
       const { client } = await kernel.createModelClient({ orgId, name: "m", environment: "staging" });
       const env = await kernel.envFor(orgId, "staging");
@@ -613,7 +614,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("w5");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const owner = id("owner");
       const { orgId } = await kernel.createOrg(id("org"), owner);
       assert.equal((await store.getOrg(orgId))?.createdBy, owner);
@@ -700,7 +701,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     try {
       const id = ids("do");
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()) });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK });
       const owner = id("owner");
       const { orgId } = await kernel.createOrg(id("org"), owner);
       await kernel.createItem({

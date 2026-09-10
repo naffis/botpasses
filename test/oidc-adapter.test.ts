@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
-import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { IdentityKeyring } from "../src/hosted/identity-keys.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { createStoreAdapter, destroyOidcPayloadsForClient, purgeExpired } from "../src/hosted/oidc-adapter.ts";
@@ -11,6 +10,7 @@ import { PostgresStore } from "../src/store/postgres.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { oidcPayloadIndex, type VaultStore } from "../src/store/types.ts";
 import { cleanup, tempHome } from "./helpers.ts";
+import { TEST_PLANE_KEK, ensureSharedIdentityKey } from "./helpers/plane-kek.ts";
 
 type Backend = { name: string; open: () => Promise<{ store: VaultStore; done: () => Promise<void> }> };
 
@@ -36,6 +36,7 @@ if (process.env.DATABASE_URL) {
     name: "postgres",
     open: async () => {
       const store = await PostgresStore.open(url);
+      await ensureSharedIdentityKey(store);
       return { store, done: () => store.close() };
     },
   });
@@ -48,7 +49,7 @@ function ids(prefix: string) {
 }
 
 function oidcDir(store: VaultStore): OidcDirectory {
-  return new OidcDirectory(new IdentityKeyring(store, parseMasterKey(generateMasterKey()), () => new Date()), store);
+  return new OidcDirectory(new IdentityKeyring(store, TEST_PLANE_KEK, () => new Date()), store);
 }
 
 test("oidcPayloadIndex pulls uid, userCode, grantId, clientId, accountId and tolerates junk", () => {
@@ -301,7 +302,7 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     const id = ids("tenant");
     try {
-      const kernel = new HostedKernel({ store, kek: parseMasterKey(generateMasterKey()), deployPlane: "staging" });
+      const kernel = new HostedKernel({ store, kek: TEST_PLANE_KEK, deployPlane: "staging" });
       const a = await kernel.createOrg(id("a"), id("user_a"));
       const b = await kernel.createOrg(id("b"), id("user_b"));
       const clientA = await kernel.ensureModelClient({ orgId: a.orgId, name: "shared", environment: "staging", clerkOauthUserId: id("dcr") });
