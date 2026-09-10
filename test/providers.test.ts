@@ -564,6 +564,7 @@ test("token cache is keyed by org, item, client, and grant type and drops entrie
 test("assertRedirectUri accepts Grok/Cursor desktop schemes", () => {
   assert.doesNotThrow(() => assertRedirectUri("cursor://anysphere.cursor-mcp/oauth/callback"));
   assert.doesNotThrow(() => assertRedirectUri("grok://oauth/callback"));
+  assert.doesNotThrow(() => assertRedirectUri("grokbot://oauth/callback"));
   assert.doesNotThrow(() => assertRedirectUri("http://127.0.0.1:8888/callback"));
   assert.throws(() => assertRedirectUri("javascript:alert(1)"));
 });

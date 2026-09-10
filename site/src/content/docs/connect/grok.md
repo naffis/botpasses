@@ -37,7 +37,7 @@ Do not paste an operator session, an OAuth client secret, or any API key into Gr
 
 ## OAuth connect cards
 
-If Grok starts dynamic client registration anyway, botpasses.com accepts `https`, loopback `http://127.0.0.1`, and desktop schemes such as `grok://`. You do not need to complete the card when the bearer header is already configured. If a card keeps appearing, see [Troubleshooting](/docs/troubleshooting#the-connect-card-keeps-appearing).
+Grok Bot in the cloud cannot finish OAuth. Its callback is typically `http://localhost` (refused) or `grokbot://` (accepted for a native app, but a cloud VM cannot complete a local redirect). Put the model token on the connector and skip the card. If a card still appears after the header is set, see [Troubleshooting](/docs/troubleshooting#the-connect-card-keeps-appearing).
 
 ## Spotify and other OAuth apps
 

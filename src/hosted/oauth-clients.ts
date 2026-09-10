@@ -22,6 +22,7 @@ export const DESKTOP_REDIRECT_SCHEMES: ReadonlySet<string> = new Set([
   "vscode:",
   "vscode-insiders:",
   "grok:",
+  "grokbot:",
   "xai:",
   "xai-grok:",
 ]);
@@ -56,6 +57,18 @@ export function assertRedirectUri(uri: string): void {
   if (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) return;
   if (DESKTOP_REDIRECT_SCHEMES.has(parsed.protocol)) return;
   throw new Error("redirect_uri must be https, loopback http (127.0.0.1 or [::1]), or a known desktop app scheme");
+}
+
+/** Scheme + reason only. The full URI never goes in a log line. */
+export function redirectRejectFields(uri: string, message: string): { scheme?: string; reason: string } {
+  const reason = message.slice(0, 80);
+  try {
+    const scheme = new URL(uri).protocol.replace(/:$/, "");
+    if (scheme) return { scheme, reason };
+  } catch {
+    // invalid
+  }
+  return { reason };
 }
 
 /** Hostnames (or scheme labels for desktop apps) an operator can check against on the consent page. */
@@ -94,7 +107,9 @@ export function clientMetadataValidator(
       try {
         assertRedirectUri(uri);
       } catch (err) {
-        throw new oidcErrors.InvalidClientMetadata(err instanceof Error ? err.message : "invalid redirect_uri");
+        const message = err instanceof Error ? err.message : "invalid redirect_uri";
+        logVaultEvent("dcr_redirect_rejected", redirectRejectFields(uri, message));
+        throw new oidcErrors.InvalidClientMetadata(message);
       }
     }
     if (uris.some((uri) => typeof uri === "string" && isDesktopRedirect(uri))) {

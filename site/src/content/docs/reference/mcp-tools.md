@@ -16,7 +16,7 @@ The primary tool is `http_request`. The earlier name `http.request` is accepted 
 | OAuth access token (JWT) | Client completes OAuth on botpasses.com (PKCE S256, dynamic client registration) | `aud` is exactly `https://botpasses.com/mcp`, lifetime 600 s, refresh rotation |
 | Model token `avm_...` | Issued once in the console Access panel | Sent as `Authorization: Bearer avm_...`. Sufficient for every method |
 
-Unauthenticated `initialize`, `ping`, `tools/list`, and `notifications/*` succeed, so a client with a preconfigured bearer does not get a connect card. Unauthenticated `tools/call` is 401 with `WWW-Authenticate` carrying `resource_metadata` for `/.well-known/oauth-protected-resource/mcp`. Trusted runtime tokens (`avt_...`) cannot call MCP.
+Unauthenticated `initialize`, `ping`, `tools/list`, and `notifications/*` succeed, so a client with a preconfigured bearer does not get a connect card. Unauthenticated `tools/call` is 401 with `WWW-Authenticate` carrying `resource_metadata` for `/.well-known/oauth-protected-resource/mcp`. An unauthenticated `GET /mcp` (the SSE stream) is 401 without that challenge, so a listen probe does not start OAuth. Trusted runtime tokens (`avt_...`) cannot call MCP.
 
 Every agent is bound to one vault environment (`staging` or `production`) when it is issued or connected. Tools act in that environment; there is no environment argument.
 

@@ -38,6 +38,10 @@ export function corsPath(res: ServerResponse): string {
   return bound.get(res)?.path ?? "";
 }
 
+export function corsMethod(res: ServerResponse): string {
+  return bound.get(res)?.req.method ?? "";
+}
+
 function headerBag(incoming?: OutgoingHttpHeaders | OutgoingHttpHeaders[]): OutgoingHttpHeaders {
   if (!incoming) return {};
   if (Array.isArray(incoming)) return Object.assign({}, ...incoming);

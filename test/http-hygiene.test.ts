@@ -277,6 +277,12 @@ test("GET /mcp needs a model or operator principal; trusted tokens are refused (
   try {
     const anon = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
     assert.equal(anon.status, 401);
+    assert.equal(anon.headers.get("www-authenticate"), null, "SSE 401 must not start OAuth DCR");
+    const badGet = await fetch(`${ctx.base}/mcp`, {
+      headers: { accept: "text/event-stream", authorization: "Bearer avm_not-a-real-token" },
+    });
+    assert.equal(badGet.status, 401);
+    assert.equal(badGet.headers.get("www-authenticate"), null, "invalid bearer on GET /mcp must not start OAuth DCR");
     const trusted = await ctx.kernel.createTrustedClient({ orgId: ctx.orgId, name: "rt", environment: "staging" });
     const avt = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream", authorization: `Bearer ${trusted.plaintext}` } });
     assert.equal(avt.status, 403);

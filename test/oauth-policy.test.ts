@@ -7,6 +7,7 @@ import {
   isOauthPath,
   redirectHosts,
 } from "../src/hosted/oauth-as.ts";
+import { redirectRejectFields } from "../src/hosted/oauth-clients.ts";
 import {
   consentExpiredHtml,
   consentHtml,
@@ -30,6 +31,7 @@ test("S5 redirect_uri policy: https, IP-literal loopback http, named desktop sch
     "vscode://cb",
     "vscode-insiders://cb",
     "grok://oauth/callback",
+    "grokbot://oauth/callback",
     "xai://cb",
     "xai-grok://cb",
   ]) {
@@ -54,6 +56,7 @@ test("S5 redirect_uri policy: https, IP-literal loopback http, named desktop sch
     assert.throws(() => assertRedirectUri(bad), bad || "(empty)");
   }
   assert.equal(isDesktopRedirect("cursor://x"), true);
+  assert.equal(isDesktopRedirect("grokbot://oauth/callback"), true);
   assert.equal(isDesktopRedirect("com.example.app://x"), false);
   assert.equal(isDesktopRedirect("https://x"), false);
   assert.deepEqual(redirectHosts(["https://claude.ai/cb", "https://claude.ai/other", "http://127.0.0.1:9/cb", "grok://cb", "nope"]), [
@@ -77,9 +80,47 @@ test("S5 DCR rejects private-use schemes and localhost, accepts IP loopback", as
     assert.equal((await attempt(["https://ok.example/cb", "myapp://cb"])).status, 400, "one bad uri fails the registration");
     const ok = await attempt(["http://127.0.0.1:8080/cb"]);
     assert.ok(ok.status === 200 || ok.status === 201);
+    const grokbot = await attempt(["grokbot://oauth/callback"]);
+    assert.ok(grokbot.status === 200 || grokbot.status === 201);
   } finally {
     await srv.close();
   }
+});
+
+test("DCR reject logs scheme and reason, never the URI", async () => {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  const srv = await startOauthServer({ secure: false });
+  try {
+    const res = await srv.go("/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "probe",
+        redirect_uris: ["http://localhost:8080/cb"],
+        token_endpoint_auth_method: "none",
+      }),
+    });
+    assert.equal(res.status, 400);
+    const joined = lines.join("\n");
+    assert.match(joined, /dcr_redirect_rejected/);
+    assert.match(joined, /"scheme":"http"/);
+    assert.doesNotMatch(joined, /localhost:8080/);
+  } finally {
+    console.error = original;
+    await srv.close();
+  }
+});
+
+test("redirectRejectFields never includes the URI", () => {
+  const fields = redirectRejectFields("http://localhost:8787/callback", "redirect_uri must be https, loopback http");
+  assert.equal(fields.scheme, "http");
+  assert.ok(fields.reason);
+  assert.doesNotMatch(JSON.stringify(fields), /localhost/);
+  const bad = redirectRejectFields("not a url", "invalid redirect_uri");
+  assert.equal(bad.scheme, undefined);
+  assert.equal(bad.reason, "invalid redirect_uri");
 });
 
 test("HKDF cookie keys are derived per purpose, never the raw session secret", () => {

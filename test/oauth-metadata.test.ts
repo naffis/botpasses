@@ -6,6 +6,7 @@ import {
   isOauthDiscoveryPath,
   mcpWwwAuthenticate,
   oauthDiscoveryDocument,
+  wwwAuthenticateFor401,
   protectedResourceMetadata,
 } from "../src/hosted/oauth-metadata.ts";
 
@@ -37,6 +38,18 @@ test("PRM names MCP resource and header bearer", () => {
   assert.equal(doc.resource, `${ORIGIN}/mcp`);
   assert.deepEqual(doc.authorization_servers, [ORIGIN]);
   assert.deepEqual(doc.bearer_methods_supported, ["header"]);
+});
+
+test("GET /mcp 401 does not advertise OAuth; POST /mcp 401 still does", () => {
+  const realm = "botpasses";
+  assert.equal(wwwAuthenticateFor401("GET", "/mcp", ORIGIN, realm), undefined);
+  assert.equal(wwwAuthenticateFor401("HEAD", "/mcp", ORIGIN, realm), undefined);
+  assert.equal(wwwAuthenticateFor401("get", "/mcp/tools", ORIGIN, realm), undefined);
+  const post = wwwAuthenticateFor401("POST", "/mcp", ORIGIN, realm);
+  assert.ok(post);
+  assert.match(post, /resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp"/);
+  const api = wwwAuthenticateFor401("GET", "/api/items", ORIGIN, realm);
+  assert.equal(api, `Bearer realm="${realm}"`);
 });
 
 test("WWW-Authenticate resource_metadata is an absolute path-aware URL", () => {

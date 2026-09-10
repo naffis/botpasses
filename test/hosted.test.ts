@@ -1108,7 +1108,7 @@ test("unauthenticated handshake succeeds; tools/call is 401 with PRM", async () 
   try {
     const sse = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
     assert.equal(sse.status, 401, "GET /mcp SSE needs a model or operator principal (S16)");
-    assert.match(sse.headers.get("www-authenticate") ?? "", /resource_metadata=/);
+    assert.equal(sse.headers.get("www-authenticate"), null, "SSE 401 must not start OAuth DCR");
     const tools = await fetch(`${ctx.base}/mcp/tools`);
     assert.equal(tools.status, 200);
     const init = await fetch(`${ctx.base}/mcp`, {

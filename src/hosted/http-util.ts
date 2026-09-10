@@ -4,8 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { WWW_AUTHENTICATE_REALM } from "../brand.ts";
 import type { GrantPolicy, ItemKind, VaultEnvName } from "../hosted-types.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
-import { corsHeaders, corsPath, corsPublicUrl } from "./http-cors.ts";
-import { mcpWwwAuthenticate } from "./oauth-metadata.ts";
+import { corsHeaders, corsMethod, corsPath, corsPublicUrl } from "./http-cors.ts";
+import { wwwAuthenticateFor401 } from "./oauth-metadata.ts";
 import { captureException, logVaultEvent, redactMessage } from "./observe.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { isPublicSitePath } from "./static-site.ts";
@@ -94,10 +94,13 @@ export function sendError(res: ServerResponse, err: unknown, path = ""): void {
       ...corsHeaders(res),
     };
     if (err.status === 401) {
-      headers["www-authenticate"] =
-        routePath === "/mcp" || routePath.startsWith("/mcp")
-          ? mcpWwwAuthenticate(corsPublicUrl(res), WWW_AUTHENTICATE_REALM)
-          : `Bearer realm="${WWW_AUTHENTICATE_REALM}"`;
+      const challenge = wwwAuthenticateFor401(
+        corsMethod(res),
+        routePath,
+        corsPublicUrl(res),
+        WWW_AUTHENTICATE_REALM,
+      );
+      if (challenge) headers["www-authenticate"] = challenge;
     }
     res.writeHead(err.status, headers);
     res.end(JSON.stringify({ error: err.message, ...err.extra }));
