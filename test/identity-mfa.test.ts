@@ -148,7 +148,7 @@ test("S1: re-enroll needs a current code, drops unused backup codes, and kills o
     });
     assert.equal(badCode.status, 401);
     // The pending secret was never written for a refused start.
-    const user = await ctx.store.getUserByEmail(email);
+    const user = await ctx.identity.userByEmail(email);
     assert.equal(user?.totpPendingWrappedIv, null);
 
     // A stray pre-MFA session for the same user (a second tab that only did the email step).
@@ -216,7 +216,7 @@ test("account endpoints: /api/auth/me and backup-code regeneration need a ready 
     const fresh = await readJson<{ backup_codes: string[] }>(regen);
     assert.equal(fresh.backup_codes.length, 10);
     assert.equal(fresh.backup_codes.some((c) => backupCodes.includes(c)), false);
-    const unused = (await ctx.store.listBackupCodes((await ctx.store.getUserByEmail(email))!.id)).filter((c) => !c.usedAt);
+    const unused = (await ctx.store.listBackupCodes((await ctx.identity.userByEmail(email))!.id)).filter((c) => !c.usedAt);
     assert.equal(unused.length, 10, "old unused codes are deleted, not kept alongside");
 
     await logout(ctx, jar);

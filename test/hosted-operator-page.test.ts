@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { STAGING_ORIGIN } from "../src/brand.ts";
 import { COLLECT_JS, CONSOLE_CSS, CONSOLE_JS } from "../src/hosted/hosted-assets.ts";
@@ -27,6 +28,15 @@ test("operator page uses the product vocabulary and no vendor names in generic c
   assert.doesNotMatch(withoutTips, /Grok|Spotify|spotify/);
   // The connect dialog is vendor-free markup; the bundle names the provider when it opens.
   assert.match(html, /<dialog id="connect-dialog" data-testid="connect-dialog" aria-labelledby="connect-title">/);
+  const connect = html.match(/<dialog id="connect-dialog"[\s\S]*?<\/dialog>/);
+  assert.ok(connect, "connect dialog is in the operator page");
+  assert.match(connect[0], /data-testid="connect-redirect-uri"/);
+  assert.doesNotMatch(connect[0], /127\.0\.0\.1:8888/, "hosted copy must not advertise the loopback callback");
+  assert.match(html, /data-testid="store-redirect"/);
+  const storeKind = html.indexOf('id="store-kind"');
+  const storeRedirect = html.indexOf('id="store-redirect"');
+  const storeValue = html.indexOf('id="store-value"');
+  assert.ok(storeKind > 0 && storeRedirect > storeKind && storeRedirect < storeValue, "store redirect sits next to Kind, before the secret fields");
   assert.match(html, /<input type="hidden" name="provider_id" \/>/);
   assert.match(html, /data-testid="item-delete-confirm"/);
   assert.doesNotMatch(html, /access-revoke/);
@@ -181,6 +191,14 @@ test("collect HTML is a shell until the operator loads need details", () => {
   assert.match(html, /nonce="n1"/);
   assert.match(COLLECT_JS, /\/api\/need-items\//);
   assert.match(COLLECT_JS, /errorMessage\(r, "Store failed"\)/);
+  const collectSrc = readFileSync(new URL("../src/hosted/client/collect.ts", import.meta.url), "utf8");
+  const fulfillKind = collectSrc.indexOf('id="fulfill-kind"');
+  const fulfillRedirect = collectSrc.indexOf('id="fulfill-redirect"');
+  const fulfillHosts = collectSrc.indexOf('id="fulfill-hosts"');
+  assert.ok(
+    fulfillKind > 0 && fulfillRedirect > fulfillKind && fulfillRedirect < fulfillHosts,
+    "collect redirect sits next to Kind, before the host and secret fields",
+  );
   assert.match(html, /\/sign-in/);
   assert.match(html, /\/assets\/console\.[0-9a-f]{8}\.css/);
   assert.match(html, /class="auth-body"/);

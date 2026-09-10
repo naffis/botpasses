@@ -68,6 +68,7 @@ export async function bootConsoleServer(
       jwk,
       secureCookies: false,
       deployPlane,
+      oidcDirectory: kernel.oidc,
     });
     oidc = { oidcJwk: jwk, issuer: publicUrl };
   }

@@ -490,3 +490,28 @@ ALTER TABLE audit ADD COLUMN host TEXT;
 export const HOSTED_SCHEMA_AUDIT_HOST_ALTER_PG = `
 ALTER TABLE audit ADD COLUMN IF NOT EXISTS host TEXT;
 `;
+
+/**
+ * Migration 015. Inbox wrap columns on users and invites; `oidc_payloads.consumed_at` so
+ * consume does not mutate ciphertext. Expand-only; mirrored by
+ * migrations/015_email_and_oidc_at_rest.sql. SQLite splits on ";" and tolerates "duplicate column".
+ */
+export const HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_SQLITE = `
+ALTER TABLE users ADD COLUMN email_wrapped_iv TEXT;
+ALTER TABLE users ADD COLUMN email_wrapped_ciphertext TEXT;
+ALTER TABLE users ADD COLUMN email_wrapped_tag TEXT;
+ALTER TABLE org_invites ADD COLUMN email_wrapped_iv TEXT;
+ALTER TABLE org_invites ADD COLUMN email_wrapped_ciphertext TEXT;
+ALTER TABLE org_invites ADD COLUMN email_wrapped_tag TEXT;
+ALTER TABLE oidc_payloads ADD COLUMN consumed_at INTEGER;
+`;
+
+export const HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_PG = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_wrapped_iv TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_wrapped_ciphertext TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_wrapped_tag TEXT;
+ALTER TABLE org_invites ADD COLUMN IF NOT EXISTS email_wrapped_iv TEXT;
+ALTER TABLE org_invites ADD COLUMN IF NOT EXISTS email_wrapped_ciphertext TEXT;
+ALTER TABLE org_invites ADD COLUMN IF NOT EXISTS email_wrapped_tag TEXT;
+ALTER TABLE oidc_payloads ADD COLUMN IF NOT EXISTS consumed_at INTEGER;
+`;

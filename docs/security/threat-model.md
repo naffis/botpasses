@@ -1,6 +1,6 @@
 # Botpasses threat model
 
-Living document. Trust decision: [ADR 0006](../adr/0006-grant-vault-trust-model.md). KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md). Hardening after the 2026-09 audit: [ADR 0008](../adr/0008-security-hardening.md).
+Living document. Trust decision: [ADR 0006](../adr/0006-grant-vault-trust-model.md). KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md). Hardening after the 2026-09 audit: [ADR 0008](../adr/0008-security-hardening.md). Email and OAuth tokens at rest: [ADR 0009](../adr/0009-email-at-rest.md).
 
 Botpasses is a **grant-vault**. The model does not get secret values. The hosted process decrypts at approved inject. This is not a human password manager and it is not client-side encryption that the vendor cannot undo.
 
@@ -14,8 +14,8 @@ Botpasses is a **grant-vault**. The model does not get secret values. The hosted
 | Hosted Fly process | Unwrapped platform KEK in memory (from KMS or, before cutover, raw `VAULT_KEK`) | Yes, at inject. Required for `http_request`. |
 | AWS KMS role (Fly OIDC) | `kms:Decrypt` on the plane CMK | Unwraps the platform KEK only. Does not see item plaintext. |
 | Reverse proxy (Fly edge, Cloudflare) | The client address headers | Nothing. Its headers are believed only when the process knows it is behind that proxy (see Proxy trust). |
-| Neon dump alone | Ciphertext + wrapped DEKs | No, without the platform KEK. |
-| R2 `pg_dump` blob | AES-256-GCM dump (`BACKUP_KEY`, `BPBK` versioned envelope) | No item plaintext. `BACKUP_KEY` must not be the vault KEK. A job that skips R2 is not a backup. |
+| Neon dump alone | Item ciphertext + wrapped DEKs; HMAC email and bearer-token ids; item names, last-4, hosts, plaintext Grant ids | No item values, inboxes, or usable OAuth refresh/auth/device/session tokens without the platform KEK. Metadata and Grant ids remain. |
+| R2 `pg_dump` blob | AES-256-GCM dump (`BACKUP_KEY`, `BPBK` versioned envelope) | Same as a Neon dump after decrypt with `BACKUP_KEY`. Values, inboxes, and bearer tokens stay wrapped. `BACKUP_KEY` must not be the vault KEK. A job that skips R2 is not a backup. |
 | Botpasses staff without KMS + DB | Deploy logs, Sentry (redacted) | No. |
 | Attacker with Fly secrets + Neon | Raw KEK if cutover is incomplete; otherwise wrapped blob + role | Before `VAULT_KEK_REQUIRE_KMS=1`: yes. After cutover: needs the KMS role as well. |
 
@@ -27,7 +27,9 @@ Botpasses is a **grant-vault**. The model does not get secret values. The hosted
 - Machine tokens (`avm_`, `avt_`) stored as SHA-256 hashes.
 - OAuth signing key (`VAULT_OIDC_PRIVATE_JWK`) and, during a rotation only, the retiring key (`VAULT_OIDC_PREVIOUS_JWK`, verify-only).
 - Collect URLs (`/collect/:needId`, path-only, no HMAC).
-- Approval links, signed with `VAULT_APPROVAL_HMAC` (64 hex characters, refused otherwise) and bound to the org.
+- Approval links, signed with `VAULT_APPROVAL_HMAC` (64 hex characters, refused otherwise) and bound to the org. The URL token is stored as SHA-256 in `approval_challenges.code_hash`.
+- Operator inboxes (users, invites, OTP lookup). HMAC in the lookup column; AES-GCM wrap under the identity DEK.
+- Live OAuth adapter bearers (refresh, auth code, device code, access token, session, interaction). HMAC id plus wrap `{ id, body }`. Grant ids stay plaintext.
 
 ## Key hierarchy (hosted, after cutover)
 

@@ -383,8 +383,12 @@ test("S12 endOidcSession destroys the OP session so the next authorize needs a f
     const authorize = await srv.go(`/oauth/authorize?${params}`, { jar: op.jar });
     assert.equal(authorize.status, 303);
     const details = await srv.store.listOidcPayloads("Interaction");
-    const latest = details.map((d) => JSON.parse(d.payload) as { prompt?: { name?: string }; session?: unknown }).at(-1);
-    assert.equal(latest?.prompt?.name, "login");
+    const latest = (
+      await Promise.all(details.map((d) => srv.kernel.oidc.unwrap("Interaction", d.id, d.payload)))
+    )
+      .map((opened) => opened?.body)
+      .at(-1);
+    assert.equal(latest && typeof latest.prompt === "object" && latest.prompt && "name" in latest.prompt ? latest.prompt.name : undefined, "login");
   } finally {
     await srv.close();
   }

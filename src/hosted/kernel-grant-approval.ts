@@ -11,6 +11,17 @@ import { escapeHtml } from "./auth-shell.ts";
 import { HttpError } from "./errors.ts";
 import type { GrantHost } from "./kernel-grants.ts";
 
+function hashMagicToken(token: string): string {
+  return sha256Hex(token);
+}
+
+function magicStoredMatches(stored: string, token: string): boolean {
+  if (stored.includes(".")) return stored === token;
+  const expected = Buffer.from(hashMagicToken(token), "hex");
+  const got = Buffer.from(stored, "hex");
+  return expected.length === got.length && timingSafeEqual(expected, got);
+}
+
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const MAGIC_TTL_MS = 15 * 60 * 1000;
 
@@ -62,14 +73,14 @@ export async function ensureMagicChallenge(
 ): Promise<{ token?: string; fresh: boolean }> {
   if (!host.approvalHmac) return { fresh: true };
   const prior = await host.store.getChallengeByGrantKind(grantId, "magic");
-  if (prior && !isPast(prior.expiresAt, now)) return { token: prior.codeHash, fresh: false };
+  if (prior && !isPast(prior.expiresAt, now)) return { fresh: false };
   if (prior) await host.store.deleteChallenge(prior.id);
   const exp = now.getTime() + MAGIC_TTL_MS;
   const token = mintApprovalToken(host.approvalHmac, grantId, exp, orgId);
   await host.store.insertChallenge({
     id: `chl_${randomUUID()}`,
     grantId,
-    codeHash: token,
+    codeHash: hashMagicToken(token),
     expiresAt: new Date(exp).toISOString(),
     attempts: 0,
     kind: "magic",
@@ -80,13 +91,21 @@ export async function ensureMagicChallenge(
 /** An explicit `operatorEmail` wins; otherwise every member with a verified email is notified. */
 export async function notifyRecipients(host: GrantHost, orgId: string, operatorEmail: string | undefined): Promise<string[]> {
   if (operatorEmail !== undefined) return [operatorEmail.trim().toLowerCase()];
-  return host.store.listMemberEmails(orgId);
+  const ids = await host.store.listVerifiedMemberUserIds(orgId);
+  const out: string[] = [];
+  for (const id of ids) {
+    const user = await host.store.getUser(id);
+    if (!user) continue;
+    const inbox = await host.emails.revealUser(user);
+    if (inbox) out.push(inbox);
+  }
+  return out;
 }
 
 /** REST boundary check for `operator_email`: only this org's members may be addressed. */
 export async function assertMemberEmail(host: GrantHost, orgId: string, email: string): Promise<string> {
   const wanted = email.trim().toLowerCase();
-  const members = await host.store.listMemberEmails(orgId);
+  const members = await notifyRecipients(host, orgId, undefined);
   if (!members.some((m) => m.toLowerCase() === wanted)) {
     throw new HttpError(400, "operator_email must be a member of this org");
   }
@@ -135,7 +154,10 @@ export async function magicGrant(host: GrantHost, orgId: string, token: string):
   if (!grant || grant.orgId !== orgId) throw new HttpError(404, "Unknown grant");
   if (grant.status !== "pending") throw new HttpError(410, "Expired link");
   const magic = await host.store.getChallengeByGrantKind(grantId, "magic");
-  if (!magic || magic.codeHash !== token) throw new HttpError(410, "Expired link");
+  if (!magic || !magicStoredMatches(magic.codeHash, token)) throw new HttpError(410, "Expired link");
+  if (magic.codeHash.includes(".")) {
+    await host.store.updateChallenge({ ...magic, codeHash: hashMagicToken(token) });
+  }
   return grant;
 }
 

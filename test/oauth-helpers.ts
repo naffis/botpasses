@@ -115,6 +115,7 @@ export async function startOauthServer(opts: {
     deployPlane,
     fetchImpl: opts.fetchImpl,
     cimdGate: opts.cimdGate,
+    oidcDirectory: kernel.oidc,
   });
   const http = createHostedServer({
     kernel,
@@ -192,7 +193,7 @@ export async function startOauthServer(opts: {
     // First ready request provisions the org.
     const items = await go("/api/items", { jar });
     assert.equal(items.status, 200);
-    const user = await store.getUserByEmail(email);
+    const user = await identity.userByEmail(email);
     assert.ok(user);
     const membership = await kernel.ensureVaultOrgForUser(user.id);
     return { jar, userId: user.id, orgId: membership.orgId };

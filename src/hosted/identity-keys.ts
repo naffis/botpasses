@@ -6,7 +6,7 @@ import { generateDek, unwrapDek, wrapDek } from "./kek.ts";
 export const IDENTITY_KEY_ID = "identity";
 
 /** What an identity envelope holds; each kind gets its own AAD so envelopes cannot be swapped between slots. */
-export type WrappedSecretKind = "totp" | "totp_pending";
+export type WrappedSecretKind = "totp" | "totp_pending" | "email" | "invite_email";
 
 export function secretAad(userId: string, kind: WrappedSecretKind): string {
   switch (kind) {
@@ -14,6 +14,10 @@ export function secretAad(userId: string, kind: WrappedSecretKind): string {
       return userId;
     case "totp_pending":
       return `totp_pending:${userId}`;
+    case "email":
+      return `email:${userId}`;
+    case "invite_email":
+      return `invite_email:${userId}`;
     default: {
       const _exhaustive: never = kind;
       throw new Error(`Unhandled secret kind: ${String(_exhaustive)}`);

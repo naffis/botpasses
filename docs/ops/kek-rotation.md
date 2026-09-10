@@ -34,6 +34,14 @@ printf '%s' "$VAULT_KEK" | npx vault kek-wrap
 
 Prod is the same with `botpasses-prod` after staging is green.
 
+## Verify names only (AC-01)
+
+`fly secrets list` prints names, not values. Do not paste values into chat, git, or the changelog.
+
+On `botpasses-staging` and `botpasses-prod` the name list must include `VAULT_KEK_WRAPPED`, `VAULT_KMS_KEY_ID`, `AWS_ROLE_ARN`, and `VAULT_KEK_REQUIRE_KMS`, and must not include `VAULT_KEK`. Then `GET /health` is 200.
+
+If `VAULT_KEK` is still listed, finish the first-cutover steps above before deploying an image that claims dump-plus-Fly-secrets resistance. Code that hides inboxes and OAuth tokens from Neon still helps a dump without the KEK.
+
 ## Rollback
 
 `fly secrets unset VAULT_KEK_REQUIRE_KMS` and `fly secrets set VAULT_KEK=<old raw>`. Item rows are unchanged.

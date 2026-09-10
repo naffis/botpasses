@@ -33,7 +33,9 @@ import * as needs from "./need-ops.ts";
 import { assertWithinLimit, monthStartIso, planLimits, type OrgUsageKind, type PlanLimitKind, type PlanLimits, type PlanReport, type PlanUsage } from "./plan-limits.ts";
 import { IpWindowLimiter } from "./identity-limiter.ts";
 import { OrgRateLimiter } from "./rate-limit.ts";
-import type { IdentityRotateResult } from "./identity-keys.ts";
+import { EmailDirectory } from "./email-directory.ts";
+import { IdentityKeyring, type IdentityRotateResult } from "./identity-keys.ts";
+import { OidcDirectory } from "./oidc-directory.ts";
 import { openOauthState, sealOauthState } from "./providers/user-oauth.ts";
 
 export { BOOTSTRAP_ORG_ID, BOOTSTRAP_USER_ID } from "./kernel-orgs.ts";
@@ -68,6 +70,9 @@ export class HostedKernel {
   readonly deployPlane: "staging" | "production";
   readonly limiter: OrgRateLimiter;
   readonly planLimits: PlanLimits;
+  readonly keys: IdentityKeyring;
+  readonly emails: EmailDirectory;
+  readonly oidc: OidcDirectory;
   /** Invite spam bounds (`kernel-members.ts`), per inviting account and per client address. */
   readonly inviteLimiter = new IpWindowLimiter();
 
@@ -88,6 +93,9 @@ export class HostedKernel {
       allowLoopback: true,
     });
     this.limiter = opts.limiter ?? new OrgRateLimiter(opts.store);
+    this.keys = new IdentityKeyring(opts.store, this.#kek, this.now, this.#previousKek);
+    this.emails = new EmailDirectory(this.keys);
+    this.oidc = new OidcDirectory(this.keys, opts.store);
   }
 
   async ping(): Promise<void> {
@@ -496,6 +504,16 @@ export class HostedKernel {
     return connect.finishProviderUserOauth(this.#connectHost(), input);
   }
 
+  /** Provider id sealed into a connect `state`, or undefined when the blob is invalid or expired. */
+  providerIdFromConnectState(state: string): string | undefined {
+    if (!state) return undefined;
+    try {
+      return openOauthState(state, this.#kek, this.now().getTime()).providerId;
+    } catch {
+      return undefined;
+    }
+  }
+
   /* ---- audit ---- */
 
   async writeAudit(
@@ -568,6 +586,8 @@ export class HostedKernel {
     return {
       store: this.store,
       now: this.now,
+      oidc: this.oidc,
+      emails: this.emails,
       assertPlane: (name) => this.#assertPlane(name),
       assertPlanLimit: (orgId, kind) => this.assertPlanLimit(orgId, kind),
       clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
@@ -605,6 +625,7 @@ export class HostedKernel {
       publicUrl: this.publicUrl,
       approvalHmac: this.approvalHmac,
       sendEmail: this.sendEmail,
+      emails: this.emails,
       limiter: this.limiter,
       envFor: (orgId, name) => this.envFor(orgId, name),
       clientInOrg: (orgId, clientId) => this.#clientInOrg(orgId, clientId),
@@ -639,6 +660,7 @@ export class HostedKernel {
       now: this.now,
       publicUrl: this.publicUrl,
       planLimits: this.planLimits,
+      emails: this.emails,
       inviteLimiter: this.inviteLimiter,
       sendEmail: this.sendEmail,
       audit: (orgId, action, actor, itemName, clientId) => this.#audit(orgId, action, actor, itemName, clientId),

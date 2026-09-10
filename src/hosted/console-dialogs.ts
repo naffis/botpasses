@@ -22,6 +22,10 @@ function storeDialog(plane: VaultEnvName, defaultEnv: VaultEnvName): string {
       <label for="store-kind">Kind</label>
       <select id="store-kind" name="kind">${storeKindOptionsHtml()}</select>
       <p id="store-kind-hint" class="hint field-hint" hidden></p>
+      <div id="store-redirect" hidden data-testid="store-redirect">
+        <p class="hint">Add this exact redirect URI on the app (Redirect URIs or callback URL). Same URI for every provider.</p>
+        <p class="copy-row"><code id="store-redirect-uri" data-testid="store-redirect-uri"></code> <button type="button" id="store-redirect-copy" class="btn-ghost" data-testid="store-redirect-copy">Copy URI</button></p>
+      </div>
       <label for="store-env">Environment</label>
       <select id="store-env" name="environment" aria-describedby="store-env-hint">${envOptionsHtml(plane, defaultEnv)}</select>
       <p id="store-env-hint" class="hint field-hint">Defaults to ${defaultEnv}, the environment agents on this deployment use unless you set another one on the agent.</p>
@@ -98,7 +102,8 @@ function tokenDialog(): string {
 function connectDialog(): string {
   return `<dialog id="connect-dialog" data-testid="connect-dialog" aria-labelledby="connect-title">
     <h2 id="connect-title">Connect account</h2>
-    <p class="hint">Authorization Code (with PKCE when the provider supports it). The redirect is this site's callback or <code>http://127.0.0.1:8888/callback</code>; add that URI on the <span id="connect-provider-name">provider</span> app. The refresh token is stored next to this credential. The agent does not get it.</p>
+    <p class="hint">Authorization Code (with PKCE when the provider supports it). Add this exact redirect URI on the <span id="connect-provider-name">provider</span> app, then continue. Same URI for every provider. The refresh token is stored next to this credential. The agent does not get it.</p>
+    <p class="copy-row"><code id="connect-redirect-uri" data-testid="connect-redirect-uri"></code> <button type="button" id="connect-redirect-copy" class="btn-ghost" data-testid="connect-redirect-copy">Copy URI</button></p>
     <p id="connect-error" class="flash" role="alert"></p>
     <form id="connect-provider" novalidate>
       <input type="hidden" name="provider_id" />

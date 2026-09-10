@@ -6,6 +6,7 @@
 /** Bundle of:
  *   src/hosted/store-form-fields.ts
  *   src/hosted/providers/registry.ts
+ *   src/hosted/providers/connect-redirect.ts
  *   src/hosted/client/shared.ts
  *   src/hosted/client/routes.ts
  *   src/hosted/client/activity.ts
@@ -397,6 +398,30 @@ function pathMatchesPrefix(path        , prefix        )          {
 function userPathHint(provider          , host        , path        )                           {
   if (!isApiHost(provider, host)) return undefined;
   return provider.userPathHints?.find((hint) => hint.pathPrefixes.some((p) => pathMatchesPrefix(path, p)));
+}
+
+// ---- src/hosted/providers/connect-redirect.ts ----
+/**
+ * The redirect URI a vendor app must allowlist for a Botpasses user connect.
+ * One hosted path for every provider; loopback only when Botpasses itself is local.
+ */
+const LOOPBACK_REDIRECT = "http://127.0.0.1:8888/callback";
+const HOSTED_CONNECT_CALLBACK_PATH = "/connect/callback";
+
+function isLoopbackPublicUrl(publicUrl        )          {
+  return publicUrl.startsWith("http://127.0.0.1") || publicUrl.startsWith("http://localhost");
+}
+
+/** The URI \`chooseRedirect\` sends when the caller does not ask for another allowlisted one. */
+function defaultConnectRedirect(publicUrl        )         {
+  const origin = publicUrl.replace(/\\/$/, "");
+  if (isLoopbackPublicUrl(origin)) return LOOPBACK_REDIRECT;
+  return \`\${origin}\${HOSTED_CONNECT_CALLBACK_PATH}\`;
+}
+
+/** Expand-only alias: older connects registered \`/integrations/<provider>/callback\`. */
+function legacyProviderCallback(publicUrl        , providerId        )         {
+  return \`\${publicUrl.replace(/\\/$/, "")}/integrations/\${providerId}/callback\`;
 }
 
 // ---- src/hosted/client/shared.ts ----
@@ -937,6 +962,14 @@ function pageOf   (rows     , page        , size         = ACTIVITY_PAGE_SIZE)  
 
 /** Element ids around one form, e.g. \`store-*\` in the console and \`fulfill-*\` on collect. */
 
+/** The exact redirect URI this origin will send on a user connect. */
+function fillConnectRedirectUri(codeId        )         {
+  const uri = defaultConnectRedirect(location.origin);
+  const code = byId(codeId);
+  if (code) code.textContent = uri;
+  return uri;
+}
+
 function field                                                (form                 , name        )           {
   const el = form.elements.namedItem(name);
   return el instanceof HTMLInputElement || el instanceof HTMLSelectElement ? (el     ) : null;
@@ -975,6 +1008,15 @@ function syncStoreFields(form                 , ids              )       {
       hint.hidden = !textHint;
     }
   }
+  if (ids.redirectRow) {
+    const row = byId(ids.redirectRow);
+    const show = kind === "client_secret";
+    if (row) row.hidden = !show;
+    if (show && ids.redirectUri) {
+      const code = byId(ids.redirectUri);
+      if (code) code.textContent = defaultConnectRedirect(location.origin);
+    }
+  }
 }
 
 /** Kind change picks the send method; inject change and typing keep the rest in sync. */
@@ -1000,6 +1042,12 @@ function bindStoreForm(form                 , ids              )       {
       }
     }
   });
+  if (ids.redirectCopy && ids.redirectUri) {
+    const uriId = ids.redirectUri;
+    byId(ids.redirectCopy)?.addEventListener("click", () => {
+      copyText(byId(uriId)?.textContent ?? "", "Redirect URI copied");
+    });
+  }
   syncStoreFields(form, ids);
 }
 
@@ -2508,6 +2556,9 @@ const STORE_IDS = {
   valueLabel: "store-value-label",
   injectSummary: "store-inject-summary",
   kindHint: "store-kind-hint",
+  redirectRow: "store-redirect",
+  redirectUri: "store-redirect-uri",
+  redirectCopy: "store-redirect-copy",
 };
 
 let current        = parseRoute("");
@@ -2850,11 +2901,16 @@ async function openConnect(item         , provider          , opts              
   if (allow) allow.checked = Boolean(opts.agentId);
   setHidden("connect-agent-row", !opts.agentId);
   if (opts.agentId) text(byId("connect-agent-label"), \`Also allow \${await agentLabel(opts.agentId)} to use the connected account\`);
+  fillConnectRedirectUri("connect-redirect-uri");
   openDialog("connect-dialog");
   byId                  ("connect-client-id")?.focus();
 }
 
 function bindConnect()       {
+  byId("connect-redirect-copy")?.addEventListener("click", () => {
+    const uri = byId("connect-redirect-uri")?.textContent ?? "";
+    copyText(uri, "Redirect URI copied");
+  });
   const form = byId                 ("connect-provider");
   form?.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -3105,6 +3161,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 /** Bundle of:
  *   src/hosted/store-form-fields.ts
+ *   src/hosted/providers/connect-redirect.ts
  *   src/hosted/client/shared.ts
  *   src/hosted/client/store-form.ts
  *   src/hosted/client/collect.ts
@@ -3330,6 +3387,30 @@ function storeRequestBody(values                 , opts                      )  
   if (!opts.editing || values.value) body.value = values.value;
   if (values.environment) body.environment = values.environment;
   return body;
+}
+
+// ---- src/hosted/providers/connect-redirect.ts ----
+/**
+ * The redirect URI a vendor app must allowlist for a Botpasses user connect.
+ * One hosted path for every provider; loopback only when Botpasses itself is local.
+ */
+const LOOPBACK_REDIRECT = "http://127.0.0.1:8888/callback";
+const HOSTED_CONNECT_CALLBACK_PATH = "/connect/callback";
+
+function isLoopbackPublicUrl(publicUrl        )          {
+  return publicUrl.startsWith("http://127.0.0.1") || publicUrl.startsWith("http://localhost");
+}
+
+/** The URI \`chooseRedirect\` sends when the caller does not ask for another allowlisted one. */
+function defaultConnectRedirect(publicUrl        )         {
+  const origin = publicUrl.replace(/\\/$/, "");
+  if (isLoopbackPublicUrl(origin)) return LOOPBACK_REDIRECT;
+  return \`\${origin}\${HOSTED_CONNECT_CALLBACK_PATH}\`;
+}
+
+/** Expand-only alias: older connects registered \`/integrations/<provider>/callback\`. */
+function legacyProviderCallback(publicUrl        , providerId        )         {
+  return \`\${publicUrl.replace(/\\/$/, "")}/integrations/\${providerId}/callback\`;
 }
 
 // ---- src/hosted/client/shared.ts ----
@@ -3682,6 +3763,14 @@ function qs(params                                    )         {
 
 /** Element ids around one form, e.g. \`store-*\` in the console and \`fulfill-*\` on collect. */
 
+/** The exact redirect URI this origin will send on a user connect. */
+function fillConnectRedirectUri(codeId        )         {
+  const uri = defaultConnectRedirect(location.origin);
+  const code = byId(codeId);
+  if (code) code.textContent = uri;
+  return uri;
+}
+
 function field                                                (form                 , name        )           {
   const el = form.elements.namedItem(name);
   return el instanceof HTMLInputElement || el instanceof HTMLSelectElement ? (el     ) : null;
@@ -3720,6 +3809,15 @@ function syncStoreFields(form                 , ids              )       {
       hint.hidden = !textHint;
     }
   }
+  if (ids.redirectRow) {
+    const row = byId(ids.redirectRow);
+    const show = kind === "client_secret";
+    if (row) row.hidden = !show;
+    if (show && ids.redirectUri) {
+      const code = byId(ids.redirectUri);
+      if (code) code.textContent = defaultConnectRedirect(location.origin);
+    }
+  }
 }
 
 /** Kind change picks the send method; inject change and typing keep the rest in sync. */
@@ -3745,6 +3843,12 @@ function bindStoreForm(form                 , ids              )       {
       }
     }
   });
+  if (ids.redirectCopy && ids.redirectUri) {
+    const uriId = ids.redirectUri;
+    byId(ids.redirectCopy)?.addEventListener("click", () => {
+      copyText(byId(uriId)?.textContent ?? "", "Redirect URI copied");
+    });
+  }
   syncStoreFields(form, ids);
 }
 
@@ -3778,6 +3882,9 @@ const FULFILL_IDS = {
   valueLabel: "fulfill-value-label",
   injectSummary: "fulfill-inject-summary",
   kindHint: "fulfill-kind-hint",
+  redirectRow: "fulfill-redirect",
+  redirectUri: "fulfill-redirect-uri",
+  redirectCopy: "fulfill-redirect-copy",
 };
 
 function recipeOf(need                            )                            {
@@ -3798,12 +3905,16 @@ function fulfillForm(needId        , suggestedName        , host        , recipe
     <label for="fulfill-name">Name</label>
     <input id="fulfill-name" name="name" required value="\${name}" autocomplete="off" spellcheck="false" aria-describedby="fulfill-name-hint" />
     <p id="fulfill-name-hint" class="hint field-hint">\${ITEM_NAME_HINT}</p>
-    <label for="fulfill-hosts">Allowed hosts</label>
-    <input id="fulfill-hosts" name="allowed_hosts" required value="\${hosts}" autocomplete="off" spellcheck="false" aria-describedby="fulfill-hosts-hint" />
-    <p id="fulfill-hosts-hint" class="hint field-hint">\${ALLOWED_HOSTS_HELP}</p>
     <label for="fulfill-kind">Kind</label>
     <select id="fulfill-kind" name="kind">\${STORE_KIND_OPTIONS.map((o) => html\`<option value="\${o.value}"\${o.value === kind ? " selected" : ""}>\${o.label}</option>\`)}</select>
     <p id="fulfill-kind-hint" class="hint field-hint" hidden></p>
+    <div id="fulfill-redirect" hidden data-testid="fulfill-redirect">
+      <p class="hint">Add this exact redirect URI on the app (Redirect URIs or callback URL). Same URI for every provider.</p>
+      <p class="copy-row"><code id="fulfill-redirect-uri" data-testid="fulfill-redirect-uri"></code> <button type="button" id="fulfill-redirect-copy" class="btn-ghost" data-testid="fulfill-redirect-copy">Copy URI</button></p>
+    </div>
+    <label for="fulfill-hosts">Allowed hosts</label>
+    <input id="fulfill-hosts" name="allowed_hosts" required value="\${hosts}" autocomplete="off" spellcheck="false" aria-describedby="fulfill-hosts-hint" />
+    <p id="fulfill-hosts-hint" class="hint field-hint">\${ALLOWED_HOSTS_HELP}</p>
     <div id="fulfill-username" hidden>
       <label for="fulfill-username-input"><span id="fulfill-username-label">Client ID</span></label>
       <input id="fulfill-username-input" name="username" autocomplete="off" />

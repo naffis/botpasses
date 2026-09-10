@@ -70,7 +70,7 @@ Email codes are 8 digits, valid 10 minutes, single use; five wrong attempts end 
 | POST | `/api/need-items/:id/deny` | Denies a pending request from the Inbox |
 | GET | `/collect/:id` | HTML shell for the collect page. Details load only for a signed-in operator |
 | POST | `/api/integrations/:provider/start` | `:provider` is `spotify`, `github`, `google`, `slack`, or `stripe` (unknown is 404). `{ "item_name", "environment?", "client_id?", "redirect_uri?", "agent_client_id?", "need_id?" }`. Returns `authorize_url`, `redirect_uri`, and `provider` for a user connect. `agent_client_id` names one agent that gets a standing approval on the refresh credential after connect; `need_id` closes the Inbox request the connect answers |
-| GET | `/integrations/:provider/callback` | Operator cookie, authenticator step passed. Exchanges the code, stores the refresh token as `<ITEM>_REFRESH`, redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>&reason=<code>` (`state_expired`, `provider_denied`, `exchange_failed`, or `no_refresh_token`). `/api/integrations/spotify/start` and `/integrations/spotify/callback` are these routes with `spotify` as the provider |
+| GET | `/connect/callback` | Operator cookie, authenticator step passed. Exchanges the code, stores the refresh token as `<ITEM>_REFRESH`, redirects to `/console#vault?connected=<provider>` or `?connect_error=<provider>&reason=<code>` (`state_expired`, `provider_denied`, `exchange_failed`, or `no_refresh_token`). The provider id is in the sealed `state`. `/integrations/:provider/callback` is the expand-only alias for apps that already registered that URI |
 
 Names match `[A-Z][A-Z0-9_]{0,127}`. A duplicate name is 409. An empty value is 400.
 

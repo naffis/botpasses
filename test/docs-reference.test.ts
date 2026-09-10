@@ -51,8 +51,8 @@ test("MCP and HTTP reference docs name hosted tools and forbid get_secret", () =
   assert.match(publicHttp, /`\/api\/folders`/);
   assert.match(publicHttp, /`\/api\/orgs`/);
   assert.match(publicHttp, /`\/approve\?token=/);
+  assert.match(publicHttp, /\/connect\/callback/);
   assert.match(publicHttp, /integrations\/:provider\/callback/);
-  assert.match(publicHttp, /integrations\/spotify\/callback/);
   assert.match(mcp, /user_connect_required/, "the pre-dial refusal for a user-only path is documented");
   assert.match(mcp, /connect_url/);
   assert.match(http, /need-items\/:id\/deny/);

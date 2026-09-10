@@ -68,7 +68,7 @@ test("I1: concurrent wrong OTP guesses each spend an attempt; the challenge dies
       guesses.map((r) => r.status),
       Array(8).fill(401),
     );
-    const challenge = await ctx.store.latestEmailOtp(email);
+    const challenge = await ctx.store.latestEmailOtp(await ctx.identity.emails.lookupKey(email));
     assert.equal(challenge?.attempts, 5, "attempts are claimed atomically, not read-then-written");
     const late = await api(ctx, "/api/auth/otp/verify", { body: { email, otp } });
     assert.equal(late.status, 401, "the right code no longer works once the challenge is exhausted");
@@ -142,7 +142,7 @@ test("I11: a mailer failure stores nothing and the next send works; a resend rep
     const email = "resend@example.com";
     const down = await api(ctx, "/api/auth/otp/send", { body: { email } });
     assert.equal(down.status, 503);
-    assert.equal(await ctx.store.latestEmailOtp(email), undefined, "no challenge row without a delivered email");
+    assert.equal(await ctx.store.latestEmailOtp(await ctx.identity.emails.lookupKey(email)), undefined, "no challenge row without a delivered email");
     mailer.fail = false;
     const up = await api(ctx, "/api/auth/otp/send", { body: { email } });
     assert.equal(up.status, 200, "not blocked for ten minutes by the failed send");
@@ -156,7 +156,7 @@ test("I11: a mailer failure stores nothing and the next send works; a resend rep
     assert.equal(stale.status, 401, "the replaced code is dead");
     const fresh = await api(ctx, "/api/auth/otp/verify", { body: { email, otp: second } });
     await expectStatus(fresh, 200, "the new code signs in");
-    assert.equal(await ctx.store.countEmailOtpSince(email, new Date(0).toISOString()), 2, "resends count against the budget");
+    assert.equal(await ctx.store.countEmailOtpSince(await ctx.identity.emails.lookupKey(email), new Date(0).toISOString()), 2, "resends count against the budget");
   } finally {
     await ctx.close();
   }
@@ -178,7 +178,7 @@ test("I4: concurrent wrong authenticator codes all count and lock the account", 
     );
     const statuses = results.map((r) => r.status).sort();
     assert.ok(statuses.includes(429), `some attempt locked the account: ${statuses.join(",")}`);
-    const user = await ctx.store.getUserByEmail(email);
+    const user = await ctx.identity.userByEmail(email);
     assert.ok(user?.totpLockedUntil, "the lock is persisted");
     assert.ok((user?.totpFailures ?? 0) >= TOTP_MAX_FAILURES, `failures counted atomically: ${user?.totpFailures}`);
   } finally {
@@ -362,8 +362,8 @@ test("I5: sessions are listed and revocable by the org they act in, not by every
     const a = await signUpAndEnroll(ctx, "member-a@example.com");
     clock.now += 60_000;
     const b = await signUpAndEnroll(ctx, "owner-b@example.com");
-    const userA = await ctx.store.getUserByEmail("member-a@example.com");
-    const userB = await ctx.store.getUserByEmail("owner-b@example.com");
+    const userA = await ctx.identity.userByEmail("member-a@example.com");
+    const userB = await ctx.identity.userByEmail("owner-b@example.com");
     assert.ok(userA && userB);
     const orgA = (await ctx.kernel.ensureVaultOrgForUser(userA.id)).orgId;
     const orgB = (await ctx.kernel.ensureVaultOrgForUser(userB.id)).orgId;
@@ -409,7 +409,7 @@ test("I3: POST /api/orgs needs a ready session, a printable name of 1 to 80 char
     await expectStatus(ok, 200);
     const { orgId } = await readJson<{ orgId: string }>(ok);
     assert.equal((await ctx.store.getOrg(orgId))?.name, "Acme Robotics");
-    const user = await ctx.store.getUserByEmail("orgs-ready@example.com");
+    const user = await ctx.identity.userByEmail("orgs-ready@example.com");
     assert.ok(user);
     // The free tier allows ten owned orgs; the workspace and Acme make two.
     for (let i = 2; i < 10; i += 1) await ctx.kernel.createOrgForUser(`org ${i}`, user.id);

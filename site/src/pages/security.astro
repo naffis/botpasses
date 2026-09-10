@@ -33,6 +33,7 @@ const adrs = [
   { href: `${GH}/docs/adr/0006-grant-vault-trust-model.md`, label: "ADR 0006: Grant-vault, not zero-knowledge" },
   { href: `${GH}/docs/adr/0007-kms-wrapped-kek.md`, label: "ADR 0007: KMS-wrapped platform key" },
   { href: `${GH}/docs/adr/0008-security-hardening.md`, label: "ADR 0008: Security hardening after the 2026-09 audit" },
+  { href: `${GH}/docs/adr/0009-email-at-rest.md`, label: "ADR 0009: Email at rest and OAuth tokens at rest" },
   { href: `${GH}/docs/adr/0003-first-party-operator-identity.md`, label: "ADR 0003b: First-party operator identity" },
   { href: `${GH}/docs/adr/0004-same-origin-oauth-as.md`, label: "ADR 0004b: Same-origin OAuth authorization server" },
   { href: `${GH}/docs/adr/0005-access-ledger.md`, label: "ADR 0005: Access ledger" },
@@ -74,11 +75,16 @@ const adrs = [
 
   <h2 id="encryption">Encryption</h2>
   <p>
-    Each credential is encrypted with AES-256-GCM under a data key that belongs to its organisation, with the
-    organisation id as additional authenticated data. Organisation keys are wrapped by a platform key. At
+    Each credential is encrypted with AES-256-GCM under a data key that belongs to its organisation.
+    Additional authenticated data is the bound tuple <code>orgId|itemId|allowed_hosts_json|inject</code>,
+    not the organisation id alone. Organisation keys are wrapped by a platform key. At
     boot, AWS KMS unwraps that platform key (<code>VAULT_KEK_WRAPPED</code>) through a role the Fly Machine
-    assumes with Fly OIDC; the KMS key itself stays in AWS and does not handle a credential. A database dump
-    alone decrypts nothing. Machine tokens are stored as SHA-256 hashes. The local CLI uses a master key you
+    assumes with Fly OIDC; the KMS key itself stays in AWS and does not handle a credential. Operator
+    inboxes and live OAuth refresh, auth, device, and session tokens are stored the same way
+    (email-at-rest and OAuth-token-at-rest): a keyed HMAC for lookup and an AES-GCM wrap under the
+    identity key. A database dump without the platform KEK does not yield credential values, inboxes,
+    or those bearer tokens. Item names, last four characters, allowed hosts, and internal Grant ids
+    stay in the dump. Machine tokens are stored as SHA-256 hashes. The local CLI uses a master key you
     hold, with the credential name bound into the ciphertext.
   </p>
 
@@ -88,8 +94,8 @@ const adrs = [
     <li><strong>Exact host allowlist.</strong> The request host must equal one of the credential's allowed hosts. No wildcards, no subdomains.</li>
     <li><strong>No IP literals.</strong> Hosts are names. Botpasses resolves the name itself, rejects private, loopback, link-local, and other blocked ranges, and connects to the pinned address with the correct SNI, so a DNS rebind cannot redirect the call.</li>
     <li><strong>No redirects.</strong> A 3xx is returned to the agent, not followed.</li>
-    <li><strong>10 second timeout and 256 KiB response cap.</strong></li>
-    <li><strong>Redaction.</strong> The credential value, its last four characters, and any access token Botpasses minted are replaced with <code>[redacted]</code> in the body before it reaches the model.</li>
+    <li><strong>10 second timeout.</strong> The socket stops at 1 MiB of raw origin bytes, then the body is redacted, then the text sent to the model is cut at 256 KiB.</li>
+    <li><strong>Redaction.</strong> The credential value and any access token Botpasses minted are replaced with <code>[redacted]</code> in the body before it reaches the model. The last four characters of a credential are not stripped from connector bodies.</li>
   </ul>
   <p>
     Every call is written to the audit log by agent name and credential name. Approvals are per agent and
@@ -101,7 +107,8 @@ const adrs = [
     Accounts are first-party: an 8-digit email code plus a required authenticator app (TOTP) with backup
     codes. There is no password and no third-party identity vendor. Sessions are HttpOnly cookies;
     state-changing requests need a signed CSRF token. Operator actions require the authenticator step;
-    a session that skipped it is refused with <code>mfa_required</code>.
+    a session that skipped it is refused with <code>mfa_required</code>. The exception is a bootstrap
+    bearer honoured only when <code>VAULT_BOOTSTRAP_ALLOW_PLANE=1</code> is set on that plane.
   </p>
 
   <h2 id="oauth">OAuth for agents</h2>

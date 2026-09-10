@@ -108,6 +108,7 @@ async function startServer(parts: ServerParts): Promise<IdentityCtx> {
     sessionSecret: TEST_SESSION_SECRET,
     jwk,
     secureCookies: parts.secure,
+    oidcDirectory: kernel.oidc,
   });
   const http = createHostedServer({
     kernel,

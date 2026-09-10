@@ -20,7 +20,9 @@ import type { VaultStore } from "../store/types.ts";
 import { clientUsage, grantUsage, sessionUsage } from "./access-usage.ts";
 import { HttpError } from "./errors.ts";
 import { logAuthEvent } from "./observe.ts";
+import type { EmailDirectory } from "./email-directory.ts";
 import { destroyOidcPayloadsForClient } from "./oidc-adapter.ts";
+import type { OidcDirectory } from "./oidc-directory.ts";
 import type { PlanLimitKind } from "./plan-limits.ts";
 
 /** Access shows `idHash.slice(0, 12)`; anything shorter is not a session id. */
@@ -29,6 +31,8 @@ const SESSION_ID_MIN_CHARS = 12;
 export type ClientHost = {
   store: VaultStore;
   now: () => Date;
+  oidc: OidcDirectory;
+  emails: EmailDirectory;
   assertPlane: (name: VaultEnvName) => void;
   assertPlanLimit: (orgId: string, kind: PlanLimitKind) => Promise<void>;
   clientInOrg: (orgId: string, clientId: string) => Promise<ClientRecord>;
@@ -216,7 +220,7 @@ export async function revokeClient(host: ClientHost, orgId: string, actor: strin
   // Every consent this org's members gave for the client id dies with it, not only the
   // first consenter's: a surviving member refresh token would otherwise re-issue access.
   const members = await host.store.listMembers(orgId);
-  await destroyOidcPayloadsForClient(host.store, client, {
+  await destroyOidcPayloadsForClient(host.store, host.oidc, client, {
     orgId,
     memberUserIds: members.map((m) => m.userId),
   });
@@ -259,11 +263,17 @@ export async function listAccess(host: ClientHost, orgId: string, currentSession
   ]);
   const grants = await host.settleExpired(storedGrants);
   const users = await Promise.all(members.map((m) => host.store.getUser(m.userId)));
-  const operators = members.map((m, i) => ({
-    user_id: m.userId,
-    role: m.role,
-    email: users[i]?.email ?? "",
-  }));
+  const operators = await Promise.all(
+    members.map(async (m, i) => {
+      const user = users[i];
+      const inbox = user ? await host.emails.revealUser(user) : "";
+      return {
+        user_id: m.userId,
+        role: m.role,
+        email: inbox,
+      };
+    }),
+  );
   const clientRows = await Promise.all(
     clients.map(async (c) => {
       const actor = c.consentedByUserId ? await host.store.getUser(c.consentedByUserId) : undefined;
@@ -281,7 +291,7 @@ export async function listAccess(host: ClientHost, orgId: string, currentSession
         last_seen_at: c.lastSeenAt,
         fetched: usage.fetched,
         last4: c.last4,
-        consented_by_email: actor?.email ?? null,
+        consented_by_email: actor ? (await host.emails.revealUser(actor)) || null : null,
       };
     }),
   );

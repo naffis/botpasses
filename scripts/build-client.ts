@@ -21,6 +21,7 @@ export const CLIENT_BUNDLES: Record<string, string[]> = {
   CONSOLE_BUNDLE_JS: [
     "src/hosted/store-form-fields.ts",
     "src/hosted/providers/registry.ts",
+    "src/hosted/providers/connect-redirect.ts",
     "src/hosted/client/shared.ts",
     "src/hosted/client/routes.ts",
     "src/hosted/client/activity.ts",
@@ -34,6 +35,7 @@ export const CLIENT_BUNDLES: Record<string, string[]> = {
   ],
   COLLECT_BUNDLE_JS: [
     "src/hosted/store-form-fields.ts",
+    "src/hosted/providers/connect-redirect.ts",
     "src/hosted/client/shared.ts",
     "src/hosted/client/store-form.ts",
     "src/hosted/client/collect.ts",

@@ -29,6 +29,7 @@ import {
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
   HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
   HOSTED_SCHEMA_AUDIT_HOST_ALTER_SQLITE,
+  HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_SQLITE,
   HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE,
   HOSTED_SCHEMA_OAUTH_ALTER_SQLITE,
   HOSTED_SCHEMA_SCOPE_ALTER_SQLITE,
@@ -57,6 +58,7 @@ import {
   mapMemberRecord,
   mapNeed,
   mapOidcRow,
+  mapOidcStored,
   mapOrg,
   mapOtp,
   mapPolicy,
@@ -78,7 +80,9 @@ import {
   type LegacyAadItem,
   type LegacyAadPage,
   type MemberRow,
+  type OidcPayloadIndex,
   type OidcPayloadRow,
+  type OidcStoredRow,
   type OperatorSessionRow,
   type RateHitKind,
   type SweepCounts,
@@ -101,6 +105,7 @@ const SQLITE_ALTERS = [
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_SQLITE,
   HOSTED_SCHEMA_NEED_CONNECT_ALTER_SQLITE,
   HOSTED_SCHEMA_AUDIT_HOST_ALTER_SQLITE,
+  HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_SQLITE,
 ];
 
 export function openHostedSqlite(path: string): SqliteHostedStore {
@@ -127,12 +132,23 @@ export function openHostedSqlite(path: string): SqliteHostedStore {
         db.exec(sql);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("duplicate column")) throw err;
+        // org_invites is created in HOSTED_SCHEMA_TEAM, which runs after this loop.
+        if (!msg.includes("duplicate column") && !msg.includes("no such table")) throw err;
       }
     }
   }
   db.exec(HOSTED_SCHEMA_IDENTITY_INDEXES);
   db.exec(HOSTED_SCHEMA_TEAM);
+  for (const stmt of HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_SQLITE.trim().split(";")) {
+    const sql = stmt.trim();
+    if (!sql) continue;
+    try {
+      db.exec(sql);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("duplicate column")) throw err;
+    }
+  }
   db.exec(HOSTED_SCHEMA_V10_INDEXES);
   db.exec(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
   return new SqliteHostedStore(db);
@@ -966,18 +982,24 @@ export class SqliteHostedStore implements VaultStore {
     return rows.map(mapMemberRecord);
   }
 
-  async listMemberEmails(orgId: string): Promise<string[]> {
+  async listVerifiedMemberUserIds(orgId: string): Promise<string[]> {
     const rows = this.#db
       .prepare(
-        `SELECT u.email AS email FROM org_members m JOIN users u ON u.id = m.user_id
-         WHERE m.org_id = ? AND u.email_verified_at IS NOT NULL ORDER BY u.email`,
+        `SELECT u.id AS id FROM org_members m JOIN users u ON u.id = m.user_id
+         WHERE m.org_id = ? AND u.email_verified_at IS NOT NULL ORDER BY u.id`,
       )
-      .all(orgId) as { email: string }[];
-    return rows.map((r) => String(r.email));
+      .all(orgId) as { id: string }[];
+    return rows.map((r) => String(r.id));
   }
 
-  async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
-    const idx = oidcPayloadIndex(row.payload);
+  async upsertOidcPayload(row: {
+    id: string;
+    kind: string;
+    payload: string;
+    expiresAt: string | null;
+    index?: OidcPayloadIndex;
+  }): Promise<void> {
+    const idx = row.index ?? oidcPayloadIndex(row.payload);
     this.#db
       .prepare(
         `INSERT INTO oidc_payloads (id, kind, payload, expires_at, uid, user_code, grant_id, client_id, account_id)
@@ -989,7 +1011,10 @@ export class SqliteHostedStore implements VaultStore {
       .run(row.id, row.kind, row.payload, row.expiresAt, idx.uid, idx.userCode, idx.grantId, idx.clientId, idx.accountId);
   }
 
-  async getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined> {
+  async getOidcPayload(
+    id: string,
+    kind: string,
+  ): Promise<{ payload: string; expiresAt: string | null; consumedAt: number | null } | undefined> {
     const r = this.#db.prepare("SELECT * FROM oidc_payloads WHERE id = ? AND kind = ?").get(id, kind) as
       | Record<string, unknown>
       | undefined;
@@ -997,6 +1022,7 @@ export class SqliteHostedStore implements VaultStore {
     return {
       payload: String(r.payload),
       expiresAt: r.expires_at == null ? null : String(r.expires_at),
+      consumedAt: r.consumed_at == null ? null : Number(r.consumed_at),
     };
   }
 
@@ -1012,11 +1038,47 @@ export class SqliteHostedStore implements VaultStore {
     return rows.map((r) => ({ id: String(r.id), payload: String(r.payload) }));
   }
 
+  async listAllOidcPayloads(): Promise<OidcStoredRow[]> {
+    const rows = this.#db.prepare("SELECT * FROM oidc_payloads").all() as Record<string, unknown>[];
+    return rows.map(mapOidcStored);
+  }
+
+  async replaceOidcPayloadId(
+    kind: string,
+    oldId: string,
+    next: { id: string; payload: string; expiresAt: string | null; index?: OidcPayloadIndex },
+  ): Promise<void> {
+    const existing = await this.getOidcPayload(next.id, kind);
+    if (existing) {
+      await this.deleteOidcPayload(oldId, kind);
+      return;
+    }
+    const idx = next.index ?? oidcPayloadIndex(next.payload);
+    this.#db
+      .prepare(
+        `UPDATE oidc_payloads SET id = ?, payload = ?, expires_at = ?, uid = ?, user_code = ?,
+           grant_id = ?, client_id = ?, account_id = ? WHERE id = ? AND kind = ?`,
+      )
+      .run(
+        next.id,
+        next.payload,
+        next.expiresAt,
+        idx.uid,
+        idx.userCode,
+        idx.grantId,
+        idx.clientId,
+        idx.accountId,
+        oldId,
+        kind,
+      );
+  }
+
   async insertUser(row: UserRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO users (id, email, email_verified_at, totp_wrapped_iv, totp_wrapped_ciphertext, totp_wrapped_tag, totp_last_step, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO users (id, email, email_verified_at, totp_wrapped_iv, totp_wrapped_ciphertext, totp_wrapped_tag, totp_last_step, created_at,
+           email_wrapped_iv, email_wrapped_ciphertext, email_wrapped_tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1027,6 +1089,9 @@ export class SqliteHostedStore implements VaultStore {
         row.totpWrappedTag,
         row.totpLastStep,
         row.createdAt,
+        row.emailWrappedIv ?? null,
+        row.emailWrappedCiphertext ?? null,
+        row.emailWrappedTag ?? null,
       );
   }
 
@@ -1047,15 +1112,20 @@ export class SqliteHostedStore implements VaultStore {
   async updateUser(row: UserRecord): Promise<void> {
     this.#db
       .prepare(
-        `UPDATE users SET email_verified_at = ?, totp_wrapped_iv = ?, totp_wrapped_ciphertext = ?,
-         totp_wrapped_tag = ?, totp_last_step = ? WHERE id = ?`,
+        `UPDATE users SET email = ?, email_verified_at = ?, totp_wrapped_iv = ?, totp_wrapped_ciphertext = ?,
+         totp_wrapped_tag = ?, totp_last_step = ?, email_wrapped_iv = ?, email_wrapped_ciphertext = ?,
+         email_wrapped_tag = ? WHERE id = ?`,
       )
       .run(
+        row.email,
         row.emailVerifiedAt,
         row.totpWrappedIv,
         row.totpWrappedCiphertext,
         row.totpWrappedTag,
         row.totpLastStep,
+        row.emailWrappedIv ?? null,
+        row.emailWrappedCiphertext ?? null,
+        row.emailWrappedTag ?? null,
         row.id,
       );
   }
@@ -1232,6 +1302,26 @@ export class SqliteHostedStore implements VaultStore {
       .prepare("SELECT * FROM users WHERE totp_wrapped_iv IS NOT NULL OR totp_pending_wrapped_iv IS NOT NULL")
       .all() as Record<string, unknown>[];
     return rows.map(mapUser);
+  }
+
+  async listUsersWithLegacyEmail(): Promise<UserRow[]> {
+    const rows = this.#db.prepare("SELECT * FROM users WHERE email LIKE '%@%'").all() as Record<string, unknown>[];
+    return rows.map(mapUser);
+  }
+
+  async listInvitesWithLegacyEmail(): Promise<InviteRecord[]> {
+    const rows = this.#db.prepare("SELECT * FROM org_invites WHERE email LIKE '%@%'").all() as Record<string, unknown>[];
+    return rows.map(mapInvite);
+  }
+
+  async listAllUsers(): Promise<UserRow[]> {
+    const rows = this.#db.prepare("SELECT * FROM users").all() as Record<string, unknown>[];
+    return rows.map(mapUser);
+  }
+
+  async listAllInvites(): Promise<InviteRecord[]> {
+    const rows = this.#db.prepare("SELECT * FROM org_invites").all() as Record<string, unknown>[];
+    return rows.map(mapInvite);
   }
 
   async deleteUnusedBackupCodes(userId: string): Promise<void> {
@@ -1427,8 +1517,8 @@ export class SqliteHostedStore implements VaultStore {
   async consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean> {
     const r = this.#db
       .prepare(
-        `UPDATE oidc_payloads SET payload = json_set(payload, '$.consumed', ?)
-         WHERE id = ? AND kind = ? AND json_extract(payload, '$.consumed') IS NULL`,
+        `UPDATE oidc_payloads SET consumed_at = ?
+         WHERE id = ? AND kind = ? AND consumed_at IS NULL`,
       )
       .run(consumedAt, id, kind);
     return Number(r.changes) === 1;
@@ -1457,8 +1547,9 @@ export class SqliteHostedStore implements VaultStore {
   async insertInvite(row: InviteRecord): Promise<void> {
     this.#db
       .prepare(
-        `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at,
+           email_wrapped_iv, email_wrapped_ciphertext, email_wrapped_tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -1470,7 +1561,27 @@ export class SqliteHostedStore implements VaultStore {
         row.createdAt,
         row.expiresAt,
         row.acceptedAt,
+        row.emailWrappedIv ?? null,
+        row.emailWrappedCiphertext ?? null,
+        row.emailWrappedTag ?? null,
       );
+  }
+
+  async updateInviteEmail(
+    id: string,
+    patch: {
+      email: string;
+      emailWrappedIv: string;
+      emailWrappedCiphertext: string;
+      emailWrappedTag: string;
+    },
+  ): Promise<void> {
+    this.#db
+      .prepare(
+        `UPDATE org_invites SET email = ?, email_wrapped_iv = ?, email_wrapped_ciphertext = ?,
+           email_wrapped_tag = ? WHERE id = ?`,
+      )
+      .run(patch.email, patch.emailWrappedIv, patch.emailWrappedCiphertext, patch.emailWrappedTag, id);
   }
 
   async getInvite(id: string): Promise<InviteRecord | undefined> {

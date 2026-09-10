@@ -39,6 +39,7 @@ async function ledgerCtx() {
     sessionSecret: TEST_SESSION_SECRET,
     jwk,
     secureCookies: false,
+    oidcDirectory: kernel.oidc,
   });
   const http = createHostedServer({
     kernel,

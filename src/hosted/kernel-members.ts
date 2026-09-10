@@ -7,6 +7,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { MemberRole } from "../hosted-types.ts";
 import { nowIso, sha256Hex } from "../ids.ts";
 import type { InviteRecord, VaultStore } from "../store/types.ts";
+import { EmailDirectory, isLegacyPlaintextEmail } from "./email-directory.ts";
 import { inviteEmail } from "./email.ts";
 import { HttpError } from "./errors.ts";
 import type { IpWindowLimiter } from "./identity-limiter.ts";
@@ -25,6 +26,7 @@ export type MemberHost = {
   now: () => Date;
   publicUrl: string;
   planLimits: PlanLimits;
+  emails: EmailDirectory;
   /** Shared across requests; the kernel owns it so limits hold for the life of the process. */
   inviteLimiter: IpWindowLimiter;
   sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
@@ -78,9 +80,16 @@ function isExpired(invite: InviteRecord, now: Date): boolean {
   return Date.parse(invite.expiresAt) <= now.getTime();
 }
 
-async function emailOf(store: VaultStore, userId: string): Promise<string | null> {
-  const user = await store.getUser(userId);
-  return user?.email ?? null;
+async function emailOf(host: MemberHost, userId: string): Promise<string | null> {
+  const user = await host.store.getUser(userId);
+  if (!user) return null;
+  const inbox = await host.emails.revealUser(user);
+  return inbox || null;
+}
+
+async function userByInbox(host: MemberHost, email: string) {
+  const hmac = await host.emails.lookupKey(email);
+  return (await host.store.getUserByEmail(hmac)) ?? (await host.store.getUserByEmail(email));
 }
 
 /** Members plus unaccepted invites. Expired invites stay listed (flagged) until cancelled. */
@@ -89,18 +98,18 @@ export async function listTeam(host: MemberHost, orgId: string): Promise<TeamSna
   const now = host.now();
   const members: TeamMember[] = [];
   for (const m of rows) {
-    members.push({ user_id: m.userId, email: (await emailOf(host.store, m.userId)) ?? "", role: m.role, joined_at: m.joinedAt });
+    members.push({ user_id: m.userId, email: (await emailOf(host, m.userId)) ?? "", role: m.role, joined_at: m.joinedAt });
   }
   const pending: PendingInvite[] = [];
   for (const inv of invites) {
     pending.push({
       id: inv.id,
-      email: inv.email,
+      email: await host.emails.revealInvite(inv),
       role: inv.role,
       created_at: inv.createdAt,
       expires_at: inv.expiresAt,
       expired: isExpired(inv, now),
-      invited_by_email: await emailOf(host.store, inv.invitedBy),
+      invited_by_email: await emailOf(host, inv.invitedBy),
     });
   }
   return { members, invites: pending };
@@ -128,32 +137,42 @@ export async function inviteMember(
   }
   const org = await host.store.getOrg(input.orgId);
   if (!org) throw new HttpError(404, "Unknown org");
-  const existingUser = await host.store.getUserByEmail(email);
+  const existingUser = await userByInbox(host, email);
   if (existingUser && (await host.store.getMember(input.orgId, existingUser.id))) {
     throw new HttpError(409, "Already a member");
   }
   const now = host.now();
-  const open = (await host.store.listInvites(input.orgId)).find((i) => i.email === email && !isExpired(i, now));
-  if (open) throw new HttpError(409, "An invite for this email is already pending");
+  const hmac = await host.emails.lookupKey(email);
+  for (const i of await host.store.listInvites(input.orgId)) {
+    if (isExpired(i, now)) continue;
+    if (i.email === hmac || (isLegacyPlaintextEmail(i.email) && i.email === email)) {
+      throw new HttpError(409, "An invite for this email is already pending");
+    }
+  }
   assertWithinLimit("members", await seatsInUse(host, input.orgId), host.planLimits);
   const token = randomBytes(32).toString("base64url");
+  const inviteId = `inv_${randomUUID()}`;
+  const wrap = await host.emails.wrapInvite(inviteId, email);
   const row: InviteRecord = {
-    id: `inv_${randomUUID()}`,
+    id: inviteId,
     orgId: input.orgId,
-    email,
+    email: hmac,
     role: input.role,
     tokenHash: sha256Hex(token),
     invitedBy: input.actorUserId,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + INVITE_TTL_MS).toISOString(),
     acceptedAt: null,
+    emailWrappedIv: wrap.iv,
+    emailWrappedCiphertext: wrap.ciphertext,
+    emailWrappedTag: wrap.tag,
   };
   await host.store.insertInvite(row);
   await host.audit(input.orgId, "member_invited", input.actorUserId, null, null);
   const acceptUrl = acceptInviteUrl(host.publicUrl, token);
   let sent = false;
   if (host.sendEmail) {
-    const inviter = (await emailOf(host.store, input.actorUserId)) ?? "A teammate";
+    const inviter = (await emailOf(host, input.actorUserId)) ?? "A teammate";
     const mail = inviteEmail({ orgName: org.name, inviterEmail: inviter, role: input.role, acceptUrl });
     try {
       await host.sendEmail(email, mail.subject, mail.html);
@@ -165,12 +184,12 @@ export async function inviteMember(
   return {
     invite: {
       id: row.id,
-      email: row.email,
+      email,
       role: row.role,
       created_at: row.createdAt,
       expires_at: row.expiresAt,
       expired: false,
-      invited_by_email: await emailOf(host.store, input.actorUserId),
+      invited_by_email: await emailOf(host, input.actorUserId),
     },
     accept_url: acceptUrl,
     email_sent: sent,
@@ -209,7 +228,7 @@ export async function updateMemberRole(
   const row = rows.find((m) => m.userId === input.userId);
   return {
     user_id: input.userId,
-    email: (await emailOf(host.store, input.userId)) ?? "",
+    email: (await emailOf(host, input.userId)) ?? "",
     role: input.role,
     joined_at: row?.joinedAt ?? null,
   };
@@ -245,7 +264,7 @@ export async function previewInvite(host: MemberHost, token: string): Promise<In
   return {
     org_id: invite.orgId,
     org_name: org.name,
-    email: invite.email,
+    email: await host.emails.revealInvite(invite),
     role: invite.role,
     expired: isExpired(invite, host.now()),
     accepted: invite.acceptedAt !== null,
@@ -265,7 +284,10 @@ export async function acceptInvite(
   if (!org) throw new HttpError(404, "Invalid invite");
   if (invite.acceptedAt !== null) throw new HttpError(410, "This invite was already used");
   if (isExpired(invite, host.now())) throw new HttpError(410, "This invite has expired");
-  if (invite.email !== input.email.trim().toLowerCase()) {
+  const wanted = normalizeEmail(input.email);
+  const hmac = await host.emails.lookupKey(wanted);
+  const inbox = await host.emails.revealInvite(invite);
+  if (invite.email !== hmac && inbox !== wanted) {
     throw new HttpError(403, "invite_email_mismatch");
   }
   const at = nowIso(host.now());

@@ -151,6 +151,10 @@ export type UserRecord = {
   totpWrappedTag: string | null;
   totpLastStep: number | null;
   createdAt: string;
+  /** AES-GCM wrap of the inbox; null on legacy plaintext rows. */
+  emailWrappedIv?: string | null;
+  emailWrappedCiphertext?: string | null;
+  emailWrappedTag?: string | null;
 };
 
 export type EmailOtpRecord = {

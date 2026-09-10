@@ -28,6 +28,24 @@ pg_restore --no-owner --dbname="$SCRATCH_DATABASE_URL" vault.dump
 
 Confirm item ciphertext still unwraps with the plane KEK (or KMS-wrapped KEK). A dump alone is not enough to read values.
 
+## Revert an email-at-rest / OAuth-token-at-rest image
+
+If you must roll the hosted image back past HMAC email and bearer ids, restore plaintext
+**before** reverting the image. The old image cannot look up HMAC columns.
+
+```bash
+# Same KEK resolution as hosted boot (`VAULT_KEK_WRAPPED` + KMS, or raw `VAULT_KEK`).
+export DATABASE_URL=
+node --experimental-strip-types --disable-warning=ExperimentalWarning \
+  scripts/email-restore-plaintext.ts
+node --experimental-strip-types --disable-warning=ExperimentalWarning \
+  scripts/oidc-restore-plaintext.ts
+```
+
+Each script prints counts only. Never revert the image first: sign-in, invites, and OAuth
+find would miss every rebound row. After both scripts finish, revert the image, then confirm
+`users.email` and bearer `oidc_payloads.id` contain `@` or the original token shape again.
+
 ## Neon instant restore
 
 Console: project → Instant restore on the **protected** root branch. History window is `history_retention_seconds` (604800 = 7 days on Launch). Do not branch production from staging.

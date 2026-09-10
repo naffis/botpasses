@@ -42,6 +42,7 @@ async function identityServer() {
     sessionSecret: TEST_SESSION_SECRET,
     jwk,
     secureCookies: false,
+    oidcDirectory: kernel.oidc,
   });
   const http = createHostedServer({
     kernel,
@@ -159,7 +160,7 @@ test("AC-22 OTP send is uniform; sixth verify fails; sixth send is 429", async (
         body: JSON.stringify({ email: "limit@example.com" }),
       });
       assert.equal(r.status, 200);
-      const ch = await ctx.store.latestEmailOtp("limit@example.com");
+      const ch = await ctx.store.latestEmailOtp(await ctx.identity.emails.lookupKey("limit@example.com"));
       assert.ok(ch);
       await ctx.store.updateEmailOtp({ ...ch, expiresAt: new Date(Date.now() - 1000).toISOString() });
     }

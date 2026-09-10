@@ -25,6 +25,7 @@ import {
   HOSTED_SCHEMA_IDENTITY_ALTER2_PG,
   HOSTED_SCHEMA_IDENTITY_INDEXES,
   HOSTED_SCHEMA_AUDIT_HOST_ALTER_PG,
+  HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_PG,
   HOSTED_SCHEMA_LEDGER_GRANT_ALTER_PG,
   HOSTED_SCHEMA_LEDGER_GRANT_INDEXES,
   HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG,
@@ -55,6 +56,7 @@ import {
   mapMemberRecord,
   mapNeed,
   mapOidcRow,
+  mapOidcStored,
   mapOrg,
   mapOtp,
   mapPolicy,
@@ -76,7 +78,9 @@ import {
   type LegacyAadItem,
   type LegacyAadPage,
   type MemberRow,
+  type OidcPayloadIndex,
   type OidcPayloadRow,
+  type OidcStoredRow,
   type OperatorSessionRow,
   type RateHitKind,
   type SweepCounts,
@@ -172,6 +176,7 @@ export class PostgresStore implements VaultStore {
     await this.#pool.query(HOSTED_SCHEMA_LEDGER_GRANT_INDEXES);
     await this.#pool.query(HOSTED_SCHEMA_NEED_CONNECT_ALTER_PG);
     await this.#pool.query(HOSTED_SCHEMA_AUDIT_HOST_ALTER_PG);
+    await this.#pool.query(HOSTED_SCHEMA_EMAIL_AND_OIDC_AT_REST_ALTER_PG);
     console.error(JSON.stringify({ event: "schema_bootstrap", source: "schema.ts", at: new Date().toISOString() }));
   }
 
@@ -994,17 +999,23 @@ export class PostgresStore implements VaultStore {
     });
   }
 
-  async listMemberEmails(orgId: string): Promise<string[]> {
+  async listVerifiedMemberUserIds(orgId: string): Promise<string[]> {
     const r = await this.#pool.query(
-      `SELECT u.email AS email FROM org_members m JOIN users u ON u.id = m.user_id
-       WHERE m.org_id = $1 AND u.email_verified_at IS NOT NULL ORDER BY u.email`,
+      `SELECT u.id AS id FROM org_members m JOIN users u ON u.id = m.user_id
+       WHERE m.org_id = $1 AND u.email_verified_at IS NOT NULL ORDER BY u.id`,
       [orgId],
     );
-    return r.rows.map((row) => String(asRecord(row).email));
+    return r.rows.map((row) => String(asRecord(row).id));
   }
 
-  async upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void> {
-    const idx = oidcPayloadIndex(row.payload);
+  async upsertOidcPayload(row: {
+    id: string;
+    kind: string;
+    payload: string;
+    expiresAt: string | null;
+    index?: OidcPayloadIndex;
+  }): Promise<void> {
+    const idx = row.index ?? oidcPayloadIndex(row.payload);
     await this.#pool.query(
       `INSERT INTO oidc_payloads (id, kind, payload, expires_at, uid, user_code, grant_id, client_id, account_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -1015,13 +1026,17 @@ export class PostgresStore implements VaultStore {
     );
   }
 
-  async getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined> {
+  async getOidcPayload(
+    id: string,
+    kind: string,
+  ): Promise<{ payload: string; expiresAt: string | null; consumedAt: number | null } | undefined> {
     const r = await this.#pool.query("SELECT * FROM oidc_payloads WHERE id = $1 AND kind = $2", [id, kind]);
     if (!r.rows[0]) return undefined;
     const rec = asRecord(r.rows[0]);
     return {
       payload: String(rec.payload),
       expiresAt: rec.expires_at == null ? null : String(rec.expires_at),
+      consumedAt: rec.consumed_at == null ? null : Number(rec.consumed_at),
     };
   }
 
@@ -1037,13 +1052,49 @@ export class PostgresStore implements VaultStore {
     });
   }
 
+  async listAllOidcPayloads(): Promise<OidcStoredRow[]> {
+    const r = await this.#pool.query("SELECT * FROM oidc_payloads");
+    return r.rows.map((row) => mapOidcStored(asRecord(row)));
+  }
+
+  async replaceOidcPayloadId(
+    kind: string,
+    oldId: string,
+    next: { id: string; payload: string; expiresAt: string | null; index?: OidcPayloadIndex },
+  ): Promise<void> {
+    const existing = await this.getOidcPayload(next.id, kind);
+    if (existing) {
+      await this.deleteOidcPayload(oldId, kind);
+      return;
+    }
+    const idx = next.index ?? oidcPayloadIndex(next.payload);
+    await this.#pool.query(
+      `UPDATE oidc_payloads SET id = $1, payload = $2, expires_at = $3, uid = $4, user_code = $5,
+         grant_id = $6, client_id = $7, account_id = $8 WHERE id = $9 AND kind = $10`,
+      [
+        next.id,
+        next.payload,
+        next.expiresAt,
+        idx.uid,
+        idx.userCode,
+        idx.grantId,
+        idx.clientId,
+        idx.accountId,
+        oldId,
+        kind,
+      ],
+    );
+  }
+
   async insertUser(row: UserRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO users (id, email, email_verified_at, totp_wrapped_iv, totp_wrapped_ciphertext, totp_wrapped_tag, totp_last_step, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO users (id, email, email_verified_at, totp_wrapped_iv, totp_wrapped_ciphertext, totp_wrapped_tag, totp_last_step, created_at,
+         email_wrapped_iv, email_wrapped_ciphertext, email_wrapped_tag)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         row.id, row.email, row.emailVerifiedAt, row.totpWrappedIv, row.totpWrappedCiphertext,
         row.totpWrappedTag, row.totpLastStep, row.createdAt,
+        row.emailWrappedIv ?? null, row.emailWrappedCiphertext ?? null, row.emailWrappedTag ?? null,
       ],
     );
   }
@@ -1060,9 +1111,14 @@ export class PostgresStore implements VaultStore {
 
   async updateUser(row: UserRecord): Promise<void> {
     await this.#pool.query(
-      `UPDATE users SET email_verified_at=$1, totp_wrapped_iv=$2, totp_wrapped_ciphertext=$3,
-       totp_wrapped_tag=$4, totp_last_step=$5 WHERE id=$6`,
-      [row.emailVerifiedAt, row.totpWrappedIv, row.totpWrappedCiphertext, row.totpWrappedTag, row.totpLastStep, row.id],
+      `UPDATE users SET email=$1, email_verified_at=$2, totp_wrapped_iv=$3, totp_wrapped_ciphertext=$4,
+       totp_wrapped_tag=$5, totp_last_step=$6, email_wrapped_iv=$7, email_wrapped_ciphertext=$8,
+       email_wrapped_tag=$9 WHERE id=$10`,
+      [
+        row.email, row.emailVerifiedAt, row.totpWrappedIv, row.totpWrappedCiphertext, row.totpWrappedTag,
+        row.totpLastStep, row.emailWrappedIv ?? null, row.emailWrappedCiphertext ?? null,
+        row.emailWrappedTag ?? null, row.id,
+      ],
     );
   }
 
@@ -1236,6 +1292,26 @@ export class PostgresStore implements VaultStore {
     return r.rows.map((row) => mapUser(asRecord(row)));
   }
 
+  async listUsersWithLegacyEmail(): Promise<UserRow[]> {
+    const r = await this.#pool.query("SELECT * FROM users WHERE email LIKE '%@%'");
+    return r.rows.map((row) => mapUser(asRecord(row)));
+  }
+
+  async listInvitesWithLegacyEmail(): Promise<InviteRecord[]> {
+    const r = await this.#pool.query("SELECT * FROM org_invites WHERE email LIKE '%@%'");
+    return r.rows.map((row) => mapInvite(asRecord(row)));
+  }
+
+  async listAllUsers(): Promise<UserRow[]> {
+    const r = await this.#pool.query("SELECT * FROM users");
+    return r.rows.map((row) => mapUser(asRecord(row)));
+  }
+
+  async listAllInvites(): Promise<InviteRecord[]> {
+    const r = await this.#pool.query("SELECT * FROM org_invites");
+    return r.rows.map((row) => mapInvite(asRecord(row)));
+  }
+
   async deleteUnusedBackupCodes(userId: string): Promise<void> {
     await this.#pool.query("DELETE FROM backup_codes WHERE user_id = $1 AND used_at IS NULL", [userId]);
   }
@@ -1393,8 +1469,8 @@ export class PostgresStore implements VaultStore {
 
   async consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean> {
     const r = await this.#pool.query(
-      `UPDATE oidc_payloads SET payload = jsonb_set(payload::jsonb, '{consumed}', to_jsonb($3::bigint))::text
-       WHERE id = $1 AND kind = $2 AND (payload::jsonb ->> 'consumed') IS NULL`,
+      `UPDATE oidc_payloads SET consumed_at = $3
+       WHERE id = $1 AND kind = $2 AND consumed_at IS NULL`,
       [id, kind, consumedAt],
     );
     return r.rowCount === 1;
@@ -1424,9 +1500,29 @@ export class PostgresStore implements VaultStore {
 
   async insertInvite(row: InviteRecord): Promise<void> {
     await this.#pool.query(
-      `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [row.id, row.orgId, row.email, row.role, row.tokenHash, row.invitedBy, row.createdAt, row.expiresAt, row.acceptedAt],
+      `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by, created_at, expires_at, accepted_at,
+         email_wrapped_iv, email_wrapped_ciphertext, email_wrapped_tag)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        row.id, row.orgId, row.email, row.role, row.tokenHash, row.invitedBy, row.createdAt, row.expiresAt,
+        row.acceptedAt, row.emailWrappedIv ?? null, row.emailWrappedCiphertext ?? null, row.emailWrappedTag ?? null,
+      ],
+    );
+  }
+
+  async updateInviteEmail(
+    id: string,
+    patch: {
+      email: string;
+      emailWrappedIv: string;
+      emailWrappedCiphertext: string;
+      emailWrappedTag: string;
+    },
+  ): Promise<void> {
+    await this.#pool.query(
+      `UPDATE org_invites SET email = $1, email_wrapped_iv = $2, email_wrapped_ciphertext = $3,
+         email_wrapped_tag = $4 WHERE id = $5`,
+      [patch.email, patch.emailWrappedIv, patch.emailWrappedCiphertext, patch.emailWrappedTag, id],
     );
   }
 

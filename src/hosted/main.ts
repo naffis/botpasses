@@ -22,6 +22,7 @@ import { hostedAuthResolver } from "./auth.ts";
 import { OperatorIdentity } from "./operator-identity.ts";
 import { identityAuthResolver } from "./identity.ts";
 import { createOauthProvider } from "./oauth-as.ts";
+import { rebindLegacyEmails } from "./email-directory.ts";
 
 export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   // Refuses an unset VAULT_MODE first: every other guard below is keyed on hosted mode.
@@ -107,6 +108,7 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
         jwk,
         previousJwk,
         secureCookies: true,
+        oidcDirectory: kernel.oidc,
       })
     : undefined;
   // Only real identity here: `VAULT_AUTH_MODE=test` is refused by hostedBootError, and the
@@ -136,6 +138,8 @@ export async function startHosted(env: NodeJS.ProcessEnv = process.env): Promise
     http,
     store,
     rebind: (opts) => kernel.rebindLegacyItems(opts),
+    emailRebind: (shouldStop) => rebindLegacyEmails(store, kernel.emails, shouldStop),
+    oidcRebind: (shouldStop) => kernel.oidc.rebind(shouldStop),
     log: logVaultEvent,
     onListening: (addr) => {
       logVaultEvent("hosted_listening", {
@@ -158,6 +162,10 @@ export type ServeHostedDeps = {
   store: { close(): Promise<void> } & SweepStore;
   /** `HostedKernel.rebindLegacyItems`: the batched legacy AAD rebind. */
   rebind: (opts: RebindOptions) => Promise<RebindResult>;
+  /** After listen: wrap leftover plaintext inboxes. Failures do not gate `/ready`. */
+  emailRebind?: (shouldStop: () => boolean) => Promise<{ users: number; invites: number }>;
+  /** After listen: HMAC bearer ids and wrap leftover plaintext oidc rows. */
+  oidcRebind?: (shouldStop: () => boolean) => Promise<{ rebound: number }>;
   log: (event: string, fields: Record<string, unknown>) => void;
   onListening: (addr: { host: string; port: number }) => void;
   /** Runs after the store is closed (zero the KEK). */
@@ -216,7 +224,15 @@ export async function serveHosted(deps: ServeHostedDeps): Promise<void> {
   proc.on("SIGINT", () => onSignal("SIGINT"));
   proc.on("SIGTERM", () => onSignal("SIGTERM"));
 
-  rebindDone = runBootRebind(deps.rebind, deps.log, () => stopping);
+  rebindDone = (async () => {
+    await runBootRebind(deps.rebind, deps.log, () => stopping);
+    if (deps.emailRebind) {
+      await runCountRebind("email_rebind", deps.emailRebind, deps.log, () => stopping);
+    }
+    if (deps.oidcRebind) {
+      await runCountRebind("oidc_rebind", deps.oidcRebind, deps.log, () => stopping);
+    }
+  })();
   await rebindDone;
   if (!stopping) await sweeps.runOnce();
   await shutdown.done;
@@ -237,6 +253,21 @@ async function runBootRebind(
     log("aad_rebind", { ...result, ms: Date.now() - startedAt });
   } catch (err) {
     log("aad_rebind_failed", { message: err instanceof Error ? err.message : String(err), ms: Date.now() - startedAt });
+  }
+}
+
+async function runCountRebind(
+  event: "email_rebind" | "oidc_rebind",
+  run: (shouldStop: () => boolean) => Promise<Record<string, number>>,
+  log: ServeHostedDeps["log"],
+  shouldStop: () => boolean,
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const result = await run(shouldStop);
+    log(event, { ...result, ms: Date.now() - startedAt });
+  } catch (err) {
+    log(`${event}_failed`, { message: err instanceof Error ? err.message : String(err), ms: Date.now() - startedAt });
   }
 }
 

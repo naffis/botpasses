@@ -5,6 +5,7 @@ import type { VaultEnvName } from "../hosted-types.ts";
 import type { HostedKernel } from "./kernel.ts";
 import type { OidcPrivateJwk } from "./boot.ts";
 import { createStoreAdapter } from "./oidc-adapter.ts";
+import type { OidcDirectory } from "./oidc-directory.ts";
 import { hashToken } from "./operator-identity.ts";
 import { IpWindowLimiter, requestClientIp } from "./identity-limiter.ts";
 import { HttpError } from "./errors.ts";
@@ -63,6 +64,8 @@ export type OauthAsOpts = {
   fetchImpl?: PinnedFetch;
   /** Rate and concurrency gate for outbound metadata fetches. Defaults to one shared per process. */
   cimdGate?: CimdGate;
+  /** Required. Bearer ids are HMAC'd and payloads wrapped; no plaintext adapter fallback. */
+  oidcDirectory: OidcDirectory;
 };
 
 /** Per-provider state that request handlers outside this module need (consent page, logout). */
@@ -195,7 +198,7 @@ export function createOauthProvider(opts: OauthAsOpts): Provider {
   const issuer = opts.issuer.replace(/\/$/, "");
   const audience = mcpAud(issuer);
   const environment = opts.deployPlane ?? opts.kernel.deployPlane;
-  const Adapter = createStoreAdapter(opts.kernel.store);
+  const Adapter = createStoreAdapter(opts.kernel.store, opts.oidcDirectory);
   const keySet: OidcKeySet = { current: opts.jwk, previous: opts.previousJwk };
   const currentKid = oidcKid(opts.jwk);
   if (opts.previousJwk && oidcKid(opts.previousJwk) === currentKid) {

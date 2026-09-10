@@ -55,6 +55,10 @@ test("listMigrations returns NNN_*.sql in order with unique versions", () => {
   const files = listMigrations(migrationsDir);
   assert.ok(files.length >= 5);
   assert.equal(files[0]?.version, "001_init");
+  assert.ok(
+    files.some((f) => f.version === "015_email_and_oidc_at_rest"),
+    "015_email_and_oidc_at_rest is listed",
+  );
   const versions = files.map((f) => f.version.slice(0, 3));
   assert.deepEqual(versions, [...versions].sort());
   assert.equal(new Set(versions).size, versions.length);

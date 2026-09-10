@@ -25,6 +25,7 @@ import {
   type VaultEnvName,
 } from "../hosted-types.ts";
 import type { VaultStore } from "../store/types.ts";
+import type { EmailDirectory } from "./email-directory.ts";
 import { HttpError, InjectDeniedError, ScopeDeniedError, type NeedItemError } from "./errors.ts";
 import {
   ensureMagicChallenge,
@@ -80,6 +81,7 @@ export type GrantHost = {
   approvalHmac: Buffer | undefined;
   sendEmail: ((to: string, subject: string, html: string) => Promise<void>) | undefined;
   limiter: OrgRateLimiter;
+  emails: EmailDirectory;
   envFor: (orgId: string, name: VaultEnvName) => Promise<EnvironmentRecord>;
   clientInOrg: (orgId: string, clientId: string) => Promise<ClientRecord>;
   needItemError: (input: {

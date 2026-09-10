@@ -357,7 +357,7 @@ test("POST /api/session/org pins a member org on the cookie session and rejects 
     const first = (await me.json()) as { orgs: { org_id: string; active: boolean }[] };
     assert.equal(first.orgs.length, 1);
     assert.equal(first.orgs[0]?.active, true);
-    const user = await ctx.store.getUserByEmail("switch@example.com");
+    const user = await ctx.identity.userByEmail("switch@example.com");
     assert.ok(user);
     const second = await ctx.kernel.createOrg("second", user.id);
     const foreign = await ctx.kernel.createOrg("foreign", "user_someone_else");

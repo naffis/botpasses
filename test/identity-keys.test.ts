@@ -58,6 +58,8 @@ test("S9: KEK rotation re-wraps the identity DEK and the authenticator step stil
     const verified = await verifyStep(ctx, email, secret);
     await expectStatus(verified, 200);
     assert.equal((await api(ctx, "/api/items?environment=staging", { jar: cookieJar(verified) })).status, 200);
+    const me = await api(ctx, "/api/auth/me", { jar: cookieJar(verified) });
+    assert.equal((await me.json() as { email?: string }).email, email);
 
     // Idempotent: a second rotation with the same pair is a no-op.
     await ctx.identity.rotateKek(kekA, kekB);
@@ -140,7 +142,7 @@ test("D16: an in-flight enrollment started on one process can be confirmed on an
     const start = await api(ctx, "/api/auth/totp/start", { jar: pending.jar, csrf: true, body: {} });
     assert.equal(start.status, 200);
     const secret = new URL(((await start.json()) as { otpauth_url: string }).otpauth_url).searchParams.get("secret")!;
-    const user = await ctx.store.getUserByEmail("restart@example.com");
+    const user = await ctx.identity.userByEmail("restart@example.com");
     assert.ok(user?.totpPendingWrappedIv, "pending secret is in the store, not in memory");
     const other = new OperatorIdentity({
       store: ctx.store,

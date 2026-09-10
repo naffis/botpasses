@@ -8,11 +8,13 @@ import {
 } from "node:crypto";
 import type { EmailOtpRecord, UserRecord } from "../hosted-types.ts";
 import { sha256Hex } from "../ids.ts";
+import { isUniqueViolation } from "../store/conflict.ts";
 import type { OperatorSessionRow, UserRow, VaultStore } from "../store/types.ts";
 import { HttpError } from "./errors.ts";
 import type { EmailSender } from "./email.ts";
 import { buildOtpEmail } from "./otp-email.ts";
 import { otpauthQrSvg } from "./totp-qr.ts";
+import { EmailDirectory, isLegacyPlaintextEmail, persistUserEmail } from "./email-directory.ts";
 import { IdentityKeyring } from "./identity-keys.ts";
 import { logAuthEvent } from "./observe.ts";
 import { IpWindowLimiter } from "./identity-limiter.ts";
@@ -198,6 +200,7 @@ export class OperatorIdentity {
   readonly now: () => Date;
   readonly ipLimiter = new IpWindowLimiter();
   readonly keys: IdentityKeyring;
+  readonly emails: EmailDirectory;
   #dummyOtpHash: Promise<string> | undefined;
 
   constructor(opts: IdentityOpts) {
@@ -206,6 +209,40 @@ export class OperatorIdentity {
     this.sendEmail = opts.sendEmail;
     this.now = opts.now ?? (() => new Date());
     this.keys = new IdentityKeyring(opts.store, opts.kek, this.now, opts.previousKek);
+    this.emails = new EmailDirectory(this.keys);
+  }
+
+  async #hydrate(user: UserRow): Promise<UserRow> {
+    return { ...user, email: await this.emails.revealUser(user) };
+  }
+
+  async userByEmail(emailRaw: string): Promise<UserRow | undefined> {
+    return this.#lookupUser(normalizeEmail(emailRaw));
+  }
+
+  async #lookupUser(normalized: string): Promise<UserRow | undefined> {
+    const hmac = await this.emails.lookupKey(normalized);
+    const hashed = await this.store.getUserByEmail(hmac);
+    if (hashed) return this.#hydrate(hashed);
+    const legacy = await this.store.getUserByEmail(normalized);
+    if (legacy && isLegacyPlaintextEmail(legacy.email)) {
+      await persistUserEmail(this.store, this.emails, legacy, normalized);
+      const again = await this.store.getUser(legacy.id);
+      return again ? this.#hydrate(again) : undefined;
+    }
+    return undefined;
+  }
+
+  async #otpRow(normalized: string): Promise<EmailOtpRecord | undefined> {
+    const hmac = await this.emails.lookupKey(normalized);
+    return (await this.store.latestEmailOtp(hmac)) ?? (await this.store.latestEmailOtp(normalized));
+  }
+
+  async #otpCountSince(normalized: string, since: string): Promise<number> {
+    const hmac = await this.emails.lookupKey(normalized);
+    const hashed = await this.store.countEmailOtpSince(hmac, since);
+    if (hmac === normalized) return hashed;
+    return hashed + (await this.store.countEmailOtpSince(normalized, since));
   }
 
   /**
@@ -221,7 +258,7 @@ export class OperatorIdentity {
       throw new HttpError(429, "Too many requests");
     }
     const since = new Date(nowMs - OTP_EMAIL_WINDOW_MS).toISOString();
-    const sent = await this.store.countEmailOtpSince(email, since);
+    const sent = await this.#otpCountSince(email, since);
     if (sent >= OTP_EMAIL_MAX) throw new HttpError(429, "Too many requests");
     const code = mintOtp();
     const mail = buildOtpEmail(code, OTP_TTL_MS / 60_000);
@@ -233,13 +270,13 @@ export class OperatorIdentity {
         throw new HttpError(503, "Email delivery failed");
       }
     }
-    const previous = await this.store.latestEmailOtp(email);
+    const previous = await this.#otpRow(email);
     if (previous && Date.parse(previous.expiresAt) > nowMs) {
       await this.store.updateEmailOtp({ ...previous, expiresAt: now.toISOString() });
     }
     const row: EmailOtpRecord = {
       id: `otp_${randomUUID()}`,
-      email,
+      email: await this.emails.lookupKey(email),
       codeScrypt,
       expiresAt: new Date(nowMs + OTP_TTL_MS).toISOString(),
       attempts: 0,
@@ -252,7 +289,7 @@ export class OperatorIdentity {
 
   /** Test-only: peek latest OTP by verifying a supplied code against the store hash. */
   async debugOtpMatches(email: string, code: string): Promise<boolean> {
-    const ch = await this.store.latestEmailOtp(normalizeEmail(email));
+    const ch = await this.#otpRow(normalizeEmail(email));
     if (!ch) return false;
     return scryptVerify(code, ch.codeScrypt);
   }
@@ -276,7 +313,7 @@ export class OperatorIdentity {
     if (!this.ipLimiter.allow(`verify-ip:${ip}`, OTP_VERIFY_IP_MAX, OTP_EMAIL_WINDOW_MS, nowMs)) {
       throw new HttpError(429, "Too many requests");
     }
-    const ch = await this.store.latestEmailOtp(email);
+    const ch = await this.#otpRow(email);
     const attempts = ch ? await this.store.claimOtpAttempt(ch.id, now.toISOString(), OTP_MAX_ATTEMPTS) : undefined;
     if (!ch || attempts === undefined) {
       await scryptVerify(otp.trim(), await this.#dummyOtp());
@@ -297,24 +334,38 @@ export class OperatorIdentity {
     }
     await this.store.updateEmailOtp({ ...ch, attempts, expiresAt: now.toISOString() });
     logAuthEvent("otp_verified", { email });
-    let user = await this.store.getUserByEmail(email);
+    let user = await this.#lookupUser(email);
     if (!user) {
+      const id = `usr_${randomUUID()}`;
+      const hmac = await this.emails.lookupKey(email);
+      const wrap = await this.emails.wrapUser(id, email);
       const fresh: UserRecord = {
-        id: `usr_${randomUUID()}`,
-        email,
+        id,
+        email: hmac,
         emailVerifiedAt: now.toISOString(),
         totpWrappedIv: null,
         totpWrappedCiphertext: null,
         totpWrappedTag: null,
         totpLastStep: null,
         createdAt: now.toISOString(),
+        emailWrappedIv: wrap.iv,
+        emailWrappedCiphertext: wrap.ciphertext,
+        emailWrappedTag: wrap.tag,
       };
-      await this.store.insertUser(fresh);
-      user = await this.store.getUser(fresh.id);
+      try {
+        await this.store.insertUser(fresh);
+        user = await this.store.getUser(fresh.id);
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        user = await this.#lookupUser(email);
+      }
       if (!user) throw new HttpError(500, "User missing after insert");
     } else if (!user.emailVerifiedAt) {
-      user = { ...user, emailVerifiedAt: now.toISOString() };
-      await this.store.updateUser(user);
+      const stored = await this.store.getUser(user.id);
+      if (stored) {
+        await this.store.updateUser({ ...stored, emailVerifiedAt: now.toISOString() });
+        user = { ...user, emailVerifiedAt: now.toISOString() };
+      }
     }
     return this.#issueSession(user, cookies, null);
   }
@@ -345,7 +396,7 @@ export class OperatorIdentity {
       totpPendingWrappedTag: wrapped.tag,
       totpPendingAt: this.now().toISOString(),
     });
-    const otpauth_url = otpauthUrl(secret, user.email);
+    const otpauth_url = otpauthUrl(secret, (await this.#hydrate(user)).email);
     return { otpauth_url, qr_svg: otpauthQrSvg(otpauth_url) };
   }
 
@@ -420,7 +471,7 @@ export class OperatorIdentity {
     if (!user) throw new HttpError(404, "Unknown user");
     const codes = await this.store.listBackupCodes(user.id);
     return {
-      email: user.email,
+      email: (await this.#hydrate(user)).email,
       totp_enabled: totpEnabled(user),
       backup_codes_remaining: codes.filter((c) => c.usedAt === null).length,
       created_at: user.createdAt,
@@ -462,7 +513,11 @@ export class OperatorIdentity {
     const lastSeen = this.now().toISOString();
     const idleExp = new Date(now + SESSION_IDLE_MS).toISOString();
     await this.store.touchSession(session.idHash, lastSeen, idleExp);
-    return { user, session: { ...session, lastSeenAt: lastSeen, expiresAt: idleExp }, token };
+    return {
+      user: await this.#hydrate(user),
+      session: { ...session, lastSeenAt: lastSeen, expiresAt: idleExp },
+      token,
+    };
   }
 
   /**
@@ -510,7 +565,8 @@ export class OperatorIdentity {
       mfaAt,
     };
     await this.store.insertSession(row);
-    return { cookies: this.sessionCookies(token, cookies), user, sessionToken: token };
+    const shown = user.email.includes("@") ? user : await this.#hydrate(user);
+    return { cookies: this.sessionCookies(token, cookies), user: shown, sessionToken: token };
   }
 
   /** Swap `currentHash` for a fresh MFA-passed session and drop the user's other pre-MFA sessions. */

@@ -193,10 +193,20 @@ test("user connect helpers are provider-generic", () => {
   const stripeUrl = new URL(authorizeUrl(stripe, { clientId: "ca_x", redirectUri: "https://x/cb", state: "s", codeVerifier: "v" }));
   assert.equal(stripeUrl.searchParams.get("code_challenge"), null, "no PKCE for providers that do not support it");
   assert.equal(stripeUrl.searchParams.get("scope"), "read_write");
-  assert.equal(chooseRedirect(google, "https://botpasses.com"), "https://botpasses.com/integrations/google/callback");
+  assert.equal(chooseRedirect(google, "https://botpasses.com"), "https://botpasses.com/connect/callback");
+  assert.equal(chooseRedirect(spotify, "https://botpasses.com"), "https://botpasses.com/connect/callback");
+  assert.equal(
+    chooseRedirect(google, "https://botpasses.com"),
+    chooseRedirect(spotify, "https://botpasses.com"),
+    "hosted connect uses one callback for every provider",
+  );
   assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8888/callback");
-  assert.equal(chooseRedirect(spotify, "https://botpasses.com"), "https://botpasses.com/integrations/spotify/callback");
-  assert.equal(chooseRedirect(spotify, "https://staging.botpasses.com"), "https://staging.botpasses.com/integrations/spotify/callback");
+  assert.equal(chooseRedirect(spotify, "https://staging.botpasses.com"), "https://staging.botpasses.com/connect/callback");
+  assert.equal(
+    chooseRedirect(spotify, "https://botpasses.com", "https://botpasses.com/integrations/spotify/callback"),
+    "https://botpasses.com/integrations/spotify/callback",
+    "a previously registered per-provider callback remains a valid landing place",
+  );
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "https://evil.example/cb"), /redirect_uri/);
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "http://127.0.0.1:8888/callback"), /redirect_uri/, "the dev loopback callback is not a landing place for a hosted deployment");
   assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788", "http://127.0.0.1:8888/callback"), "http://127.0.0.1:8888/callback");
@@ -357,6 +367,14 @@ async function callback(ctx: Ctx, providerId: string, query: Record<string, stri
   return { status: res.status, location: res.headers.get("location") ?? "" };
 }
 
+async function callbackCanonical(ctx: Ctx, query: Record<string, string>) {
+  const res = await fetch(`${ctx.base}/connect/callback?${new URLSearchParams(query)}`, {
+    headers: ctx.op,
+    redirect: "manual",
+  });
+  return { status: res.status, location: res.headers.get("location") ?? "" };
+}
+
 /** Token endpoint that accepts the code exchange for one provider and hands back a refresh token. */
 function codeExchangeHandler(tokenUrl: string, wantVerifier: boolean) {
   return async (url: string, init?: RequestInit) => {
@@ -385,7 +403,7 @@ test("user connect over HTTP: start returns the provider authorize URL; the call
     assert.equal(started.json.provider, "spotify");
     assert.doesNotMatch(JSON.stringify(started.json), new RegExp(CLIENT_SECRET));
 
-    const done = await callback(ctx, "spotify", { code: "c0de", state: started.state });
+    const done = await callbackCanonical(ctx, { code: "c0de", state: started.state });
     assert.equal(done.status, 302);
     assert.equal(done.location, "/console#vault?connected=spotify");
     const items = await ctx.kernel.listItems(ctx.orgId, "staging");
@@ -431,6 +449,10 @@ test("user connect over HTTP: start returns the provider authorize URL; the call
     assert.equal(nope.res.status, 404);
     const denied = await callback(ctx, "spotify", { error: "access_denied", state: "x" });
     assert.equal(denied.location, "/console#vault?connect_error=spotify&reason=provider_denied");
+    const deniedCanonical = await callbackCanonical(ctx, { error: "access_denied", state: other.state });
+    assert.equal(deniedCanonical.location, "/console#vault?connect_error=spotify&reason=provider_denied", "canonical callback reads the provider from sealed state");
+    const deniedBare = await callbackCanonical(ctx, { error: "access_denied" });
+    assert.equal(deniedBare.location, "/console#vault?connect_error=account&reason=provider_denied");
     const noCode = await callback(ctx, "spotify", { state: "x" });
     assert.equal(noCode.location, "/console#vault", "a bare visit without code or state is not an error");
   } finally {

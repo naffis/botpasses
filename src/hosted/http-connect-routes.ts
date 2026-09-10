@@ -1,15 +1,16 @@
 /**
- * `GET /integrations/:provider/callback`: the provider sends the operator's browser back here
- * with `code` and `state`. Runs before the JSON API (no CSRF header on a top-level navigation);
- * the sealed state is the forgery defence. `spotify` is one value of `:provider`.
+ * `GET /connect/callback` (and the expand-only `/integrations/:provider/callback` alias): the
+ * provider sends the operator's browser back here with `code` and `state`. Runs before the JSON
+ * API (no CSRF header on a top-level navigation); the sealed state is the forgery defence.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Principal } from "./auth.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { connectErrorReason, type ConnectErrorReason } from "./kernel-connect.ts";
+import { HOSTED_CONNECT_CALLBACK_PATH } from "./providers/connect-redirect.ts";
 
-const CONNECT_CALLBACK_RE = /^\/integrations\/([a-z0-9_-]+)\/callback$/;
+const LEGACY_CALLBACK_RE = /^\/integrations\/([a-z0-9_-]+)\/callback$/;
 
 function redirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { location });
@@ -31,18 +32,20 @@ export async function handleConnectCallback(
   kernel: HostedKernel,
   fetchImpl: ConnectorFetch | undefined,
 ): Promise<boolean> {
-  const match = CONNECT_CALLBACK_RE.exec(path);
-  if (method !== "GET" || !match) return false;
-  const providerId = match[1] ?? "";
+  const legacy = LEGACY_CALLBACK_RE.exec(path);
+  const canonical = path === HOSTED_CONNECT_CALLBACK_PATH;
+  if (method !== "GET" || (!legacy && !canonical)) return false;
+  const pathProvider = legacy?.[1];
   if (!principal || principal.channel !== "operator" || principal.ready === false) {
     redirect(res, "/sign-in");
     return true;
   }
   const code = url.searchParams.get("code") ?? "";
   const state = url.searchParams.get("state") ?? "";
+  const flashProvider = pathProvider || kernel.providerIdFromConnectState(state) || "account";
   if (url.searchParams.get("error")) {
     // The provider said no (the operator cancelled, or the app is misconfigured there).
-    redirect(res, connectErrorLocation(providerId, "provider_denied"));
+    redirect(res, connectErrorLocation(flashProvider, "provider_denied"));
     return true;
   }
   if (!code || !state) {
@@ -51,7 +54,7 @@ export async function handleConnectCallback(
   }
   try {
     const done = await kernel.finishProviderUserOauth({
-      providerId,
+      ...(pathProvider ? { providerId: pathProvider } : {}),
       orgId: principal.orgId,
       userId: principal.userId,
       state,
@@ -60,9 +63,9 @@ export async function handleConnectCallback(
     });
     // `agent` tells the console the named agent can retry its call now (it holds the policy).
     const agent = done.agent_client_id ? `&agent=${encodeURIComponent(done.agent_client_id)}` : "";
-    redirect(res, `/console#vault?connected=${encodeURIComponent(providerId)}${agent}`);
+    redirect(res, `/console#vault?connected=${encodeURIComponent(done.provider)}${agent}`);
   } catch (err) {
-    redirect(res, connectErrorLocation(providerId, connectErrorReason(err)));
+    redirect(res, connectErrorLocation(flashProvider, connectErrorReason(err)));
   }
   return true;
 }

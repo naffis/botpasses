@@ -26,7 +26,7 @@ import {
   setHidden,
   text,
 } from "./shared.ts";
-import { bindStoreForm, readStoreValues, setField, storeValidationError, syncStoreFields } from "./store-form.ts";
+import { bindStoreForm, fillConnectRedirectUri, readStoreValues, setField, storeValidationError, syncStoreFields } from "./store-form.ts";
 import { bindOrgSwitcher, bindTeam, isTeamRoute, loadOrgs, loadTeam, TEAM_COPY } from "./team.ts";
 import type { ItemRow } from "./types.ts";
 
@@ -36,6 +36,9 @@ const STORE_IDS = {
   valueLabel: "store-value-label",
   injectSummary: "store-inject-summary",
   kindHint: "store-kind-hint",
+  redirectRow: "store-redirect",
+  redirectUri: "store-redirect-uri",
+  redirectCopy: "store-redirect-copy",
 };
 
 let current: Route = parseRoute("");
@@ -386,11 +389,16 @@ async function openConnect(item: ItemRow, provider: Provider, opts: { agentId?: 
   if (allow) allow.checked = Boolean(opts.agentId);
   setHidden("connect-agent-row", !opts.agentId);
   if (opts.agentId) text(byId("connect-agent-label"), `Also allow ${await agentLabel(opts.agentId)} to use the connected account`);
+  fillConnectRedirectUri("connect-redirect-uri");
   openDialog("connect-dialog");
   byId<HTMLInputElement>("connect-client-id")?.focus();
 }
 
 function bindConnect(): void {
+  byId("connect-redirect-copy")?.addEventListener("click", () => {
+    const uri = byId("connect-redirect-uri")?.textContent ?? "";
+    copyText(uri, "Redirect URI copied");
+  });
   const form = byId<HTMLFormElement>("connect-provider");
   form?.addEventListener("submit", (e) => {
     e.preventDefault();

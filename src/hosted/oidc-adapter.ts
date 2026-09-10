@@ -1,5 +1,7 @@
 import { errors as oidcErrors } from "oidc-provider";
 import type { OidcPayloadRow, VaultStore } from "../store/types.ts";
+import { hashesOidcId } from "./oidc-directory.ts";
+import type { OidcDirectory } from "./oidc-directory.ts";
 import { orgFromGrantResources } from "./oauth-clients.ts";
 
 type Payload = Record<string, unknown>;
@@ -47,6 +49,7 @@ function grantOrg(payload: Payload): string | undefined {
  */
 export async function destroyOidcPayloadsForClient(
   store: VaultStore,
+  directory: OidcDirectory,
   client: {
     id: string;
     oauthClientId: string | null;
@@ -63,7 +66,8 @@ export async function destroyOidcPayloadsForClient(
     if (client.consentedByUserId) members.add(client.consentedByUserId);
     const grants = await store.listOidcPayloadsForClient("Grant", ids);
     for (const row of grants) {
-      const payload = parsePayload(row.payload);
+      const opened = await directory.unwrap("Grant", row.id, row.payload);
+      const payload = opened?.body ?? parsePayload(row.payload);
       const org = grantOrg(payload);
       const account = typeof payload.accountId === "string" ? payload.accountId : undefined;
       const owned = org ? org === scope.orgId : account !== undefined && members.has(account);
@@ -103,11 +107,11 @@ function epochSeconds(): number {
 
 /**
  * oidc-provider adapter backed by `oidc_payloads`.
- * Secondary lookups (uid, user code, grant id) hit indexed columns the store derives
- * from the payload on upsert. JWT access tokens are not stored here; revoke them via
- * clients.revoked_at + the jti denylist.
+ * Bearer kinds store HMAC ids and wrap `{ id, body }`. Grant id stays plaintext.
+ * Secondary lookups (uid, user code, grant id) hit indexed columns the adapter
+ * computes from plaintext before wrap.
  */
-export function createStoreAdapter(store: VaultStore) {
+export function createStoreAdapter(store: VaultStore, directory: OidcDirectory) {
   return class StoreAdapter {
     readonly #kind: string;
     constructor(kind: string) {
@@ -117,32 +121,50 @@ export function createStoreAdapter(store: VaultStore) {
     async upsert(id: string, payload: Payload, expiresIn?: number): Promise<void> {
       const expiresAt =
         typeof expiresIn === "number" ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+      const packed = await directory.wrap(this.#kind, id, payload);
+      const index = await directory.indexFromPlaintext(payload);
       await store.upsertOidcPayload({
-        id,
+        id: packed.storedId,
         kind: this.#kind,
-        payload: JSON.stringify(payload),
+        payload: packed.payload,
         expiresAt,
+        index,
       });
     }
 
     async find(id: string): Promise<Payload | undefined> {
-      const row = await store.getOidcPayload(id, this.#kind);
+      const storedId = await directory.storedId(this.#kind, id);
+      let row = await store.getOidcPayload(storedId, this.#kind);
+      let rowId = storedId;
+      if (!row && hashesOidcId(this.#kind)) {
+        row = await store.getOidcPayload(id, this.#kind);
+        rowId = id;
+      }
       if (!row) return undefined;
-      return this.#live({ id, ...row });
+      return this.#live({ id: rowId, ...row });
     }
 
     async findByUserCode(userCode: string): Promise<Payload | undefined> {
-      const row = await store.findOidcPayloadByUserCode(this.#kind, userCode);
+      const hashed = await directory.storedUserCode(userCode);
+      const row =
+        (await store.findOidcPayloadByUserCode(this.#kind, hashed)) ??
+        (await store.findOidcPayloadByUserCode(this.#kind, userCode));
       return row ? this.#live(row) : undefined;
     }
 
     async findByUid(uid: string): Promise<Payload | undefined> {
-      const row = await store.findOidcPayloadByUid(this.#kind, uid);
+      const hashed = await directory.storedUid(uid);
+      const row =
+        (await store.findOidcPayloadByUid(this.#kind, hashed)) ?? (await store.findOidcPayloadByUid(this.#kind, uid));
       return row ? this.#live(row) : undefined;
     }
 
     async destroy(id: string): Promise<void> {
-      await store.deleteOidcPayload(id, this.#kind);
+      const storedId = await directory.storedId(this.#kind, id);
+      await store.deleteOidcPayload(storedId, this.#kind);
+      if (hashesOidcId(this.#kind) && storedId !== id) {
+        await store.deleteOidcPayload(id, this.#kind);
+      }
     }
 
     async revokeByGrantId(grantId: string): Promise<void> {
@@ -155,17 +177,25 @@ export function createStoreAdapter(store: VaultStore) {
      * code exactly one wins; the loser (and a row that is already gone) fails the grant.
      */
     async consume(id: string): Promise<void> {
-      const consumed = await store.consumeOidcPayload(id, this.#kind, epochSeconds());
+      const storedId = await directory.storedId(this.#kind, id);
+      let consumed = await store.consumeOidcPayload(storedId, this.#kind, epochSeconds());
+      if (!consumed && hashesOidcId(this.#kind) && storedId !== id) {
+        consumed = await store.consumeOidcPayload(id, this.#kind, epochSeconds());
+      }
       if (!consumed) throw new oidcErrors.InvalidGrant("grant source already consumed");
     }
 
-    /** Returns the payload unless the row has expired, in which case the row is deleted. */
+    /** Returns the payload body unless the row has expired, in which case the row is deleted. */
     async #live(row: OidcPayloadRow): Promise<Payload | undefined> {
       if (row.expiresAt && Date.parse(row.expiresAt) <= Date.now()) {
         await store.deleteOidcPayload(row.id, this.#kind);
         return undefined;
       }
-      return parsePayload(row.payload);
+      const opened = await directory.unwrap(this.#kind, row.id, row.payload);
+      if (!opened) return undefined;
+      const body: Payload = { ...opened.body };
+      if (row.consumedAt != null) body.consumed = row.consumedAt;
+      return body;
     }
   };
 }

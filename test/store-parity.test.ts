@@ -471,7 +471,9 @@ for (const backend of backends) {
       assert.equal(accepted.org_id, orgId);
       assert.equal((await store.getMember(orgId, invitee))?.role, "operator");
       assert.deepEqual(await store.listInvites(orgId), []);
-      assert.deepEqual((await store.listMemberEmails(orgId)).sort(), [`${id("own")}@example.com`, inviteeEmail].sort());
+      const team = await kernel.listTeam(orgId);
+      assert.deepEqual(team.members.map((m) => m.email).sort(), [`${id("own")}@example.com`, inviteeEmail].sort());
+      assert.deepEqual((await store.listVerifiedMemberUserIds(orgId)).sort(), [owner, invitee].sort());
 
       await kernel.updateMemberRole({ orgId, actorUserId: owner, actorRole: "owner", userId: invitee, role: "owner" });
       assert.equal((await store.getMember(orgId, invitee))?.role, "owner");
@@ -481,6 +483,28 @@ for (const backend of backends) {
       await kernel.removeMember({ orgId, actorUserId: owner, actorRole: "owner", userId: invitee });
       assert.equal(await store.getMember(orgId, invitee), undefined);
       assert.deepEqual((await store.listMembers(orgId)).map((m) => m.userId), [owner]);
+
+      const hmacEmail = "a".repeat(64);
+      await store.insertUser({
+        ...user(id("wrapped"), hmacEmail),
+        emailWrappedIv: "iv",
+        emailWrappedCiphertext: "ct",
+        emailWrappedTag: "tag",
+      });
+      const wrapped = await store.getUser(id("wrapped"));
+      assert.equal(wrapped?.email, hmacEmail);
+      assert.equal(wrapped?.emailWrappedIv, "iv");
+      await store.upsertOidcPayload({
+        id: id("rt"),
+        kind: "RefreshToken",
+        payload: JSON.stringify({ v: 1, iv: "x", ciphertext: "y", tag: "z" }),
+        expiresAt: null,
+      });
+      assert.equal(await store.consumeOidcPayload(id("rt"), "RefreshToken", 1_700_000_000), true);
+      const consumed = await store.getOidcPayload(id("rt"), "RefreshToken");
+      assert.equal(consumed?.consumedAt, 1_700_000_000);
+      assert.equal(consumed?.payload.includes("consumed"), false);
+      assert.equal(await store.consumeOidcPayload(id("rt"), "RefreshToken", 1), false);
     } finally {
       await done();
     }

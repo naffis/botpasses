@@ -21,6 +21,9 @@ const FULFILL_IDS = {
   valueLabel: "fulfill-value-label",
   injectSummary: "fulfill-inject-summary",
   kindHint: "fulfill-kind-hint",
+  redirectRow: "fulfill-redirect",
+  redirectUri: "fulfill-redirect-uri",
+  redirectCopy: "fulfill-redirect-copy",
 };
 
 function recipeOf(need: { recipe?: CollectRecipe }): CollectRecipe | undefined {
@@ -41,12 +44,16 @@ function fulfillForm(needId: string, suggestedName: string, host: string, recipe
     <label for="fulfill-name">Name</label>
     <input id="fulfill-name" name="name" required value="${name}" autocomplete="off" spellcheck="false" aria-describedby="fulfill-name-hint" />
     <p id="fulfill-name-hint" class="hint field-hint">${ITEM_NAME_HINT}</p>
-    <label for="fulfill-hosts">Allowed hosts</label>
-    <input id="fulfill-hosts" name="allowed_hosts" required value="${hosts}" autocomplete="off" spellcheck="false" aria-describedby="fulfill-hosts-hint" />
-    <p id="fulfill-hosts-hint" class="hint field-hint">${ALLOWED_HOSTS_HELP}</p>
     <label for="fulfill-kind">Kind</label>
     <select id="fulfill-kind" name="kind">${STORE_KIND_OPTIONS.map((o) => html`<option value="${o.value}"${o.value === kind ? " selected" : ""}>${o.label}</option>`)}</select>
     <p id="fulfill-kind-hint" class="hint field-hint" hidden></p>
+    <div id="fulfill-redirect" hidden data-testid="fulfill-redirect">
+      <p class="hint">Add this exact redirect URI on the app (Redirect URIs or callback URL). Same URI for every provider.</p>
+      <p class="copy-row"><code id="fulfill-redirect-uri" data-testid="fulfill-redirect-uri"></code> <button type="button" id="fulfill-redirect-copy" class="btn-ghost" data-testid="fulfill-redirect-copy">Copy URI</button></p>
+    </div>
+    <label for="fulfill-hosts">Allowed hosts</label>
+    <input id="fulfill-hosts" name="allowed_hosts" required value="${hosts}" autocomplete="off" spellcheck="false" aria-describedby="fulfill-hosts-hint" />
+    <p id="fulfill-hosts-hint" class="hint field-hint">${ALLOWED_HOSTS_HELP}</p>
     <div id="fulfill-username" hidden>
       <label for="fulfill-username-input"><span id="fulfill-username-label">Client ID</span></label>
       <input id="fulfill-username-input" name="username" autocomplete="off" />

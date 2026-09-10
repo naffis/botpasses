@@ -105,7 +105,9 @@ export async function handleMemberRoutes(
     const body = await readJson(req);
     const user = await kernel.store.getUser(op.userId);
     if (!user) throw new HttpError(401, "Authentication required");
-    const joined = await kernel.acceptInvite({ userId: op.userId, email: user.email, token: String(body.token ?? "") });
+    const inbox = await kernel.emails.revealUser(user);
+    if (!inbox) throw new HttpError(401, "Authentication required");
+    const joined = await kernel.acceptInvite({ userId: op.userId, email: inbox, token: String(body.token ?? "") });
     if (op.sessionHash) {
       await kernel.setActiveOrg({ userId: op.userId, sessionHash: op.sessionHash, orgId: joined.org_id });
     }
@@ -147,7 +149,8 @@ async function visitorOf(principal: Principal | undefined, kernel: HostedKernel)
   if (!principal || principal.channel !== "operator") return { kind: "anonymous" };
   if (principal.ready === false) return { kind: "pending", next: needsTotpVerify(principal) ? "/verify-totp" : "/enroll-totp" };
   const user = await kernel.store.getUser(principal.userId);
-  return { kind: "ready", email: user?.email ?? "", hasSession: Boolean(principal.sessionHash) };
+  const inbox = user ? await kernel.emails.revealUser(user) : "";
+  return { kind: "ready", email: inbox, hasSession: Boolean(principal.sessionHash) };
 }
 
 async function renderAcceptPage(

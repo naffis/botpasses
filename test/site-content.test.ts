@@ -124,6 +124,10 @@ test("security page carries the trust model, encryption, connector, tests, and d
   assert.match(sec, /<table aria-label="Which surfaces see a secret value">/);
   assert.match(sec, /Model context \/ chat transcript/);
   assert.match(sec, /AES-256-GCM/);
+  assert.match(sec, /orgId\|itemId\|allowed_hosts_json\|inject/);
+  assert.match(sec, /email-at-rest/);
+  assert.match(sec, /OAuth-token-at-rest/);
+  assert.doesNotMatch(sec, /organisation id as additional authenticated data/);
   assert.match(sec, /KMS/);
   assert.match(sec, /Exact host allowlist/);
   assert.match(sec, /No redirects/);
@@ -158,8 +162,8 @@ test("docs pages keep their tested content", () => {
   assert.match(cursor, /"url": "https:\/\/botpasses\.com\/mcp"/);
   assert.match(cursor, /"args": \["vault", "mcp"\]/);
   const oauthHowTo = text(page("docs/how-to/use-an-oauth-client-secret.html"));
-  assert.match(oauthHowTo, /https:\/\/botpasses\.com\/integrations\/spotify\/callback/);
-  assert.match(oauthHowTo, /https:\/\/staging\.botpasses\.com\/integrations\/spotify\/callback/);
+  assert.match(oauthHowTo, /https:\/\/botpasses\.com\/connect\/callback/);
+  assert.match(oauthHowTo, /https:\/\/staging\.botpasses\.com\/connect\/callback/);
   assert.match(oauthHowTo, /http:\/\/127\.0\.0\.1:8888\/callback/);
   const revoke = page("docs/how-to/revoke-access.html");
   assert.match(revoke, /Access/);
@@ -170,6 +174,7 @@ test("docs pages keep their tested content", () => {
   const guided = text(page("docs/how-to/guided-setup.html"));
   assert.match(guided, /setup/);
   assert.match(guided, /Always allow this agent to use this credential/);
+  assert.match(guided, /https:\/\/botpasses\.com\/connect\/callback/);
   const mcp = page("docs/reference/mcp-tools.html");
   assert.match(mcp, /http_request/);
   assert.match(mcp, /setup/);
@@ -180,7 +185,7 @@ test("docs pages keep their tested content", () => {
   assert.match(mcp, /task_id/);
   assert.match(mcp, /<summary>Instructions the server sends to the model<\/summary>/);
   const httpApi = page("docs/reference/http-api.html");
-  for (const route of ["/api/access", "/oauth/revoke", "/runtime/resolve", "X-CSRF-Token", "/api/folders", "/api/orgs", "/approve", "/integrations/spotify/callback", "GET /mcp", "/llms.txt", "/llms-full.txt"]) {
+  for (const route of ["/api/access", "/oauth/revoke", "/runtime/resolve", "X-CSRF-Token", "/api/folders", "/api/orgs", "/approve", "/connect/callback", "/integrations/:provider/callback", "GET /mcp", "/llms.txt", "/llms-full.txt"]) {
     assert.match(httpApi, new RegExp(route.replace(/\//g, "\\/")), route);
   }
   const trouble = page("docs/troubleshooting.html");

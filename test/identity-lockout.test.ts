@@ -62,7 +62,7 @@ test("R1-6: two concurrent confirms of the same enrollment code succeed exactly 
     await expectStatus(start, 200, "totp/start");
     const secret = new URL((await readJson<{ otpauth_url: string }>(start)).otpauth_url).searchParams.get("secret") ?? "";
     const code = totpCode(secret, clock.now);
-    const before = await ctx.store.getUserByEmail(email);
+    const before = await ctx.identity.userByEmail(email);
     assert.ok(before);
     // Driven in-process so both confirms read the pending secret before either writes; over
     // HTTP the synchronous SQLite path finishes the first before the second is parsed.
@@ -76,7 +76,7 @@ test("R1-6: two concurrent confirms of the same enrollment code succeed exactly 
     const winner = wins[0];
     assert.ok(winner && winner.status === "fulfilled");
     const shown = winner.value.backup_codes;
-    const user = await ctx.store.getUserByEmail(email);
+    const user = await ctx.identity.userByEmail(email);
     assert.ok(user);
     const unused = (await ctx.store.listBackupCodes(user.id)).filter((c) => c.usedAt === null);
     assert.equal(unused.length, shown.length, "one backup-code set exists");
@@ -115,7 +115,7 @@ test("S8: ten wrong authenticator codes lock the account for 15 minutes; the loc
     assert.equal(tenth.status, 429);
     const lockBody = await readJson<{ error: string; retry_after: number }>(tenth);
     assert.ok(lockBody.retry_after > 14 * 60 && lockBody.retry_after <= 15 * 60, String(lockBody.retry_after));
-    const user = await ctx.store.getUserByEmail(email);
+    const user = await ctx.identity.userByEmail(email);
     assert.ok(user?.totpLockedUntil, "lock is persisted in the store");
 
     const correctWhileLocked = await api(ctx, "/api/auth/totp/verify", {
@@ -132,7 +132,7 @@ test("S8: ten wrong authenticator codes lock the account for 15 minutes; the loc
       body: { code: totpCode(secret, clock.now) },
     });
     await expectStatus(afterLock, 200);
-    const reset = await ctx.store.getUserByEmail(email);
+    const reset = await ctx.identity.userByEmail(email);
     assert.equal(reset?.totpFailures, 0);
     assert.equal(reset?.totpLockedUntil, null);
   } finally {

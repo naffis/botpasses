@@ -3,6 +3,7 @@
  * Store / edit / fulfill form behaviour shared by the console dialog and the collect page.
  * All vocabulary comes from ../store-form-fields.ts so the server and browser agree.
  */
+import { defaultConnectRedirect } from "../providers/connect-redirect.ts";
 import {
   defaultInjectForKind,
   injectSummary,
@@ -15,7 +16,7 @@ import {
   valueFieldLabel,
   type StoreFormValues,
 } from "../store-form-fields.ts";
-import { byId } from "./shared.ts";
+import { byId, copyText } from "./shared.ts";
 
 /** Element ids around one form, e.g. `store-*` in the console and `fulfill-*` on collect. */
 export type StoreFormIds = {
@@ -24,7 +25,18 @@ export type StoreFormIds = {
   valueLabel: string;
   injectSummary: string;
   kindHint?: string;
+  redirectRow?: string;
+  redirectUri?: string;
+  redirectCopy?: string;
 };
+
+/** The exact redirect URI this origin will send on a user connect. */
+export function fillConnectRedirectUri(codeId: string): string {
+  const uri = defaultConnectRedirect(location.origin);
+  const code = byId(codeId);
+  if (code) code.textContent = uri;
+  return uri;
+}
 
 export function field<T extends HTMLInputElement | HTMLSelectElement>(form: HTMLFormElement, name: string): T | null {
   const el = form.elements.namedItem(name);
@@ -64,6 +76,15 @@ export function syncStoreFields(form: HTMLFormElement, ids: StoreFormIds): void 
       hint.hidden = !textHint;
     }
   }
+  if (ids.redirectRow) {
+    const row = byId(ids.redirectRow);
+    const show = kind === "client_secret";
+    if (row) row.hidden = !show;
+    if (show && ids.redirectUri) {
+      const code = byId(ids.redirectUri);
+      if (code) code.textContent = defaultConnectRedirect(location.origin);
+    }
+  }
 }
 
 /** Kind change picks the send method; inject change and typing keep the rest in sync. */
@@ -89,6 +110,12 @@ export function bindStoreForm(form: HTMLFormElement, ids: StoreFormIds): void {
       }
     }
   });
+  if (ids.redirectCopy && ids.redirectUri) {
+    const uriId = ids.redirectUri;
+    byId(ids.redirectCopy)?.addEventListener("click", () => {
+      copyText(byId(uriId)?.textContent ?? "", "Redirect URI copied");
+    });
+  }
   syncStoreFields(form, ids);
 }
 

@@ -6,9 +6,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { decrypt, encrypt } from "../../crypto.ts";
 import { HttpError } from "../errors.ts";
 import type { Provider, ProviderId } from "./types.ts";
+import {
+  defaultConnectRedirect,
+  isLoopbackPublicUrl,
+  legacyProviderCallback,
+  LOOPBACK_REDIRECT,
+} from "./connect-redirect.ts";
 import { isProviderId } from "./registry.ts";
 
-export const LOOPBACK_REDIRECT = "http://127.0.0.1:8888/callback";
+export { HOSTED_CONNECT_CALLBACK_PATH, LOOPBACK_REDIRECT } from "./connect-redirect.ts";
 const STATE_AAD = "provider-oauth-state";
 
 export type ProviderOauthState = {
@@ -36,20 +42,22 @@ export function pkceChallenge(verifier: string): string {
   return createHash("sha256").update(verifier).digest("base64url");
 }
 
-/** `${publicUrl}/integrations/<provider>/callback`. */
-export function hostedRedirect(provider: Provider, publicUrl: string): string {
-  return `${publicUrl.replace(/\/$/, "")}/integrations/${provider.id}/callback`;
+/** The hosted user-connect callback. Provider is unused: one URI for every vendor app. */
+export function hostedRedirect(_provider: Provider, publicUrl: string): string {
+  return defaultConnectRedirect(publicUrl);
 }
 
 /**
- * The redirect URI the authorize request will carry. Only the hosted callback or the loopback
- * dev callback are accepted so a stolen state cannot send the code elsewhere.
+ * The redirect URI the authorize request will carry. Only the hosted callback, its
+ * per-provider alias, or the loopback dev callback are accepted so a stolen state cannot
+ * send the code elsewhere.
  */
 export function chooseRedirect(provider: Provider, publicUrl: string, requested?: string): string {
-  const hosted = hostedRedirect(provider, publicUrl);
-  const loopback = publicUrl.startsWith("http://127.0.0.1") || publicUrl.startsWith("http://localhost");
-  if (!requested) return loopback ? LOOPBACK_REDIRECT : hosted;
-  if (requested === hosted) return requested;
+  const hosted = defaultConnectRedirect(publicUrl);
+  const legacy = legacyProviderCallback(publicUrl, provider.id);
+  const loopback = isLoopbackPublicUrl(publicUrl);
+  if (!requested) return hosted;
+  if (requested === hosted || requested === legacy) return requested;
   // The dev loopback callback is only a valid landing place when Botpasses itself runs on loopback.
   if (requested === LOOPBACK_REDIRECT && loopback) return requested;
   throw new HttpError(400, loopback ? `redirect_uri must be the Botpasses callback or ${LOOPBACK_REDIRECT}` : "redirect_uri must be the Botpasses callback");

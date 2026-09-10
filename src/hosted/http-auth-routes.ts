@@ -56,7 +56,9 @@ async function pendingTotpEnrollment(
   const envelope = pendingEnvelope(user, identity.now().getTime());
   if (!envelope) return undefined;
   const { secret } = await identity.keys.unwrap(user.id, "totp_pending", envelope);
-  const otpauth_url = otpauthUrl(OTPAuth.Secret.fromBase32(secret), user.email);
+  const inbox = await identity.emails.revealUser(user);
+  if (!inbox) return undefined;
+  const otpauth_url = otpauthUrl(OTPAuth.Secret.fromBase32(secret), inbox);
   return { otpauth_url, qr_svg: otpauthQrSvg(otpauth_url) };
 }
 

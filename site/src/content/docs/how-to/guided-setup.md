@@ -32,9 +32,11 @@ For a known provider the form is prefilled:
 
 Check **Always allow this agent to use this credential** if you want that agent to keep using it without a new Inbox card each time. The box starts unchecked.
 
+When Kind is Client ID and secret, Collect shows the redirect URI to add on the app. On production it is `https://botpasses.com/connect/callback`. Same URI for every provider.
+
 ## Connect a user account
 
-Spotify and Google also need a signed-in user for paths such as `/v1/me`. After you store the app secret, the agent gives you a `connect_url` (a console link). Connect the account there. The dialog can also allow that agent to use the connected account.
+Spotify and Google also need a signed-in user for paths such as `/v1/me`. After you store the app secret, the agent gives you a `connect_url` (a console link). Connect the account there. The dialog shows the same redirect URI again, and can also allow that agent to use the connected account.
 
 App-token calls (for example Spotify search) work after store even if you skip Connect.
 

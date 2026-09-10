@@ -29,6 +29,7 @@ import {
   type InviteRecord,
   type MemberRow,
   type OidcPayloadRow,
+  type OidcStoredRow,
   type OperatorSessionRow,
   type UserRow,
 } from "./types.ts";
@@ -177,11 +178,31 @@ export function mapInvite(r: Row): InviteRecord {
     createdAt: String(r.created_at),
     expiresAt: String(r.expires_at),
     acceptedAt: text(r.accepted_at),
+    emailWrappedIv: text(r.email_wrapped_iv),
+    emailWrappedCiphertext: text(r.email_wrapped_ciphertext),
+    emailWrappedTag: text(r.email_wrapped_tag),
   };
 }
 
 export function mapOidcRow(r: Row): OidcPayloadRow {
-  return { id: String(r.id), payload: String(r.payload), expiresAt: text(r.expires_at) };
+  return {
+    id: String(r.id),
+    payload: String(r.payload),
+    expiresAt: text(r.expires_at),
+    consumedAt: r.consumed_at == null ? null : Number(r.consumed_at),
+  };
+}
+
+export function mapOidcStored(r: Row): OidcStoredRow {
+  return {
+    ...mapOidcRow(r),
+    kind: String(r.kind),
+    uid: text(r.uid),
+    userCode: text(r.user_code),
+    grantId: text(r.grant_id),
+    clientId: text(r.client_id),
+    accountId: text(r.account_id),
+  };
 }
 
 export function mapUser(r: Row): UserRow {
@@ -200,6 +221,9 @@ export function mapUser(r: Row): UserRow {
     totpPendingWrappedCiphertext: text(r.totp_pending_wrapped_ciphertext),
     totpPendingWrappedTag: text(r.totp_pending_wrapped_tag),
     totpPendingAt: text(r.totp_pending_at),
+    emailWrappedIv: text(r.email_wrapped_iv),
+    emailWrappedCiphertext: text(r.email_wrapped_ciphertext),
+    emailWrappedTag: text(r.email_wrapped_tag),
   };
 }
 

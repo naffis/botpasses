@@ -32,7 +32,10 @@ async function consentView(
     const existing = await kernel.store.findClientByOrgAndOauthId(op.orgId, clientId);
     view.firstTime = !existing;
     const user = await kernel.store.getUser(op.userId);
-    if (user?.email) view.email = user.email;
+    if (user) {
+      const inbox = await kernel.emails.revealUser(user);
+      if (inbox) view.email = inbox;
+    }
   }
   return { name, view };
 }

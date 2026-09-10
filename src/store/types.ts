@@ -89,6 +89,9 @@ export type InviteRecord = {
   createdAt: string;
   expiresAt: string;
   acceptedAt: string | null;
+  emailWrappedIv?: string | null;
+  emailWrappedCiphertext?: string | null;
+  emailWrappedTag?: string | null;
 };
 
 /** Single-row table holding the identity DEK wrapped under the KEK (AAD = id). */
@@ -127,12 +130,27 @@ export type VaultStore = {
   getMember(orgId: string, userId: string): Promise<MemberRecord | undefined>;
   listMembers(orgId: string): Promise<MemberRow[]>;
   listMembershipsForUser(userId: string): Promise<MemberRecord[]>;
-  /** Verified member emails for approval notifications. Members without a user row are skipped. */
-  listMemberEmails(orgId: string): Promise<string[]>;
-  upsertOidcPayload(row: { id: string; kind: string; payload: string; expiresAt: string | null }): Promise<void>;
-  getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null } | undefined>;
+  /** Verified member user ids for approval notifications. Members without a user row are skipped. */
+  listVerifiedMemberUserIds(orgId: string): Promise<string[]>;
+  upsertOidcPayload(row: {
+    id: string;
+    kind: string;
+    payload: string;
+    expiresAt: string | null;
+    index?: OidcPayloadIndex;
+  }): Promise<void>;
+  getOidcPayload(id: string, kind: string): Promise<{ payload: string; expiresAt: string | null; consumedAt: number | null } | undefined>;
   deleteOidcPayload(id: string, kind: string): Promise<void>;
   listOidcPayloads(kind: string): Promise<{ id: string; payload: string }[]>;
+  /** Every adapter row (rebind). */
+  listAllOidcPayloads(): Promise<OidcStoredRow[]>;
+  /** PK swap for bearer-id HMAC rebind. Drops `oldId` when `next.id` already exists. */
+  replaceOidcPayloadId(kind: string, oldId: string, next: {
+    id: string;
+    payload: string;
+    expiresAt: string | null;
+    index?: OidcPayloadIndex;
+  }): Promise<void>;
 
   insertVault(row: VaultRecord): Promise<void>;
   listVaults(orgId: string): Promise<VaultRecord[]>;
@@ -318,6 +336,14 @@ export type VaultStore = {
   resetTotpFailures(userId: string): Promise<void>;
   /** Users with a confirmed or pending authenticator secret (for KEK rotation re-wraps). */
   listUsersWithTotp(): Promise<UserRow[]>;
+  /** Users whose email column still contains `@` (legacy plaintext). */
+  listUsersWithLegacyEmail(): Promise<UserRow[]>;
+  /** Every user row (email restore). */
+  listAllUsers(): Promise<UserRow[]>;
+  /** Invites whose email column still contains `@` (legacy plaintext). */
+  listInvitesWithLegacyEmail(): Promise<InviteRecord[]>;
+  /** Every invite row (email restore). */
+  listAllInvites(): Promise<InviteRecord[]>;
   deleteUnusedBackupCodes(userId: string): Promise<void>;
   /** Deletes the user's sessions that never passed the authenticator step, except `keepHash`. */
   deletePendingSessions(userId: string, keepHash: string): Promise<void>;
@@ -366,9 +392,9 @@ export type VaultStore = {
   /** Rows of `kind` whose payload clientId is one of `clientIds` (used to find an org's grants at revoke). */
   listOidcPayloadsForClient(kind: string, clientIds: string[]): Promise<{ id: string; payload: string }[]>;
   /**
-   * Atomically stamps `consumed` (epoch seconds) into the payload JSON of a row that has not been
-   * consumed yet. Returns false when the row is missing or already consumed, so two concurrent
-   * exchanges of one code cannot both succeed.
+   * Atomically stamps `consumed_at` (epoch seconds) on a row that has not been consumed yet.
+   * Returns false when the row is missing or already consumed, so two concurrent exchanges of
+   * one code cannot both succeed.
    */
   consumeOidcPayload(id: string, kind: string, consumedAt: number): Promise<boolean>;
   /** Removes rows whose expires_at is at or before `nowIso`. Returns the count. */
@@ -379,6 +405,15 @@ export type VaultStore = {
   removeMember(orgId: string, userId: string): Promise<void>;
   updateMemberRole(orgId: string, userId: string, role: MemberRole): Promise<void>;
   insertInvite(row: InviteRecord): Promise<void>;
+  updateInviteEmail(
+    id: string,
+    patch: {
+      email: string;
+      emailWrappedIv: string;
+      emailWrappedCiphertext: string;
+      emailWrappedTag: string;
+    },
+  ): Promise<void>;
   getInvite(id: string): Promise<InviteRecord | undefined>;
   getInviteByTokenHash(tokenHash: string): Promise<InviteRecord | undefined>;
   /** Invites for the org that have not been accepted, newest first. Expired rows are included. */
@@ -393,7 +428,21 @@ export type VaultStore = {
   countItemsForOrg(orgId: string): Promise<number>;
 };
 
-export type OidcPayloadRow = { id: string; payload: string; expiresAt: string | null };
+export type OidcPayloadRow = {
+  id: string;
+  payload: string;
+  expiresAt: string | null;
+  consumedAt: number | null;
+};
+
+export type OidcStoredRow = OidcPayloadRow & {
+  kind: string;
+  uid: string | null;
+  userCode: string | null;
+  grantId: string | null;
+  clientId: string | null;
+  accountId: string | null;
+};
 
 /** A JSON-array TEXT scope column. Null, empty, or malformed reads as unrestricted. */
 export function parseScopeList(value: unknown): string[] | null {

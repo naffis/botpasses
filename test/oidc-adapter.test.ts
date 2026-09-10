@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
+import { IdentityKeyring } from "../src/hosted/identity-keys.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { createStoreAdapter, destroyOidcPayloadsForClient, purgeExpired } from "../src/hosted/oidc-adapter.ts";
+import { OidcDirectory } from "../src/hosted/oidc-directory.ts";
 import { PostgresStore } from "../src/store/postgres.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { oidcPayloadIndex, type VaultStore } from "../src/store/types.ts";
@@ -45,6 +47,10 @@ function ids(prefix: string) {
   return (name: string) => `${prefix}_${run}_${name}`;
 }
 
+function oidcDir(store: VaultStore): OidcDirectory {
+  return new OidcDirectory(new IdentityKeyring(store, parseMasterKey(generateMasterKey()), () => new Date()), store);
+}
+
 test("oidcPayloadIndex pulls uid, userCode, grantId, clientId, accountId and tolerates junk", () => {
   assert.deepEqual(oidcPayloadIndex(JSON.stringify({ uid: "u", userCode: "123", grantId: "g", clientId: "c", accountId: "a" })), {
     uid: "u",
@@ -63,7 +69,8 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     const id = ids("idx");
     try {
-      const Adapter = createStoreAdapter(store);
+      const directory = oidcDir(store);
+      const Adapter = createStoreAdapter(store, directory);
       const sessions = new Adapter("Session");
       const codes = new Adapter("DeviceCode");
       await sessions.upsert(id("s1"), { uid: id("uid1"), accountId: "acc", jti: id("s1") }, 600);
@@ -94,7 +101,8 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     const id = ids("grant");
     try {
-      const Adapter = createStoreAdapter(store);
+      const directory = oidcDir(store);
+      const Adapter = createStoreAdapter(store, directory);
       const refresh = new Adapter("RefreshToken");
       const codes = new Adapter("AuthorizationCode");
       await refresh.upsert(id("rt1"), { grantId: id("g1"), clientId: "c", jti: id("rt1") }, 600);
@@ -115,13 +123,15 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     const id = ids("consume");
     try {
-      const Adapter = createStoreAdapter(store);
+      const directory = oidcDir(store);
+      const Adapter = createStoreAdapter(store, directory);
       const codes = new Adapter("AuthorizationCode");
       await codes.upsert(id("ac"), { grantId: id("g"), clientId: "c", jti: id("ac") }, 60);
-      const before = await store.getOidcPayload(id("ac"), "AuthorizationCode");
+      const storedId = await directory.storedId("AuthorizationCode", id("ac"));
+      const before = await store.getOidcPayload(storedId, "AuthorizationCode");
       assert.ok(before?.expiresAt);
       await codes.consume(id("ac"));
-      const after = await store.getOidcPayload(id("ac"), "AuthorizationCode");
+      const after = await store.getOidcPayload(storedId, "AuthorizationCode");
       assert.equal(after?.expiresAt, before.expiresAt);
       const payload = (await codes.find(id("ac"))) as { consumed?: unknown; grantId?: string };
       assert.equal(typeof payload.consumed, "number");
@@ -136,7 +146,8 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     const id = ids("race");
     try {
-      const Adapter = createStoreAdapter(store);
+      const directory = oidcDir(store);
+      const Adapter = createStoreAdapter(store, directory);
       const codes = new Adapter("AuthorizationCode");
       await codes.upsert(id("ac"), { grantId: id("g"), clientId: "c", jti: id("ac"), nested: { keep: true } }, 60);
       const outcomes = await Promise.allSettled([codes.consume(id("ac")), codes.consume(id("ac")), codes.consume(id("ac"))]);
@@ -151,7 +162,7 @@ for (const backend of backends) {
       assert.equal(typeof payload.consumed, "number");
       assert.deepEqual(payload.nested, { keep: true }, "the rest of the payload survives the JSON update");
       assert.equal(payload.jti, id("ac"));
-      assert.equal(await store.consumeOidcPayload(id("ac"), "AuthorizationCode", 1), false);
+      assert.equal(await store.consumeOidcPayload(await directory.storedId("AuthorizationCode", id("ac")), "AuthorizationCode", 1), false);
     } finally {
       await done();
     }
@@ -205,6 +216,7 @@ for (const backend of backends) {
       });
       await destroyOidcPayloadsForClient(
         store,
+        oidcDir(store),
         { id: id("cli_a"), oauthClientId: dcr, clerkOauthUserId: null, consentedByUserId: id("owner") },
         { orgId: orgA, memberUserIds: [id("owner"), id("member")] },
       );
@@ -226,16 +238,17 @@ for (const backend of backends) {
     const { store, done } = await backend.open();
     const id = ids("purge");
     try {
-      const Adapter = createStoreAdapter(store);
+      const directory = oidcDir(store);
+      const Adapter = createStoreAdapter(store, directory);
       const refresh = new Adapter("RefreshToken");
       await refresh.upsert(id("old"), { jti: id("old") }, -10);
       await refresh.upsert(id("live"), { jti: id("live") }, 600);
       await refresh.upsert(id("forever"), { jti: id("forever") });
       const removed = await purgeExpired(store);
       assert.ok(removed >= 1);
-      assert.equal(await store.getOidcPayload(id("old"), "RefreshToken"), undefined);
-      assert.ok(await store.getOidcPayload(id("live"), "RefreshToken"));
-      assert.ok(await store.getOidcPayload(id("forever"), "RefreshToken"));
+      assert.equal(await store.getOidcPayload(await directory.storedId("RefreshToken", id("old")), "RefreshToken"), undefined);
+      assert.ok(await store.getOidcPayload(await directory.storedId("RefreshToken", id("live")), "RefreshToken"));
+      assert.ok(await store.getOidcPayload(await directory.storedId("RefreshToken", id("forever")), "RefreshToken"));
     } finally {
       await done();
     }
@@ -259,7 +272,8 @@ for (const backend of backends) {
           expiresAt: null,
         });
       }
-      await destroyOidcPayloadsForClient(store, {
+      const directory = oidcDir(store);
+      await destroyOidcPayloadsForClient(store, directory, {
         id: id("cli_a"),
         oauthClientId: id("dcr_shared"),
         clerkOauthUserId: null,
@@ -271,7 +285,7 @@ for (const backend of backends) {
       assert.ok(await store.getOidcPayload(id("rt_other"), "RefreshToken"), "other client untouched");
 
       // A legacy client with no recorded consenting account only loses unattributed rows.
-      await destroyOidcPayloadsForClient(store, {
+      await destroyOidcPayloadsForClient(store, directory, {
         id: id("cli_legacy"),
         oauthClientId: id("dcr_shared"),
         clerkOauthUserId: null,
