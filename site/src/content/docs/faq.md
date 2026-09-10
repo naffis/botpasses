@@ -27,7 +27,7 @@ Console **Access** panel. Revoke an agent (its tokens stop working on the next c
 
 ## What is the difference between staging and production?
 
-Two things share those words. Inside your account, each credential has an **environment** tag (`staging` or `production`) and each agent is bound to one of them; an agent only sees credentials in its own environment. Separately, `staging.botpasses.com` is the pre-release copy of the service with its own accounts and database; use `botpasses.com` unless you are testing the service itself.
+Two things share those words. Inside your account, each credential has an **environment** tag (`staging` or `production`) and each agent is bound to one of them; an agent only sees credentials in its own environment. Separately, `staging.botpasses.com` is the pre-release copy of the service with its own accounts and database; use `botpasses.com` unless you are testing the service itself. The laptop hosted kernel (`npm run hosted:dev`) is a third deploy plane. It is not a Fly app and it is refused when `FLY_APP_NAME` is set.
 
 ## Can Botpasses staff read my keys?
 
@@ -35,7 +35,7 @@ Not without both the AWS KMS role and the database. The hosted process decrypts 
 
 ## What does it cost?
 
-Free while in beta. The software is MIT licensed and you can [self-host](/docs/self-hosting).
+Free while in beta. The software is MIT licensed. [Self-host](/docs/self-hosting) on any Postgres 16 and an `https` origin you control, or run `npm run hosted:dev` on a laptop.
 
 ## Which agents work?
 
@@ -52,3 +52,12 @@ Those products give the agent a catalog of tools and hold the tokens themselves.
 ## Where is the source?
 
 [github.com/naffis/botpasses](https://github.com/naffis/botpasses). Design decisions are in the `docs/adr` folder.
+
+## Can I run Botpasses on my laptop?
+
+Yes. Two paths, and they are not the same process.
+
+- **Hosted kernel on loopback.** From a clone, `npm run hosted:dev` starts the same console, email codes (printed in the terminal), and MCP as botpasses.com, on `http://127.0.0.1:8788`. Connect MCP to `http://127.0.0.1:8788/mcp`. Provider apps get `http://127.0.0.1:8788/connect/callback`, not port 8888. Run one process per sqlite file.
+- **CLI vault.** `vault init` under `VAULT_HOME`, then `vault mcp`. No account. The CLI vault callback stays `http://127.0.0.1:8888/callback`.
+
+Self-hosting a shared plane still needs Postgres 16. See [Install](/docs/install) and [Self-hosting](/docs/self-hosting).

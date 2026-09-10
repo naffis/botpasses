@@ -43,7 +43,7 @@ export type StartConnectInput = {
   environment: VaultEnvName;
   clientId?: string;
   redirectUri?: string;
-  /** The one model client that gets an `item_standing` policy on the refresh item after connect. */
+  /** The one model client that gets `item_standing` on the source credential and the refresh item after connect. */
   agentClientId?: string;
   /** The inbox connect need this flow answers; the callback marks it fulfilled. */
   needId?: string;
@@ -65,7 +65,7 @@ export type FinishConnectResult = {
   item_name: string;
   last4: string;
   provider: ProviderId;
-  /** The agent that now holds a standing policy on the refresh item, when the connect named one. */
+  /** The agent that now holds standing on the source credential and the refresh item, when the connect named one. */
   agent_client_id: string | null;
 };
 
@@ -81,7 +81,7 @@ function connectProvider(providerId: string): Provider {
 
 /**
  * Starts the user connect for `providerId` against a stored client-secret item. Without
- * `agentClientId` no policy is written and the operator approves normally.
+ * `agentClientId` no standing is written and the operator approves each API call normally.
  */
 export async function startProviderUserOauth(host: ConnectHost, input: StartConnectInput): Promise<StartConnectResult> {
   const provider = connectProvider(input.providerId);
@@ -224,26 +224,83 @@ export async function finishProviderUserOauth(host: ConnectHost, input: FinishCo
   let agentClientId: string | null = null;
   if (opened.agentClientId) {
     const agent = await host.clientInOrg(input.orgId, opened.agentClientId);
-    const have = await host.store.findItemPolicy(input.orgId, agent.id, refreshId);
-    if (agent.kind === "model" && !agent.revokedAt) agentClientId = agent.id;
-    if (agent.kind === "model" && !agent.revokedAt && !have) {
-      await host.store.insertPolicy({
-        id: `pol_${randomUUID()}`,
+    if (agent.kind === "model" && !agent.revokedAt) {
+      agentClientId = agent.id;
+      // Standing on the source item is what later http_request consumes. Refresh standing
+      // covers a direct POST to the token endpoint. The mint in service of an API call
+      // is not a separately granted hop.
+      await ensureItemStanding(host, {
         orgId: input.orgId,
-        clientId: agent.id,
-        itemId: refreshId,
-        folderId: null,
+        actor: input.userId,
+        agentId: agent.id,
+        itemId: item.id,
+        itemName: item.name,
         environmentId: env.id,
-        kind: "item_standing",
-        createdAt: host.now().toISOString(),
-        ...unscopedFields(),
-        expiresAt: null,
       });
-      await host.audit(input.orgId, "grant", input.userId, name, agent.id);
+      await ensureItemStanding(host, {
+        orgId: input.orgId,
+        actor: input.userId,
+        agentId: agent.id,
+        itemId: refreshId,
+        itemName: name,
+        environmentId: env.id,
+      });
     }
   }
   if (opened.needId) {
     await host.fulfillConnectNeed({ orgId: input.orgId, actor: input.userId, needId: opened.needId, itemId: refreshId });
   }
   return { item_name: name, last4: last, provider: provider.id, agent_client_id: agentClientId };
+}
+
+/**
+ * Unscoped `item_standing` for one (agent, item) pair: policy plus an active grant so
+ * `http_request` and `setup` see standing without a later token-mint `requestGrant`.
+ * Skips when a policy already exists (Collect Always-allow, a prior connect).
+ */
+async function ensureItemStanding(
+  host: ConnectHost,
+  input: {
+    orgId: string;
+    actor: string;
+    agentId: string;
+    itemId: string;
+    itemName: string;
+    environmentId: string;
+  },
+): Promise<void> {
+  const have = await host.store.findItemPolicy(input.orgId, input.agentId, input.itemId);
+  if (have) return;
+  const at = host.now().toISOString();
+  await host.store.insertPolicy({
+    id: `pol_${randomUUID()}`,
+    orgId: input.orgId,
+    clientId: input.agentId,
+    itemId: input.itemId,
+    folderId: null,
+    environmentId: input.environmentId,
+    kind: "item_standing",
+    createdAt: at,
+    ...unscopedFields(),
+    expiresAt: null,
+  });
+  await host.store.insertGrant({
+    id: `grt_${randomUUID()}`,
+    orgId: input.orgId,
+    clientId: input.agentId,
+    itemId: input.itemId,
+    folderId: null,
+    environmentId: input.environmentId,
+    policy: "item_standing",
+    status: "active",
+    createdAt: at,
+    approvedAt: at,
+    consumedAt: null,
+    taskId: null,
+    taskDescription: null,
+    requestedScope: null,
+    ...unscopedFields(),
+    expiresAt: null,
+  });
+  await host.audit(input.orgId, "grant", input.actor, input.itemName, input.agentId);
 }

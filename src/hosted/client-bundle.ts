@@ -2880,8 +2880,8 @@ async function agentLabel(id        )                  {
 
 /**
  * Opens the connect dialog for an item. With \`agentId\` (an inbox card or a \`?connect=\` deep link)
- * the "also allow" checkbox is shown checked, so the connect also grants that agent the refresh
- * item; \`needId\` lets the callback close the inbox card.
+ * the "also allow" checkbox is shown checked, so the connect also stands that agent on this
+ * credential (and the refresh item); \`needId\` lets the callback close the inbox card.
  */
 async function openConnect(item         , provider          , opts                                        = {})                {
   const form = byId                 ("connect-provider");

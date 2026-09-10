@@ -5,9 +5,9 @@ section: start
 order: 2
 ---
 
-There are two ways to use Botpasses.
+There are three ways to use Botpasses: the hosted service on botpasses.com, the laptop hosted kernel (`npm run hosted:dev`), and a local CLI vault (`VAULT_HOME`).
 
-Paste the [local machine prompt](/docs/prompts#local) into an agent on this laptop if you want it to clone the repo, init the vault, and write the MCP snippet. Do not paste the master key into chat.
+Paste the [local machine prompt](/docs/prompts#local) into an agent on this laptop if you want it to clone the repo, init the CLI vault, and write the MCP snippet. Do not paste the master key into chat.
 
 ## Copy-paste prompt
 
@@ -19,6 +19,7 @@ Facts:
 - Need Node.js 22.14+.
 - Local home: set VAULT_HOME to an absolute path (e.g. $PWD/.botpasses or $HOME/.botpasses).
 - Local MCP exposes the same six tools as hosted: list_items, find_items, request_grant, list_grants, setup, http_request. Values inject only into approved calls or vault run child env.
+- The hosted kernel on a laptop is npm run hosted:dev (console, OTP, sqlite-hosted at http://127.0.0.1:8788). That is not this VAULT_HOME vault. Its connect URI is http://127.0.0.1:8788/connect/callback, not :8888.
 
 Steps:
 1. Clone (or reuse) the repo, npm install, export VAULT_HOME to an absolute path, run npx vault init if the vault does not exist. Do not print the master key into chat; tell me where it lives and that I must keep VAULT_MASTER_KEY out of transcripts.
@@ -109,4 +110,4 @@ npx vault mcp --user-jwt
 
 ## Self-hosting
 
-The hosted process runs on Fly with Neon Postgres. See [Self-hosting](/docs/self-hosting).
+Self-host the same process on any Postgres 16 and a custom `https` origin. Fly, Neon, and AWS KMS are the reference stack, not a requirement. See [Self-hosting](/docs/self-hosting).

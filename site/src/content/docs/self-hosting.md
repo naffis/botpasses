@@ -1,6 +1,6 @@
 ---
 title: Self-hosting
-description: Run the hosted Botpasses process yourself on Fly with Neon Postgres, Cloudflare in front, and an AWS KMS key wrapping the platform key. Required secrets table.
+description: Run the hosted process on any Postgres 16 and an https origin you control. Laptop hosted:dev uses sqlite. Fly, Neon, Cloudflare, and AWS KMS are the reference stack. Required secrets table.
 section: help
 order: 3
 ---

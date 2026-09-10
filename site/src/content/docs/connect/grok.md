@@ -17,7 +17,7 @@ Grok Bot can connect with interactive OAuth (Authorize opens a browser on botpas
 
 If Authorize spins and falls back to Retry with no browser, remove the connector and add it again after botpasses.com is on a build that 401s unauthenticated `initialize`. A 200 handshake leaves the host with no auth URL.
 
-After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so Grok walks Collect and Connect. You type secrets on botpasses.com, never in chat. If `tools/call` fails with `redirect_uri`, paste the [Grok redirect_uri prompt](/docs/prompts#grok-redirect_uri).
+After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so Grok walks Collect and Connect. You type secrets on the Botpasses plane you connected, never in chat. If `tools/call` fails with `redirect_uri`, paste the [Grok redirect_uri prompt](/docs/prompts#grok-redirect_uri). Grok Bot in a cloud VM cannot reach `npm run hosted:dev` on your laptop; use botpasses.com or a public self-host origin.
 
 ## 1b. Grok Bot with a model token
 

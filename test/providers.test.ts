@@ -496,9 +496,13 @@ test("user connect for a second provider (GitHub, no PKCE) and the narrowed auto
     const refresh = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "GITHUB_APP_REFRESH");
     assert.ok(refresh);
     assert.deepEqual(refresh.allowedHosts, ["api.github.com", "github.com"]);
+    const source = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "GITHUB_APP_SECRET");
+    assert.ok(source);
     const mine = await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, refresh.id);
-    assert.equal(mine?.kind, "item_standing", "the named agent gets a standing policy");
+    assert.equal(mine?.kind, "item_standing", "the named agent gets a standing policy on the refresh item");
+    assert.equal((await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, source.id))?.kind, "item_standing", "and on the source credential the agent calls");
     assert.equal(await ctx.kernel.store.findItemPolicy(ctx.orgId, other.id, refresh.id), undefined, "other agents do not");
+    assert.equal(await ctx.kernel.store.findItemPolicy(ctx.orgId, other.id, source.id), undefined, "other agents do not get source standing");
     assert.ok((await ctx.kernel.store.listAudit(ctx.orgId, 50)).some((a) => a.action === "grant" && a.clientId === ctx.model.id), "the standing policy is audited");
     const exchange = ctx.hits.find((h) => h.url.includes("/login/oauth/access_token"));
     assert.ok(exchange);
@@ -621,7 +625,7 @@ test("Spotify token mint uses Basic + form body and redacts the access token", a
 
 async function inboxOf(ctx: Ctx) {
   const res = await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op });
-  return (await res.json()) as { grants: { item_name: string }[]; needs: Record<string, unknown>[] };
+  return (await res.json()) as { grants: { item_name: string; status?: string }[]; needs: Record<string, unknown>[] };
 }
 
 test("INF-49: a user-only path with only the app credential is refused before dialing: user_connect_required, no send, approval handed back, one inbox need", async () => {
@@ -783,7 +787,9 @@ test("INF-49: connecting from the inbox card fulfils the need and grants the age
   });
   try {
     const me = { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" };
-    await approve(ctx, "SPOTIFY_SECRET", "item_standing");
+    // Collect default: one-call prompt, not standing. BOTP-14: Also-allow on Connect must
+    // stand the source item so a second /v1/me does not open Inbox.
+    await approve(ctx, "SPOTIFY_SECRET", "prompt");
     const refused = await call(ctx, me);
     assert.equal(refused.payload.status, "user_connect_required", JSON.stringify(refused.payload));
     const needId = String(refused.payload.need_id);
@@ -811,7 +817,10 @@ test("INF-49: connecting from the inbox card fulfils the need and grants the age
     const refresh = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "SPOTIFY_REFRESH");
     assert.ok(refresh);
     assert.equal(need?.itemId, refresh.id, "the need points at the stored refresh item");
+    const secret = (await ctx.kernel.listItems(ctx.orgId, "staging")).find((i) => i.name === "SPOTIFY_SECRET");
+    assert.ok(secret);
     assert.equal((await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, refresh.id))?.kind, "item_standing");
+    assert.equal((await ctx.kernel.store.findItemPolicy(ctx.orgId, ctx.model.id, secret.id))?.kind, "item_standing", "Also-allow stands the credential the agent names");
     assert.deepEqual((await inboxOf(ctx)).needs, [], "the card is gone");
     const audit = await ctx.kernel.store.listAudit(ctx.orgId, 100);
     assert.ok(audit.some((a) => a.action === "need_fulfilled" && a.itemName === "SPOTIFY_REFRESH" && a.clientId === ctx.model.id));
@@ -824,7 +833,17 @@ test("INF-49: connecting from the inbox card fulfils the need and grants the age
     assert.deepEqual((await inboxOf(ctx)).needs, []);
     assert.equal((await inboxOf(ctx)).grants.filter((g) => g.item_name === "SPOTIFY_REFRESH").length, 0, "no pending refresh approval");
     const again = await call(ctx, me);
+    assert.equal(again.payload.origin_status, 200, JSON.stringify(again.payload));
     assert.equal(again.payload.user_token, true, "the cached user token serves the next call");
+    assert.equal(again.payload.status, 200);
+    assert.deepEqual((await inboxOf(ctx)).grants.filter((g) => g.status === "pending"), [], "no second Inbox card");
+    const standingSecret = (await ctx.kernel.store.listGrants(ctx.orgId)).find(
+      (g) => g.itemId === secret.id && g.policy === "item_standing" && g.status === "active",
+    );
+    assert.ok(standingSecret, "source standing grant is active");
+    assert.equal(standingSecret.hosts, null, "Connect Also-allow is not locked to the token host");
+    assert.equal(standingSecret.methods, null);
+    assert.equal(standingSecret.pathPrefixes, null);
     assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 2, "one code exchange and one refresh");
     const bodies = JSON.stringify([refused.payload, retry.payload, again.payload]);
     assert.doesNotMatch(bodies, new RegExp(CLIENT_SECRET));
@@ -1015,7 +1034,7 @@ test("a rotated refresh token replaces the stored <ITEM>_REFRESH value in place 
   }
 });
 
-test("user-token path: a cached token needs no refresh approval; without one the result is the pending <ITEM>_REFRESH grant", async () => {
+test("user-token path: a covering grant on the app credential may mint without a refresh-item grant; a direct token call still needs one", async () => {
   const ctx = await setup(async (url, init) => {
     const auth = new Headers(init?.headers).get("authorization") ?? "";
     if (url.includes("accounts.spotify.com/api/token")) {
@@ -1040,32 +1059,25 @@ test("user-token path: a cached token needs no refresh approval; without one the
       inject: "refresh",
     });
     const me = { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" };
-    // No approval on the refresh item: the model is told to get one, not sent an app token that 401s.
     const secretGrant = await approve(ctx);
-    const halted = await call(ctx, me);
-    assert.equal(halted.payload.status, "pending", JSON.stringify(halted.payload));
-    assert.equal(halted.payload.item_name, "SPOTIFY_REFRESH");
-    assert.match(String(halted.payload.hint), /SPOTIFY_REFRESH/);
-    assert.equal(typeof halted.payload.approval_code, "string");
-    assert.equal(ctx.hits.length, 0, "nothing was sent");
-    assert.equal((await ctx.kernel.store.getGrant(secretGrant))?.status, "active", "the client secret's one-call approval was not spent: nothing left the process");
-    const inbox = await (await fetch(`${ctx.base}/api/inbox`, { headers: ctx.op })).json() as { grants: { item_name: string }[] };
-    assert.ok(inbox.grants.some((g) => g.item_name === "SPOTIFY_REFRESH"), "the operator sees the refresh approval request");
-
-    // Approve the refresh item once: the first call exchanges it, the second reuses the cached
-    // access token and does not need (or spend) another refresh approval.
-    const pendingRefresh = (await ctx.kernel.store.listGrants(ctx.orgId)).find((g) => g.status === "pending");
-    assert.ok(pendingRefresh);
-    await ctx.kernel.approveGrant({ orgId: ctx.orgId, grantId: pendingRefresh.id, policy: "prompt", role: "owner", actor: "user_owner" });
     const first = await call(ctx, me);
     assert.equal(first.payload.origin_status, 200, JSON.stringify(first.payload));
     assert.equal(first.payload.user_token, true);
-    assert.equal((await ctx.kernel.store.getGrant(pendingRefresh.id))?.status, "consumed");
-    await approve(ctx);
+    assert.equal((await ctx.kernel.store.getGrant(secretGrant))?.status, "consumed");
+    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "one exchange using the refresh item without its own grant");
+    assert.equal((await inboxOf(ctx)).grants.filter((g) => g.item_name === "SPOTIFY_REFRESH").length, 0, "user-path does not plant a refresh Inbox card");
+
     const second = await call(ctx, me);
-    assert.equal(second.payload.origin_status, 200, JSON.stringify(second.payload));
-    assert.equal(second.payload.user_token, true, "the cached user token served the call without a refresh approval");
-    assert.equal(ctx.hits.filter((h) => h.url.includes("/api/token")).length, 1, "one exchange");
+    assert.equal(second.payload.status, "pending", JSON.stringify(second.payload));
+    assert.equal(second.payload.item_name, "SPOTIFY_SECRET", "the next API call needs the named credential, not the token mint");
+
+    const tokenHalt = await call(ctx, {
+      item_name: "SPOTIFY_REFRESH",
+      method: "POST",
+      path: "https://accounts.spotify.com/api/token",
+    });
+    assert.equal(tokenHalt.payload.status, "pending", JSON.stringify(tokenHalt.payload));
+    assert.equal(tokenHalt.payload.item_name, "SPOTIFY_REFRESH", "a direct token-endpoint call still needs a refresh-item grant");
   } finally {
     await teardown(ctx);
   }
@@ -1102,10 +1114,10 @@ test("a token endpoint that answers 2xx with an unusable body is audited inject,
     const refreshGrant = await approve(ctx, "SPOTIFY_REFRESH");
     const me = await call(ctx, { item_name: "SPOTIFY_SECRET", method: "GET", path: "https://api.spotify.com/v1/me" });
     assert.match(String(me.payload.error), /non-JSON body/);
-    assert.equal((await ctx.kernel.store.getGrant(refreshGrant))?.status, "consumed");
+    assert.equal((await ctx.kernel.store.getGrant(refreshGrant))?.status, "active", "user-path mint does not spend a refresh-item grant");
     audit = await ctx.kernel.store.listAudit(ctx.orgId, 50);
     assert.equal(audit.filter((a) => a.action === "inject_failed").length, 0);
-    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "SPOTIFY_REFRESH").length, 1);
+    assert.equal(audit.filter((a) => a.action === "inject" && a.itemName === "SPOTIFY_REFRESH").length, 1, "the refresh value still left the process");
     assert.doesNotMatch(JSON.stringify({ search, me, audit }), new RegExp(CLIENT_SECRET));
   } finally {
     await teardown(ctx);

@@ -78,7 +78,11 @@ const faq = [
   },
   {
     q: "What about staging vs production?",
-    a: "Every credential carries an environment tag, and every agent is bound to one environment. An agent bound to staging cannot use production credentials. Separately, staging.botpasses.com is the pre-release copy of the service with its own accounts.",
+    a: "Every credential carries an environment tag, and every agent is bound to one environment. An agent bound to staging cannot use production credentials. Separately, staging.botpasses.com is the pre-release copy of the service with its own accounts. The laptop hosted kernel is npm run hosted:dev, not a Fly deploy.",
+  },
+  {
+    q: "Can I run Botpasses on my laptop?",
+    a: "Yes. Two paths. npm run hosted:dev boots the hosted console, OTP, and MCP on 127.0.0.1:8788 with sqlite. A local CLI vault uses VAULT_HOME and vault mcp with no account. Self-host on any Postgres 16 is on the Self-hosting page.",
   },
   {
     q: "Can Botpasses staff read my keys?",
@@ -281,8 +285,9 @@ Stored         ••••4k2p</code></pre>
       <div class="card">
         <h3>Free while in beta</h3>
         <p>
-          The hosted service at botpasses.com is free during the beta. Or run it yourself on Fly, Neon, and
-          KMS: <a href="/docs/self-hosting">Self-hosting</a>.
+          The hosted service at botpasses.com is free during the beta. Run the same kernel on a laptop
+          with <code>npm run hosted:dev</code>, or self-host on any Postgres 16 and an https origin you
+          control: <a href="/docs/self-hosting">Self-hosting</a>.
         </p>
       </div>
     </div>

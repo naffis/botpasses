@@ -27,7 +27,7 @@ Ask for the task in plain language: "check my Stripe balance" or "get my Spotify
 - If the credential needs your approval, Claude shows an 8-digit code and asks you to approve in the [console](/console) Inbox or with the code. Approve, then tell Claude to retry (or it retries on its own).
 - If nothing is stored for that API, Claude gives you a `collect_url`. Open it, sign in, and type the key on botpasses.com. Do not paste it into the chat.
 
-After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so Claude walks Collect and Connect. You type secrets on botpasses.com, never in chat.
+After the connector is on, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so Claude walks Collect and Connect. You type secrets on the Botpasses plane you connected, never in chat. For a laptop CLI vault, use the [local prompt](/docs/prompts#local). The laptop hosted kernel is `npm run hosted:dev` at `http://127.0.0.1:8788/mcp`; provider apps get `http://127.0.0.1:8788/connect/callback`. See [Install](/docs/install).
 
 ## What Claude can and cannot do
 

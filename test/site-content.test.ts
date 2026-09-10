@@ -94,6 +94,9 @@ test("homepage sells the product and links the right places", () => {
   assert.match(home, /Who cannot/);
   assert.match(home, /github\.com\/naffis\/botpasses/);
   assert.match(home, /Free while in beta/);
+  assert.match(text(home), /npm run hosted:dev/);
+  assert.doesNotMatch(text(home), /run it yourself on Fly, Neon, and KMS/);
+  assert.match(home, /Can I run Botpasses on my laptop\?/);
   assert.match(home, /Botpasses is a grant-vault for AI agents/);
   assert.match(home, /The model does not get the key/);
   assert.doesNotMatch(home, /The model never sees the value/);
@@ -169,6 +172,12 @@ test("docs pages keep their tested content", () => {
   const cursor = text(page("docs/connect/cursor.html"));
   assert.match(cursor, /"url": "https:\/\/botpasses\.com\/mcp"/);
   assert.match(cursor, /"args": \["vault", "mcp"\]/);
+  assert.match(cursor, /npm run hosted:dev/);
+  assert.match(cursor, /http:\/\/127\.0\.0\.1:8788\/mcp/);
+  assert.match(text(page("docs/connect/claude.html")), /npm run hosted:dev/);
+  assert.match(text(page("docs/connect/chatgpt.html")), /npm run hosted:dev/);
+  assert.match(claudeCode, /npm run hosted:dev/);
+  assert.match(text(page("docs/connect/grok.html")), /cannot reach npm run hosted:dev/);
   const oauthHowTo = text(page("docs/how-to/use-an-oauth-client-secret.html"));
   assert.match(oauthHowTo, /https:\/\/botpasses\.com\/connect\/callback/);
   assert.match(oauthHowTo, /https:\/\/staging\.botpasses\.com\/connect\/callback/);
@@ -196,6 +205,9 @@ test("docs pages keep their tested content", () => {
   assert.match(guided, /setup/);
   assert.match(guided, /Always allow this agent to use this credential/);
   assert.match(guided, /https:\/\/botpasses\.com\/connect\/callback/);
+  assert.match(guided, /https:\/\/staging\.botpasses\.com\/connect\/callback/);
+  assert.match(guided, /http:\/\/127\.0\.0\.1:8788\/connect\/callback/);
+  assert.match(guided, /http:\/\/127\.0\.0\.1:8888\/callback/);
   assert.match(guided, /There is no get_secret/);
   assert.match(guided, /I will type secrets on Botpasses only/);
   const install = text(page("docs/install.html"));
@@ -226,12 +238,25 @@ test("docs pages keep their tested content", () => {
     assert.match(httpApi, new RegExp(route.replace(/\//g, "\\/")), route);
   }
   const trouble = page("docs/troubleshooting.html");
-  for (const id of ["host_mismatch", "mfa_required", "the-connect-card-keeps-appearing", "409-on-an-approval-code", "need_item-and-collect_url", "429-rate-limit"]) {
+  for (const id of [
+    "host_mismatch",
+    "mfa_required",
+    "the-connect-card-keeps-appearing",
+    "409-on-an-approval-code",
+    "need_item-and-collect_url",
+    "429-rate-limit",
+    "hosteddev-connect-goes-to-port-8888",
+    "sqlite_busy-on-hosteddev",
+    "no-email-code-on-hosteddev",
+  ]) {
     assert.match(trouble, new RegExp(`id="${id}"`), id);
   }
   const faq = text(page("docs/faq.html"));
   assert.match(faq, /The model does not get the key/);
   assert.doesNotMatch(faq, /The model never sees the value/);
+  assert.match(faq, /Can I run Botpasses on my laptop\?/);
+  assert.match(faq, /npm run hosted:dev/);
+  assert.match(faq, /http:\/\/127\.0\.0\.1:8788\/connect\/callback/);
   const index = page("docs.html");
   assert.match(index, /MCP tools/);
   assert.match(index, /HTTP API/);
