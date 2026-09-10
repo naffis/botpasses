@@ -1,6 +1,7 @@
 import { promptById, type BootstrapPromptId } from "../lib/bootstrap-prompts.ts";
 
 const COPIED_MS = 2000;
+const CLIPBOARD_MS = 800;
 
 function isPromptId(value: string): value is BootstrapPromptId {
   switch (value) {
@@ -20,7 +21,12 @@ function isPromptId(value: string): value is BootstrapPromptId {
 async function writeClipboard(text: string): Promise<boolean> {
   if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") return false;
   try {
-    await navigator.clipboard.writeText(text);
+    await Promise.race([
+      navigator.clipboard.writeText(text),
+      new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error("clipboard timeout")), CLIPBOARD_MS);
+      }),
+    ]);
     return true;
   } catch {
     return false;
@@ -35,6 +41,7 @@ function flashLabel(btn: HTMLButtonElement, idle: string, next: string): void {
 }
 
 async function copyAndLabel(btn: HTMLButtonElement, text: string, idle: string): Promise<void> {
+  btn.textContent = "Copying";
   const ok = await writeClipboard(text);
   flashLabel(btn, idle, ok ? "Copied" : "Copy failed");
 }
@@ -66,6 +73,7 @@ export function bindCopyPres(root: ParentNode = document): void {
     btn.className = "btn copy-pre-btn";
     btn.textContent = "Copy";
     btn.setAttribute("aria-label", "Copy code");
+    btn.setAttribute("aria-live", "polite");
     parent.insertBefore(wrap, pre);
     wrap.append(pre, btn);
     btn.addEventListener("click", () => {

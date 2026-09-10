@@ -12,6 +12,7 @@ const { promptId, label = "Copy prompt", primary = false } = Astro.props;
   class:list={["btn", { "btn-primary": primary }]}
   data-copy-prompt={promptId}
   data-testid={`copy-prompt-${promptId}`}
+  aria-live="polite"
 >
   {label}
 </button>

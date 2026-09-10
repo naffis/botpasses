@@ -1,7 +1,7 @@
 ---
 title: Copy-paste prompts
 label: Copy-paste prompts
-description: Paste-ready prompts so an agent sets up Botpasses: hosted MCP, a local laptop vault, or a self-hosted plane. Type secrets on Botpasses, never in chat.
+description: "Paste-ready prompts so an agent sets up Botpasses: hosted MCP, a local laptop vault, or a self-hosted plane. Type secrets on Botpasses, never in chat."
 section: start
 order: 3
 ---

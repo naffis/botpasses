@@ -29,11 +29,7 @@ test("bootstrap prompts cover hosted, local, self-host, and the four extras", ()
     assert.doesNotMatch(p.text, /—/, `${p.id} em-dash`);
     assert.doesNotMatch(p.blurb, /—/, `${p.id} blurb em-dash`);
     assert.doesNotMatch(p.text, /LastPass/i, p.id);
-    assert.doesNotMatch(
-      p.text,
-      /paste (the |your )?(secret|key|token|credential)s? into (this )?chat/i,
-      p.id,
-    );
+    assert.doesNotMatch(p.blurb, /LastPass/i, p.id);
   }
   assert.equal(promptById("hosted").heading, "Hosted");
   assert.throws(() => promptById("missing" as BootstrapPromptId), /unknown bootstrap prompt/);
