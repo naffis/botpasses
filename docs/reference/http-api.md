@@ -90,7 +90,7 @@ Item names: `[A-Z][A-Z0-9_]{0,127}`. Duplicate name is 409. Empty value is 400.
 | POST | `/api/clients/:id/environment` | operator | `{ environment }`. Moves an agent (including OAuth-issued ones) to another vault environment. 409 if revoked |
 | HEAD | `/console` | none | Same headers as GET |
 
-Policies: `prompt` (one call: spent by any origin answer or any failure after the credential left the process; handed back only when the send never left, such as a host mismatch or a DNS, connect, or TLS failure), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). Operators who expect retries approve with `max_calls` or `session`. DCR `redirect_uris` may be https, IP-literal loopback http (`127.0.0.1`, `[::1]`), or a desktop app scheme (`cursor://`, `grok://`, `grokbot://`). `http://localhost` is refused.
+Policies: `prompt` (one call: spent by any origin answer or any failure after the credential left the process; handed back only when the send never left, such as a host mismatch or a DNS, connect, or TLS failure), `session` (TTL 8h), `item_standing`, `folder_standing` (owner + `confirm_name`). Operators who expect retries approve with `max_calls` or `session`. DCR `redirect_uris` may be https, RFC 8252 loopback http (`127.0.0.1`, `[::1]`, `localhost`), or a desktop app scheme (`cursor://`, `grok://`, `grokbot://`).
 
 ## Access snapshot and ledger
 
@@ -118,7 +118,7 @@ Mounted when `VAULT_OIDC_PRIVATE_JWK` is set. Engine: `oidc-provider` 9. [src/ho
 | `/oauth/authorize` | Authorization code + PKCE S256. Consent binds the operator session's org into the grant |
 | `/oauth/token` | JWT access token, `aud=${origin}/mcp`, 600s, claim `org_id`, refresh rotation. A refresh for a revoked vault client is `invalid_grant` and never reactivates it |
 | `/oauth/jwks` | Public RS256. Two keys while `VAULT_OIDC_PREVIOUS_JWK` is set; tokens are signed with the current one ([rotation](../ops/oidc-key-rotation.md)) |
-| `/oauth/register` | DCR. HTTPS redirect_uris, IP-literal loopback http, or a named desktop scheme (`cursor://`, `grok://`, `grokbot://`). No `http://localhost`, `javascript:`, `data:`, or `file:`. 20 / IP / hour |
+| `/oauth/register` | DCR. HTTPS redirect_uris, RFC 8252 loopback http (`127.0.0.1`, `[::1]`, `localhost`), or a named desktop scheme (`cursor://`, `grok://`, `grokbot://`). No `javascript:` / `data:` / `file:`. 20 / IP / hour |
 | `/oauth/device/auth` | RFC 8628. `POST /device` user-code attempts: 10 / 15 min per IP and per OP session |
 | `/oauth/revoke` | RFC 7009. A refresh token revokes its grant and marks every ledger row issued under it (`access_events.grant_id`); a JWT access token that verifies and belongs to the calling client is denylisted by `jti`. Audit `token_revoked`. Unknown tokens are 200 |
 

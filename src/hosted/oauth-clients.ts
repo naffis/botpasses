@@ -27,7 +27,17 @@ export const DESKTOP_REDIRECT_SCHEMES: ReadonlySet<string> = new Set([
   "xai-grok:",
 ]);
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]"]);
+/**
+ * RFC 8252 section 7.3 loopback hostnames. `localhost` is required: several MCP
+ * hosts (Cursor among them) register `http://localhost:<port>/…` in the same
+ * DCR set as `127.0.0.1`, a desktop scheme, and an https cloud callback. One
+ * rejected URI fails the whole registration. SSRF still refuses localhost as a
+ * connect target; this check is only for the post-consent browser redirect.
+ */
+export function isLoopbackHttpHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
 
 export function isDesktopRedirect(uri: string): boolean {
   try {
@@ -37,10 +47,20 @@ export function isDesktopRedirect(uri: string): boolean {
   }
 }
 
+export function isLoopbackHttpRedirect(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.username || parsed.password) return false;
+    return parsed.protocol === "http:" && isLoopbackHttpHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Accepts https, loopback http on an IP literal (`http://127.0.0.1:<port>`,
- * `http://[::1]:<port>`, RFC 8252 section 7.3), and the named desktop schemes.
- * `http://localhost` is refused: it can resolve off-box.
+ * Accepts https, RFC 8252 loopback http (`127.0.0.1`, `[::1]`, `localhost`,
+ * any port), and the named desktop schemes. `http` to any other host is
+ * refused. `javascript:`, `data:`, `file:`, and `vbscript:` are refused.
  */
 export function assertRedirectUri(uri: string): void {
   let parsed: URL;
@@ -54,9 +74,11 @@ export function assertRedirectUri(uri: string): void {
   }
   if (parsed.username || parsed.password) throw new Error("redirect_uri must not carry credentials");
   if (parsed.protocol === "https:") return;
-  if (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) return;
+  if (parsed.protocol === "http:" && isLoopbackHttpHost(parsed.hostname)) return;
   if (DESKTOP_REDIRECT_SCHEMES.has(parsed.protocol)) return;
-  throw new Error("redirect_uri must be https, loopback http (127.0.0.1 or [::1]), or a known desktop app scheme");
+  throw new Error(
+    "redirect_uri must be https, loopback http (127.0.0.1, [::1], or localhost), or a known desktop app scheme",
+  );
 }
 
 /** Scheme + reason only. The full URI never goes in a log line. */
@@ -112,7 +134,12 @@ export function clientMetadataValidator(
         throw new oidcErrors.InvalidClientMetadata(message);
       }
     }
-    if (uris.some((uri) => typeof uri === "string" && isDesktopRedirect(uri))) {
+    if (
+      uris.some(
+        (uri) => typeof uri === "string" && (isDesktopRedirect(uri) || isLoopbackHttpRedirect(uri)),
+      )
+    ) {
+      // Native even when the client omitted application_type (MCP hosts often do).
       metadata.application_type = "native";
     }
   }

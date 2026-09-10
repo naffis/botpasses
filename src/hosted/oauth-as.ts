@@ -40,6 +40,8 @@ export {
   assertRedirectUri,
   DESKTOP_REDIRECT_SCHEMES,
   isDesktopRedirect,
+  isLoopbackHttpHost,
+  isLoopbackHttpRedirect,
   persistIssuedAccess,
   persistIssuedRefresh,
   persistRevokedToken,

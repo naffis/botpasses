@@ -118,7 +118,7 @@ PKCE S256 is required. Clients are public (`token_endpoint_auth_method` `none`; 
 | `/oauth/authorize` | Authorization code. The operator signs in and consents in the browser; the consent is bound to the organisation their session is acting in |
 | `/oauth/token` | Code or refresh token to JWT. A refresh for an agent that was revoked in the console is `invalid_grant`; only a new consent brings the agent back |
 | `/oauth/jwks` | RS256 public keys. Two are listed while a key rotation is in progress; new tokens are signed with the first |
-| `/oauth/register` | Dynamic client registration. `redirect_uris` may be `https`, IP-literal loopback `http` (`127.0.0.1`, `[::1]`), or a desktop scheme such as `cursor://` or `grokbot://`. `http://localhost`, `javascript:`, `data:`, and `file:` are rejected. 20 per IP per hour |
+| `/oauth/register` | Dynamic client registration. `redirect_uris` may be `https`, RFC 8252 loopback `http` (`127.0.0.1`, `[::1]`, `localhost`), or a desktop scheme such as `cursor://` or `grokbot://`. `javascript:`, `data:`, and `file:` are rejected. 20 per IP per hour |
 | `/oauth/device/auth` | RFC 8628 device code. The operator finishes at `/device` (10 code attempts per 15 minutes per IP) |
 | `/oauth/revoke` | RFC 7009. Revoking a refresh token also revokes every access token issued with it; a JWT access token is revoked by its `jti`. Marked in the Access ledger |
 | `/consent`, `/device` | HTML pages for the two flows above. The consent page's script posts `{ "uid", "decision" }` with `X-CSRF-Token` and `Accept: application/json` and gets `200 { "location" }` to navigate to; a caller with the CSRF header and no such `Accept` gets a 303 to the same resume URL. A form submit without the header (scripts off) is 403 |

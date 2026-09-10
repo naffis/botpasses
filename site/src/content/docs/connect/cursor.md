@@ -26,7 +26,7 @@ Then:
 
 1. Open **Cursor Settings**, then **MCP**. The `botpasses` server appears with a **Needs login** state.
 2. Choose it. Cursor discovers botpasses.com as the OAuth authorization server, registers itself, and opens your browser.
-3. Sign in on botpasses.com with your email code and authenticator, then allow the connection. Cursor's redirect back uses its `cursor://` scheme or a loopback address; both are accepted.
+3. Sign in on botpasses.com with your email code and authenticator, then allow the connection. Cursor registers `cursor://anysphere.cursor-mcp/oauth/callback`, `http://localhost:8787/callback`, and (for cloud agents) `https://www.cursor.com/agents/mcp/oauth/callback`. All three are accepted.
 
 The server shows its tools once connected. Do not paste an operator token or any key into Cursor.
 

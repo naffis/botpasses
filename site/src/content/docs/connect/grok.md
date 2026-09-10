@@ -37,7 +37,7 @@ Do not paste an operator session, an OAuth client secret, or any API key into Gr
 
 ## OAuth connect cards
 
-Grok Bot in the cloud cannot finish OAuth. Its callback is typically `http://localhost` (refused) or `grokbot://` (accepted for a native app, but a cloud VM cannot complete a local redirect). Put the model token on the connector and skip the card. If a card still appears after the header is set, see [Troubleshooting](/docs/troubleshooting#the-connect-card-keeps-appearing).
+Grok Bot in the cloud cannot finish OAuth. Registration may accept `http://localhost` or `grokbot://`, but a cloud VM cannot complete a local redirect. Put the model token on the connector and skip the card. If a card still appears after the header is set, see [Troubleshooting](/docs/troubleshooting#the-connect-card-keeps-appearing).
 
 ## Spotify and other OAuth apps
 
