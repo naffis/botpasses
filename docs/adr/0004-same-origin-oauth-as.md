@@ -15,7 +15,7 @@ Locks: PKCE S256 only; `aud` = `${origin}/mcp`; access JWT TTL 600s; `features.r
 
 Amended 2026-09-10 (BOTP-12): `http://localhost` is accepted again for DCR. S17 had refused it because the name can resolve off-box, but MCP hosts register `http://localhost:<port>/callback` in the same DCR set as a desktop scheme and an https cloud callback. One rejected URI failed the whole registration (`assertRedirectUri` in `oauth-clients.ts`). SSRF still refuses localhost as a connect target.
 
-Amended 2026-09-10: a 401 on GET or HEAD `/mcp` does not send `WWW-Authenticate` / PRM. That status is the SSE listen probe (S16). Protected MCP operations are POST; unauthenticated `tools/call` still 401s with `resource_metadata`. A rejected DCR `redirect_uri` logs `dcr_redirect_rejected` with scheme and reason only.
+Amended 2026-09-10 (BOTP-13): a 401 on GET or HEAD `/mcp` (the SSE listen) sends the same Bearer `WWW-Authenticate` with `resource_metadata` as `POST /mcp` `tools/call`. Streamable HTTP hosts open that stream during connect; omitting the challenge left needsAuth with no auth URL (Authorize → Retry, no browser). Handshake methods (`initialize`, `ping`, `tools/list`) may still answer without a principal so a preconfigured `avm_` token does not force a connect card. A rejected DCR `redirect_uri` logs `dcr_redirect_rejected` with scheme and reason only.
 
 Amended 2026-09-04: the vault client is `(org_id, oauth_client_id)`. The access JWT `sub` (the operator account) selects the org before the client lookup, because hosted MCP clients register one dynamic client id per server URL and reuse it for every user. Clients are created in the plane's default environment and named after `client_name`.
 

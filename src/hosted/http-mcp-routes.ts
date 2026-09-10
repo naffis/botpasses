@@ -25,7 +25,9 @@ export type McpRouteOpts = {
 
 /**
  * Handshake methods answer without a principal so hosts with only an `avm_` header see no
- * connect card. Everything else needs a model principal; operator cookies become the stdio shim.
+ * connect card. GET /mcp (SSE) and tools/call still 401 with WWW-Authenticate so a host
+ * that opened the stream can start OAuth. Everything else needs a model principal;
+ * operator cookies become the stdio shim.
  */
 export async function handleMcpPost(
   req: IncomingMessage,

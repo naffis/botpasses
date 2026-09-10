@@ -103,20 +103,19 @@ export function mcpWwwAuthenticate(publicUrl: string, realm: string): string {
 }
 
 /**
- * A 401 on GET/HEAD `/mcp` is the SSE listen probe (S16). Attaching PRM there starts
- * OAuth DCR for clients that only opened a stream. Protected MCP operations are POST.
- * Non-MCP 401s still get a Bearer realm.
+ * Every `/mcp` 401, including GET/HEAD SSE listen, carries PRM. Streamable HTTP hosts
+ * open the event stream after `initialize`; without `resource_metadata` they set
+ * needsAuth and show Authorize → Retry with no browser (BOTP-13). Handshake POST
+ * methods may still answer without a principal so a preconfigured `avm_` token does
+ * not force a connect card. Non-MCP 401s still get a Bearer realm.
  */
 export function wwwAuthenticateFor401(
-  method: string,
+  _method: string,
   path: string,
   publicUrl: string,
   realm: string,
-): string | undefined {
-  const mcp = path === "/mcp" || path.startsWith("/mcp");
-  const verb = method.toUpperCase();
-  if (mcp && (verb === "GET" || verb === "HEAD")) return undefined;
-  if (mcp) return mcpWwwAuthenticate(publicUrl, realm);
+): string {
+  if (path === "/mcp" || path.startsWith("/mcp")) return mcpWwwAuthenticate(publicUrl, realm);
   return `Bearer realm="${realm}"`;
 }
 

@@ -40,14 +40,21 @@ test("PRM names MCP resource and header bearer", () => {
   assert.deepEqual(doc.bearer_methods_supported, ["header"]);
 });
 
-test("GET /mcp 401 does not advertise OAuth; POST /mcp 401 still does", () => {
+test("GET/HEAD /mcp 401 advertise the same PRM as POST /mcp", () => {
   const realm = "botpasses";
-  assert.equal(wwwAuthenticateFor401("GET", "/mcp", ORIGIN, realm), undefined);
-  assert.equal(wwwAuthenticateFor401("HEAD", "/mcp", ORIGIN, realm), undefined);
-  assert.equal(wwwAuthenticateFor401("get", "/mcp/tools", ORIGIN, realm), undefined);
-  const post = wwwAuthenticateFor401("POST", "/mcp", ORIGIN, realm);
-  assert.ok(post);
-  assert.match(post, /resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp"/);
+  const expected =
+    /resource_metadata="https:\/\/staging\.botpasses\.com\/\.well-known\/oauth-protected-resource\/mcp"/;
+  for (const [method, path] of [
+    ["GET", "/mcp"],
+    ["HEAD", "/mcp"],
+    ["get", "/mcp/tools"],
+    ["POST", "/mcp"],
+  ] as const) {
+    const challenge = wwwAuthenticateFor401(method, path, ORIGIN, realm);
+    assert.match(challenge, /Bearer/);
+    assert.match(challenge, /realm="botpasses"/);
+    assert.match(challenge, expected, `${method} ${path}`);
+  }
   const api = wwwAuthenticateFor401("GET", "/api/items", ORIGIN, realm);
   assert.equal(api, `Bearer realm="${realm}"`);
 });
