@@ -1103,12 +1103,16 @@ test("operator session JWT path can call MCP stdio-style on the plane default en
   }
 });
 
-test("unauthenticated handshake succeeds; tools/call is 401 with PRM", async () => {
+test("unauthenticated handshake succeeds; GET /mcp and tools/call 401 with PRM", async () => {
   const ctx = await setup();
+  const prm =
+    /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/;
   try {
     const sse = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
     assert.equal(sse.status, 401, "GET /mcp SSE needs a model or operator principal (S16)");
-    assert.equal(sse.headers.get("www-authenticate"), null, "SSE 401 must not start OAuth DCR");
+    assert.match(sse.headers.get("www-authenticate") ?? "", /Bearer/);
+    assert.match(sse.headers.get("www-authenticate") ?? "", /realm="botpasses"/);
+    assert.match(sse.headers.get("www-authenticate") ?? "", prm, "SSE 401 must start OAuth (BOTP-13)");
     const tools = await fetch(`${ctx.base}/mcp/tools`);
     assert.equal(tools.status, 200);
     const init = await fetch(`${ctx.base}/mcp`, {
@@ -1134,10 +1138,8 @@ test("unauthenticated handshake succeeds; tools/call is 401 with PRM", async () 
       }),
     });
     assert.equal(call.status, 401);
-    assert.match(
-      call.headers.get("www-authenticate") ?? "",
-      /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/,
-    );
+    assert.match(call.headers.get("www-authenticate") ?? "", prm);
+    assert.equal(call.headers.get("www-authenticate"), sse.headers.get("www-authenticate"));
   } finally {
     await ctx.http.close();
     await ctx.store.close();

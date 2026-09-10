@@ -2,7 +2,7 @@
 
 Canonical hosted and local HTTP routes. Public copy: [site HTTP API](../../site/src/content/docs/reference/http-api.md). Router: [src/hosted/http.ts](../../src/hosted/http.ts). Access: [src/hosted/http-access-routes.ts](../../src/hosted/http-access-routes.ts). Auth pages/API: [src/hosted/http-auth-routes.ts](../../src/hosted/http-auth-routes.ts). Local loopback: [src/server.ts](../../src/server.ts).
 
-JSON bodies are capped at 128 KiB and must be sent as `Content-Type: application/json` (any other type is `415 { error: "Content-Type must be application/json" }`; a POST with no body and no type reads as `{}`). Only `POST /approve` and `POST /consent`, which back HTML forms, also accept `application/x-www-form-urlencoded`. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api` and `POST /mcp` `tools/call` is 401. Handshake methods (`initialize`, `ping`, `tools/list`) succeed without a Bearer so Grok does not show a connect card. A valid `avm_…` is sufficient for all MCP methods.
+JSON bodies are capped at 128 KiB and must be sent as `Content-Type: application/json` (any other type is `415 { error: "Content-Type must be application/json" }`; a POST with no body and no type reads as `{}`). Only `POST /approve` and `POST /consent`, which back HTML forms, also accept `application/x-www-form-urlencoded`. Hosted operator mutations need a session cookie plus `X-CSRF-Token`. Invalid Bearer on public HTML is ignored (200). Invalid Bearer on `/api`, `GET /mcp`, and `POST /mcp` `tools/call` is 401 with `WWW-Authenticate`. Handshake methods (`initialize`, `ping`, `tools/list`) succeed without a Bearer so Grok does not show a connect card. A valid `avm_…` is sufficient for all MCP methods.
 
 ## Principals
 
@@ -107,7 +107,7 @@ Policies: `prompt` (one call: spent by any origin answer or any failure after th
 
 ## MCP HTTP
 
-`POST /mcp` JSON-RPC (`http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`; `http.request` is an alias for one release). See [mcp.md](./mcp.md). `GET /mcp` is an SSE keepalive stream and requires a model or operator principal (401 otherwise, without `WWW-Authenticate`). `GET /mcp/tools` returns the tool list. There is no `get_secret`.
+`POST /mcp` JSON-RPC (`http_request`, `find_items`, `list_items`, `request_grant`, `list_grants`; `http.request` is an alias for one release). See [mcp.md](./mcp.md). `GET /mcp` is an SSE keepalive stream and requires a model or operator principal (401 with `WWW-Authenticate` `resource_metadata` otherwise, so Streamable HTTP hosts can start OAuth). `GET /mcp/tools` returns the tool list. There is no `get_secret`.
 
 ## OAuth (botpasses.com is the AS)
 

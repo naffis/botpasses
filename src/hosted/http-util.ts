@@ -94,13 +94,12 @@ export function sendError(res: ServerResponse, err: unknown, path = ""): void {
       ...corsHeaders(res),
     };
     if (err.status === 401) {
-      const challenge = wwwAuthenticateFor401(
+      headers["www-authenticate"] = wwwAuthenticateFor401(
         corsMethod(res),
         routePath,
         corsPublicUrl(res),
         WWW_AUTHENTICATE_REALM,
       );
-      if (challenge) headers["www-authenticate"] = challenge;
     }
     res.writeHead(err.status, headers);
     res.end(JSON.stringify({ error: err.message, ...err.extra }));

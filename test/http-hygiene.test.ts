@@ -275,14 +275,16 @@ test("cookie-authenticated POST /mcp requires a valid CSRF token and a same-orig
 test("GET /mcp needs a model or operator principal; trusted tokens are refused (S16)", async () => {
   const ctx = await setup();
   try {
+    const prm =
+      /resource_metadata="http:\/\/127\.0\.0\.1:8788\/\.well-known\/oauth-protected-resource\/mcp"/;
     const anon = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream" } });
     assert.equal(anon.status, 401);
-    assert.equal(anon.headers.get("www-authenticate"), null, "SSE 401 must not start OAuth DCR");
+    assert.match(anon.headers.get("www-authenticate") ?? "", prm, "SSE 401 must start OAuth (BOTP-13)");
     const badGet = await fetch(`${ctx.base}/mcp`, {
       headers: { accept: "text/event-stream", authorization: "Bearer avm_not-a-real-token" },
     });
     assert.equal(badGet.status, 401);
-    assert.equal(badGet.headers.get("www-authenticate"), null, "invalid bearer on GET /mcp must not start OAuth DCR");
+    assert.match(badGet.headers.get("www-authenticate") ?? "", prm, "invalid bearer on GET /mcp still challenges");
     const trusted = await ctx.kernel.createTrustedClient({ orgId: ctx.orgId, name: "rt", environment: "staging" });
     const avt = await fetch(`${ctx.base}/mcp`, { headers: { accept: "text/event-stream", authorization: `Bearer ${trusted.plaintext}` } });
     assert.equal(avt.status, 403);
