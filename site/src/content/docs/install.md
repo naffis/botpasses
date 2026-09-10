@@ -37,6 +37,14 @@ Nothing to install. [Create an account](/sign-up) on botpasses.com, then follow 
 
 The hosted service is free while in beta. `staging.botpasses.com` is the pre-release plane. Accounts and data are separate between the two.
 
+To run the same hosted kernel on this laptop (loopback, sqlite, OTP printed in the terminal):
+
+```bash
+npm run hosted:dev
+```
+
+That writes `.botpasses-hosted/secrets.json` once (mode `0600`), binds `127.0.0.1:8788`, and does not inherit a leftover `DATABASE_URL`. `--check` evaluates boot without listening. `--postgres` plus `VAULT_HOSTED_DEV_DATABASE_URL` is the opt-in Postgres path. This is not the local CLI vault (`VAULT_HOME`). Run one `hosted:dev` process per sqlite file; a second writer can get SQLITE_BUSY.
+
 ## CLI from the repository
 
 The `botpasses` npm package is not published yet. Until it is, run the CLI from a clone.

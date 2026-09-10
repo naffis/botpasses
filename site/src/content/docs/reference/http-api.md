@@ -17,7 +17,7 @@ Operator JSON never includes secret values after submit. Model tokens cannot res
 | Model (agent) | OAuth access JWT (`aud` is `https://botpasses.com/mcp`; its `org_id` is the organisation the operator consented in, and the operator must still be a member) or a console-issued `avm_...` bearer | `POST /mcp`, `GET /mcp`, `GET /mcp/tools`, `POST /api/grants/request` |
 | Trusted runtime | `avt_...` bearer | `POST /runtime/resolve` only |
 
-A session that has not completed the authenticator step gets 403 `{ "error": "mfa_required", "enroll_url": "/enroll-totp" }` when no authenticator is enrolled, or `{ "error": "mfa_required", "verify_url": "/verify-totp" }` when one is and this session has not passed it yet. Ids from another organisation are 404. A foreign browser `Origin` on `/api` is 403 with no CORS allow header; `/mcp`, the well-known documents, and `/oauth` reflect the caller's Origin so browser-based MCP hosts can connect. Invalid bearer on public HTML is ignored (the page loads); the same bearer on `/api` or `POST /mcp` is 401.
+A session that has not completed the authenticator step gets 403 `{ "error": "mfa_required", "enroll_url": "/enroll-totp" }` when no authenticator is enrolled, or `{ "error": "mfa_required", "verify_url": "/verify-totp" }` when one is and this session has not passed it yet. Ids from another organisation are 404. A foreign browser `Origin` on `/api`, `/console`, `/collect`, and auth is 403 with no CORS allow header. `/mcp`, the well-known documents, and `/oauth` reflect the caller's Origin so browser-based MCP hosts can connect. Public site GET/HEAD/OPTIONS (pages, `/og.png`, `/logo.png`, `/favicon.ico`) also reflect a foreign Origin so a composer or unfurler can load the card and icon. Invalid bearer on public HTML is ignored (the page loads); the same bearer on `/api` or `POST /mcp` is 401.
 
 ## Health and discovery
 
@@ -151,7 +151,7 @@ There is no OAuth, provider connect, item edit or rotate route, or Access panel 
 | Status | When |
 | --- | --- |
 | 401 | Missing or invalid session or bearer |
-| 403 | CSRF, `mfa_required`, wrong channel (a model token on an operator route), foreign Origin on `/api` |
+| 403 | CSRF, `mfa_required`, wrong channel (a model token on an operator route), foreign Origin on `/api`, `/console`, `/collect`, and auth |
 | 404 | Unknown id, or an id from another organisation |
 | 409 | Duplicate credential name, reused approval code |
 | 410 | Expired approval |

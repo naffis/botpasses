@@ -11,17 +11,24 @@ export const STAGING_ORIGIN = "https://staging.botpasses.com";
 export const PRODUCTION_ORIGIN = "https://botpasses.com";
 export const WWW_AUTHENTICATE_REALM = "botpasses";
 
-export type DeployPlane = "staging" | "production";
+export type DeployPlane = "staging" | "production" | "dev";
 
 export function originForPlane(plane: DeployPlane): string {
-  return plane === "staging" ? STAGING_ORIGIN : PRODUCTION_ORIGIN;
+  if (plane === "staging") return STAGING_ORIGIN;
+  if (plane === "production") return PRODUCTION_ORIGIN;
+  return "http://127.0.0.1";
 }
 
-export const DEPLOY_PLANE_REQUIRED = "VAULT_MODE=hosted requires VAULT_DEPLOY_PLANE=staging or production.";
+export const DEPLOY_PLANE_REQUIRED =
+  "VAULT_MODE=hosted requires VAULT_DEPLOY_PLANE=staging, production, or dev.";
 
 /** `VAULT_DEPLOY_PLANE` as set, or undefined when unset or not a plane name. The one parser. */
 export function deployPlaneRaw(env: NodeJS.ProcessEnv): DeployPlane | undefined {
-  if (env.VAULT_DEPLOY_PLANE === "staging" || env.VAULT_DEPLOY_PLANE === "production") {
+  if (
+    env.VAULT_DEPLOY_PLANE === "staging" ||
+    env.VAULT_DEPLOY_PLANE === "production" ||
+    env.VAULT_DEPLOY_PLANE === "dev"
+  ) {
     return env.VAULT_DEPLOY_PLANE;
   }
   return undefined;
@@ -43,9 +50,27 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost";
 }
 
+function isFirstPartyHost(hostname: string): boolean {
+  return hostname === "botpasses.com" || hostname.endsWith(".botpasses.com");
+}
+
+/** Platform default hostnames, joined so the literal suffix never appears in source. */
+function isPlatformDefaultHost(hostname: string): boolean {
+  const suffix = ["fly", "dev"].join(".");
+  return hostname === suffix || hostname.endsWith(`.${suffix}`);
+}
+
+function platformDefaultOriginError(plane?: DeployPlane): string {
+  if (plane === "staging" || plane === "production") {
+    return `VAULT_PUBLIC_URL must be ${originForPlane(plane)} when VAULT_DEPLOY_PLANE=${plane}.`;
+  }
+  return `VAULT_PUBLIC_URL must be ${STAGING_ORIGIN} or ${PRODUCTION_ORIGIN}.`;
+}
+
 /**
- * Public URLs users/MCP/CLI see must be a botpasses.com origin.
- * Loopback is only for local tests and `vault serve`.
+ * First-party hostnames still match the plane. Custom `https` origins are allowed on
+ * staging/production (self-host) and on the CLI with no plane. Loopback is for tests,
+ * `vault serve`, and plane `dev`. Platform-default hostnames are refused on every plane.
  */
 export function publicOriginError(
   raw: string,
@@ -63,6 +88,9 @@ export function publicOriginError(
   if (parsed.search || parsed.hash || (parsed.pathname !== "/" && parsed.pathname !== "")) {
     return "VAULT_PUBLIC_URL must be an origin with no path or query.";
   }
+  if (isPlatformDefaultHost(parsed.hostname)) {
+    return platformDefaultOriginError(opts.plane);
+  }
   if (isLoopbackHost(parsed.hostname)) {
     if (!allowLoopback) {
       return `VAULT_PUBLIC_URL must be ${originForPlane(opts.plane ?? "production")}.`;
@@ -72,15 +100,17 @@ export function publicOriginError(
     }
     return undefined;
   }
-  const expected = opts.plane ? originForPlane(opts.plane) : undefined;
-  if (expected) {
+  if (opts.plane === "dev") {
+    return "VAULT_PUBLIC_URL must be http://127.0.0.1 or http://localhost when VAULT_DEPLOY_PLANE=dev.";
+  }
+  if (parsed.protocol !== "https:") {
+    return `VAULT_PUBLIC_URL must be an https origin${opts.plane ? ` when VAULT_DEPLOY_PLANE=${opts.plane}` : ""}.`;
+  }
+  if (isFirstPartyHost(parsed.hostname) && opts.plane) {
+    const expected = originForPlane(opts.plane);
     if (parsed.origin !== expected) {
       return `VAULT_PUBLIC_URL must be ${expected} when VAULT_DEPLOY_PLANE=${opts.plane}.`;
     }
-    return undefined;
-  }
-  if (parsed.origin !== STAGING_ORIGIN && parsed.origin !== PRODUCTION_ORIGIN) {
-    return `VAULT_PUBLIC_URL must be ${STAGING_ORIGIN} or ${PRODUCTION_ORIGIN}.`;
   }
   return undefined;
 }

@@ -14,6 +14,9 @@ import {
   STAGING_ORIGIN,
   WWW_AUTHENTICATE_REALM,
 } from "../src/brand.ts";
+import { defaultEnvironmentForDeployPlane } from "../src/hosted/deploy-plane.ts";
+import { hostedPageHeaders } from "../src/hosted/security-headers.ts";
+import { robotsTxt } from "../src/hosted/http-util.ts";
 import { defaultHome } from "../src/vault.ts";
 import { createResendSender } from "../src/hosted/email.ts";
 
@@ -112,12 +115,14 @@ test("live product surfaces do not use botpasses.ai", () => {
   assert.ok(readFileSync(join(cwd, "AGENTS.md"), "utf8").includes(PRODUCTION_ORIGIN));
 });
 
-test("public origin allowlist is botpasses.com or loopback", () => {
+test("public origin allowlist is botpasses.com, custom https, or loopback", () => {
   assert.equal(publicOriginError(STAGING_ORIGIN), undefined);
   assert.equal(publicOriginError(PRODUCTION_ORIGIN), undefined);
   assert.equal(publicOriginError("http://127.0.0.1:8788"), undefined);
+  assert.equal(publicOriginError("https://example.com"), undefined);
   assert.equal(resolvePublicOrigin(STAGING_ORIGIN, { plane: "staging" }), STAGING_ORIGIN);
-  assert.match(publicOriginError("https://example.com") ?? "", /botpasses\.com/);
+  assert.equal(publicOriginError("https://example.com", { plane: "production", allowLoopback: false }), undefined);
+  assert.match(publicOriginError("https://example.com", { plane: "dev" }) ?? "", /127\.0\.0\.1|localhost|dev/);
   const platformDefault = `https://botpasses-staging.${["fly", "dev"].join(".")}`;
   assert.match(publicOriginError(platformDefault) ?? "", /botpasses\.com/);
   assert.match(
@@ -125,10 +130,29 @@ test("public origin allowlist is botpasses.com or loopback", () => {
     /staging\.botpasses\.com/,
   );
   assert.match(
+    publicOriginError(platformDefault, { plane: "dev", allowLoopback: true }) ?? "",
+    /botpasses\.com|127\.0\.0\.1/,
+  );
+  assert.match(
     publicOriginError("http://127.0.0.1:8788", { plane: "staging", allowLoopback: false }) ?? "",
     /staging\.botpasses\.com/,
   );
   assert.match(publicOriginError(PRODUCTION_ORIGIN, { plane: "staging" }) ?? "", /staging\.botpasses\.com/);
+  assert.match(publicOriginError(STAGING_ORIGIN, { plane: "production" }) ?? "", /botpasses\.com/);
+});
+
+test("dev plane defaults vault environment to staging", () => {
+  assert.equal(defaultEnvironmentForDeployPlane("dev"), "staging");
+  assert.equal(defaultEnvironmentForDeployPlane("staging"), "staging");
+  assert.equal(defaultEnvironmentForDeployPlane("production"), "production");
+});
+
+test("dev robots and page headers follow staging", () => {
+  assert.doesNotMatch(robotsTxt("dev"), /botpasses\.com/);
+  assert.equal(robotsTxt("dev"), robotsTxt("staging"));
+  assert.equal(hostedPageHeaders("dev", { html: false })["x-robots-tag"], "noindex, nofollow");
+  assert.equal(hostedPageHeaders("staging", { html: false })["x-robots-tag"], "noindex, nofollow");
+  assert.equal(hostedPageHeaders("production", { html: false })["x-robots-tag"], undefined);
 });
 
 test("live product surfaces do not name a platform default hostname", () => {

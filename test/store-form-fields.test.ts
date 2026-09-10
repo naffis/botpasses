@@ -112,6 +112,7 @@ test("store dialog explains hosts and names, hides username until needed, keeps 
 test("staging plane lists only staging; production plane lists both", () => {
   assert.deepEqual([...environmentsForDeployPlane("staging")], ["staging"]);
   assert.deepEqual([...environmentsForDeployPlane("production")], ["staging", "production"]);
+  assert.deepEqual([...environmentsForDeployPlane("dev")], ["staging", "production"]);
   const staging = hostedOperatorHtml({ deployPlane: "staging" });
   assert.match(staging, /data-environments="staging"/);
   assert.doesNotMatch(staging, /<option value="production">/);

@@ -200,7 +200,7 @@ test("user connect helpers are provider-generic", () => {
     chooseRedirect(spotify, "https://botpasses.com"),
     "hosted connect uses one callback for every provider",
   );
-  assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8888/callback");
+  assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788"), "http://127.0.0.1:8788/connect/callback");
   assert.equal(chooseRedirect(spotify, "https://staging.botpasses.com"), "https://staging.botpasses.com/connect/callback");
   assert.equal(
     chooseRedirect(spotify, "https://botpasses.com", "https://botpasses.com/integrations/spotify/callback"),
@@ -209,7 +209,11 @@ test("user connect helpers are provider-generic", () => {
   );
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "https://evil.example/cb"), /redirect_uri/);
   assert.throws(() => chooseRedirect(spotify, "https://botpasses.com", "http://127.0.0.1:8888/callback"), /redirect_uri/, "the dev loopback callback is not a landing place for a hosted deployment");
-  assert.equal(chooseRedirect(spotify, "http://127.0.0.1:8788", "http://127.0.0.1:8888/callback"), "http://127.0.0.1:8888/callback");
+  assert.throws(
+    () => chooseRedirect(spotify, "http://127.0.0.1:8788", "http://127.0.0.1:8888/callback"),
+    /redirect_uri/,
+    "hosted chooseRedirect never accepts the CLI vault callback",
+  );
   const kek = parseMasterKey(generateMasterKey());
   const state = sealOauthState(
     { providerId: "google", orgId: "org", userId: "u", itemId: "i", itemName: "GOOGLE_SECRET", environment: "staging", clientId: "cid", redirectUri: "https://x/cb", codeVerifier: "v", exp: Date.now() + 60_000 },
@@ -399,7 +403,7 @@ test("user connect over HTTP: start returns the provider authorize URL; the call
     assert.equal(started.url.origin + started.url.pathname, "https://accounts.spotify.com/authorize");
     assert.equal(started.url.searchParams.get("client_id"), CLIENT_ID, "client id falls back to the item username");
     assert.equal(started.url.searchParams.get("code_challenge_method"), "S256");
-    assert.equal(started.json.redirect_uri, "http://127.0.0.1:8888/callback");
+    assert.equal(started.json.redirect_uri, "http://127.0.0.1:8788/connect/callback");
     assert.equal(started.json.provider, "spotify");
     assert.doesNotMatch(JSON.stringify(started.json), new RegExp(CLIENT_SECRET));
 
@@ -485,7 +489,7 @@ test("user connect for a second provider (GitHub, no PKCE) and the narrowed auto
     assert.ok(started.url);
     assert.equal(started.url.origin + started.url.pathname, "https://github.com/login/oauth/authorize");
     assert.equal(started.url.searchParams.get("code_challenge"), null);
-    assert.equal(started.json.redirect_uri, "http://127.0.0.1:8888/callback");
+    assert.equal(started.json.redirect_uri, "http://127.0.0.1:8788/connect/callback");
 
     const done = await callback(ctx, "github", { code: "c0de", state: started.state });
     assert.equal(done.location, `/console#vault?connected=github&agent=${ctx.model.id}`, "the landing flash can say the agent may retry");

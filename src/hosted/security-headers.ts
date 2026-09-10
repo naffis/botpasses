@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { OutgoingHttpHeaders, ServerResponse } from "node:http";
+import type { DeployPlane } from "../brand.ts";
 
 export type SecurityHeaderOpts = {
   nonce?: string;
@@ -63,11 +64,11 @@ export function securityHeaders(opts: SecurityHeaderOpts): Record<string, string
 }
 
 export function hostedPageHeaders(
-  plane: "staging" | "production",
+  plane: DeployPlane,
   opts: SecurityHeaderOpts,
 ): Record<string, string> {
   const headers = securityHeaders(opts);
-  if (plane === "staging") headers["x-robots-tag"] = "noindex, nofollow";
+  if (plane !== "production") headers["x-robots-tag"] = "noindex, nofollow";
   return headers;
 }
 

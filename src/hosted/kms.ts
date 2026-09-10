@@ -79,10 +79,15 @@ export class KmsKekProvider implements KekProvider {
   }
 }
 
+export function kmsAppId(env: NodeJS.ProcessEnv): string {
+  return env.VAULT_KMS_APP_ID?.trim() || env.FLY_APP_NAME?.trim() || "";
+}
+
 export function usedRawKekFallback(env: NodeJS.ProcessEnv): boolean {
-  const onPlane = deployPlaneRaw(env) !== undefined;
+  const plane = deployPlaneRaw(env);
+  if (plane !== "staging" && plane !== "production") return false;
   const wrapped = Boolean(env.VAULT_KEK_WRAPPED?.trim() && env.VAULT_KMS_KEY_ID?.trim());
-  return onPlane && !wrapped && Boolean(env.VAULT_KEK?.trim());
+  return !wrapped && Boolean(env.VAULT_KEK?.trim());
 }
 
 export function selectKekProvider(
@@ -93,8 +98,8 @@ export function selectKekProvider(
   const wrapped = env.VAULT_KEK_WRAPPED?.trim() ?? "";
   const keyId = env.VAULT_KMS_KEY_ID?.trim() ?? "";
   if (plane && wrapped && keyId) {
-    const app = env.FLY_APP_NAME?.trim() ?? "";
-    if (!app) throw new Error("KMS unwrap requires FLY_APP_NAME");
+    const app = kmsAppId(env);
+    if (!app) throw new Error("KMS unwrap requires VAULT_KMS_APP_ID or FLY_APP_NAME");
     return new KmsKekProvider(
       wrapped,
       kekEncryptionContext({ plane, app }),
@@ -117,8 +122,8 @@ export function selectPreviousKekProvider(
   const wrapped = env.VAULT_KEK_PREVIOUS_WRAPPED?.trim() ?? "";
   const keyId = env.VAULT_KMS_KEY_ID?.trim() ?? "";
   if (plane && wrapped && keyId) {
-    const app = env.FLY_APP_NAME?.trim() ?? "";
-    if (!app) throw new Error("KMS unwrap requires FLY_APP_NAME");
+    const app = kmsAppId(env);
+    if (!app) throw new Error("KMS unwrap requires VAULT_KMS_APP_ID or FLY_APP_NAME");
     return new KmsKekProvider(wrapped, kekEncryptionContext({ plane, app }), decryptFn ?? awsKmsDecrypt(keyId));
   }
   const raw = env.VAULT_KEK_PREVIOUS?.trim() ?? "";

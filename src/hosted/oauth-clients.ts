@@ -4,6 +4,7 @@
  */
 import { errors as oidcErrors, type ProviderContext } from "oidc-provider";
 import type { VaultEnvName } from "../hosted-types.ts";
+import { defaultEnvironmentForDeployPlane } from "./deploy-plane.ts";
 import { HttpError } from "./errors.ts";
 import type { HostedKernel } from "./kernel.ts";
 import { hashToken } from "./operator-identity.ts";
@@ -314,7 +315,7 @@ async function persistIssuedOauth(
 export async function persistIssuedAccess(
   kernel: HostedKernel,
   input: IssuedTokenInput,
-  environment: VaultEnvName = kernel.deployPlane,
+  environment: VaultEnvName = defaultEnvironmentForDeployPlane(kernel.deployPlane),
 ): Promise<void> {
   return persistIssuedOauth(kernel, "oauth_access", input, environment);
 }
@@ -322,7 +323,7 @@ export async function persistIssuedAccess(
 export async function persistIssuedRefresh(
   kernel: HostedKernel,
   input: IssuedTokenInput,
-  environment: VaultEnvName = kernel.deployPlane,
+  environment: VaultEnvName = defaultEnvironmentForDeployPlane(kernel.deployPlane),
 ): Promise<void> {
   return persistIssuedOauth(kernel, "oauth_refresh", input, environment);
 }

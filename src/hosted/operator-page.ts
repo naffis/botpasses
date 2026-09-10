@@ -1,13 +1,13 @@
-import { PRODUCT_NAME, PRODUCT_WORDMARK } from "../brand.ts";
+import { PRODUCT_NAME, PRODUCT_WORDMARK, type DeployPlane } from "../brand.ts";
 import type { VaultEnvName } from "../hosted-types.ts";
-import { environmentsForDeployPlane } from "./deploy-plane.ts";
+import { defaultEnvironmentForDeployPlane, environmentsForDeployPlane } from "./deploy-plane.ts";
 import { consoleDialogsHtml } from "./console-dialogs.ts";
 import { consolePanelsHtml } from "./console-panels.ts";
 import { assetPath } from "./hosted-assets.ts";
 
-/** Store and issue default to the plane's own environment (D13). */
-export function defaultEnvironmentForPlane(plane: VaultEnvName): VaultEnvName {
-  return plane === "staging" ? "staging" : "production";
+/** Store and issue default to the plane's vault environment. Plane `dev` defaults to staging. */
+export function defaultEnvironmentForPlane(plane: DeployPlane): VaultEnvName {
+  return defaultEnvironmentForDeployPlane(plane);
 }
 
 /** Team panel (3.7), routed at `#account/team`. Lists are filled by client/team.ts. */
@@ -66,7 +66,7 @@ export function withPlanCard(panels: string): string {
 
 /** Operator console HTML. `deployPlane` controls which environments Store, Issue, and the list expose. */
 export function hostedOperatorHtml(
-  opts: { hosted?: boolean; nonce?: string; deployPlane?: VaultEnvName } = {},
+  opts: { hosted?: boolean; nonce?: string; deployPlane?: DeployPlane } = {},
 ): string {
   const hosted = Boolean(opts.hosted);
   const plane = opts.deployPlane ?? "production";

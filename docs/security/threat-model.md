@@ -1,6 +1,6 @@
 # Botpasses threat model
 
-Living document. Trust decision: [ADR 0006](../adr/0006-grant-vault-trust-model.md). KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md). Hardening after the 2026-09 audit: [ADR 0008](../adr/0008-security-hardening.md). Email and OAuth tokens at rest: [ADR 0009](../adr/0009-email-at-rest.md).
+Living document. Trust decision: [ADR 0006](../adr/0006-grant-vault-trust-model.md). KEK wrap: [ADR 0007](../adr/0007-kms-wrapped-kek.md). Hardening after the 2026-09 audit: [ADR 0008](../adr/0008-security-hardening.md). Email and OAuth tokens at rest: [ADR 0009](../adr/0009-email-at-rest.md). Hosted-dev and portable origin: [ADR 0010](../adr/0010-hosted-dev-and-portable-origin.md).
 
 Botpasses is a **grant-vault**. The model does not get secret values. The hosted process decrypts at approved inject. This is not a human password manager and it is not client-side encryption that the vendor cannot undo.
 
@@ -15,6 +15,7 @@ Botpasses is a **grant-vault**. The model does not get secret values. The hosted
 | AWS KMS role (Fly OIDC) | `kms:Decrypt` on the plane CMK | Unwraps the platform KEK only. Does not see item plaintext. |
 | Reverse proxy (Fly edge, Cloudflare) | The client address headers | Nothing. Its headers are believed only when the process knows it is behind that proxy (see Proxy trust). |
 | Neon dump alone | Item ciphertext + wrapped DEKs; HMAC email and bearer-token ids; item names, last-4, hosts, plaintext Grant ids | No item values, inboxes, or usable OAuth refresh/auth/device/session tokens without the platform KEK. Metadata and Grant ids remain. |
+| Laptop hosted-dev (`.botpasses-hosted/` sqlite + `secrets.json`) | Raw KEK, session secret, OIDC JWK, and the hosted sqlite file | **Yes.** Plane `dev` is not dump-resistant. Treat that directory like `VAULT_HOME`. |
 | R2 `pg_dump` blob | AES-256-GCM dump (`BACKUP_KEY`, `BPBK` versioned envelope) | Same as a Neon dump after decrypt with `BACKUP_KEY`. Values, inboxes, and bearer tokens stay wrapped. `BACKUP_KEY` must not be the vault KEK. A job that skips R2 is not a backup. |
 | Botpasses staff without KMS + DB | Deploy logs, Sentry (redacted) | No. |
 | Attacker with Fly secrets + Neon | Raw KEK if cutover is incomplete; otherwise wrapped blob + role | Before `VAULT_KEK_REQUIRE_KMS=1`: yes. After cutover: needs the KMS role as well. |
@@ -55,7 +56,7 @@ Local: `VAULT_MASTER_KEY` / `master.key` encrypts sqlite rows. AAD is the secret
 
 A hosted process refuses to start (exit 78) rather than run with a weaker configuration than the operator believes it has:
 
-- `VAULT_DEPLOY_PLANE` must be `staging` or `production`; there is no default plane.
+- `VAULT_DEPLOY_PLANE` must be `staging`, `production`, or `dev`; there is no default plane. `dev` plus `FLY_APP_NAME` is refused. Staging and production still require a Postgres URL and refuse `VAULT_HOME`.
 - `VAULT_AUTH_MODE=test` is refused in every hosted boot. Header principals exist only in the test suite.
 - `VAULT_APPROVAL_HMAC` must be 64 hex characters when set.
 - `VAULT_BOOTSTRAP_TOKEN` is honoured on a plane only with `VAULT_BOOTSTRAP_ALLOW_PLANE=1`. A leftover token without that flag is ignored (`bootstrap_token_ignored`) and does not fail boot. A live token is logged at boot and every use writes an `auth_bootstrap_used` event with a token hash, address, method, and path. The intended end state is no bootstrap token on production.

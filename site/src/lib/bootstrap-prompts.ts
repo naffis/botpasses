@@ -81,19 +81,20 @@ If I already have a hosted account and only need stdio to hosted: use VAULT_PUBL
     title: "Self-host",
     heading: "Self-host",
     blurb:
-      "Run the same hosted process on your plane. One machine, Postgres, KMS-wrapped platform key. Swap botpasses.com for your origin in agent prompts and OAuth redirect URIs.",
+      "Run the same hosted process on your plane. One machine, Postgres (any vendor), KMS-wrapped platform key, custom https origin. Swap botpasses.com for your origin in agent prompts and OAuth redirect URIs.",
     text: `Help me deploy a self-hosted Botpasses plane from https://github.com/naffis/botpasses. Goal: a private grant-vault my agents hit at our origin (not necessarily botpasses.com). Follow docs/self-hosting and docs/ops in the repo. Do not invent secret values; ask me to set them in the secret store.
 
 Reference shape (adapt to our cloud if we are not on Fly):
 - One Node process: VAULT_MODE=hosted vault serve (one Machine per plane; in-memory enroll/rate-limit state).
-- Postgres (Neon or equivalent): separate project per plane; pooled DATABASE_URL + direct DATABASE_URL_DIRECT.
+- Postgres 16 (any vendor): separate database per plane; pooled DATABASE_URL + direct DATABASE_URL_DIRECT.
 - Edge DNS/WAF (Cloudflare or ours) with SSL full strict.
-- AWS KMS (or approved KMS) wrapping VAULT_KEK_WRAPPED; Fly OIDC or equivalent for AWS_ROLE_ARN.
+- AWS KMS (or approved KMS) wrapping VAULT_KEK_WRAPPED; VAULT_KMS_APP_ID or FLY_APP_NAME; Fly OIDC or equivalent for AWS_ROLE_ARN.
 - Email provider for codes (Resend pattern: RESEND_API_KEY + VAULT_EMAIL_FROM).
 - Optional: R2/S3 encrypted backups, Sentry without values.
+- Laptop hosted kernel is npm run hosted:dev (VAULT_DEPLOY_PLANE=dev, loopback, sqlite). That plane is refused when FLY_APP_NAME is set.
 
 Required config checklist (confirm each is set in secrets, never paste into chat):
-DATABASE_URL, DATABASE_URL_DIRECT, VAULT_PUBLIC_URL (our origin), VAULT_DEPLOY_PLANE (staging|production), VAULT_KEK_WRAPPED, VAULT_KMS_KEY_ID, AWS_ROLE_ARN, VAULT_KEK_REQUIRE_KMS=1 after cutover, VAULT_SESSION_SECRET (>=32 bytes), VAULT_OIDC_PRIVATE_JWK, VAULT_APPROVAL_HMAC (64 hex), bootstrap token pair only for break-glass window, VAULT_TRUST_PROXY as appropriate.
+DATABASE_URL (Postgres URL), DATABASE_URL_DIRECT, VAULT_PUBLIC_URL (our https origin), VAULT_DEPLOY_PLANE (staging|production), VAULT_KEK_WRAPPED, VAULT_KMS_KEY_ID, VAULT_KMS_APP_ID or FLY_APP_NAME, AWS_ROLE_ARN, VAULT_KEK_REQUIRE_KMS=1 after cutover, VAULT_SESSION_SECRET (>=32 bytes), VAULT_OIDC_PRIVATE_JWK, VAULT_APPROVAL_HMAC (64 hex), bootstrap token pair only for break-glass window, VAULT_TRUST_PROXY as appropriate.
 
 Build:
 npm ci

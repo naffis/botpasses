@@ -1,5 +1,6 @@
 /** POST /mcp JSON-RPC and GET /mcp SSE. Principal resolution for cookie sessions lives here too. */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { DeployPlane } from "../brand.ts";
 import type { ConnectorFetch } from "./connector.ts";
 import { defaultEnvironmentForDeployPlane } from "./deploy-plane.ts";
 import { HttpError } from "./errors.ts";
@@ -18,7 +19,7 @@ export type McpRouteOpts = {
   secureCookies: boolean;
   publicUrl: string;
   allowLoopback: boolean;
-  deployPlane: "staging" | "production";
+  deployPlane: DeployPlane;
   fetchImpl?: ConnectorFetch;
   resolveAddresses?: (hostname: string) => Promise<string[]>;
 };
@@ -94,7 +95,7 @@ export function assertCookieMcpRequest(
 export async function mcpModelPrincipal(
   kernel: HostedKernel,
   principal: Principal | undefined,
-  deployPlane: "staging" | "production",
+  deployPlane: DeployPlane,
 ): Promise<ModelPrincipal> {
   if (principal?.channel === "model") return principal;
   if (principal?.channel === "operator") {

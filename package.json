@@ -13,6 +13,7 @@
   "scripts": {
     "vault": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli.ts",
     "hosted": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/hosted/main.ts",
+    "hosted:dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/hosted-dev.ts",
     "dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning --watch src/cli.ts serve",
     "site:build": "npm --prefix site run build",
     "migrate": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/migrate.ts",

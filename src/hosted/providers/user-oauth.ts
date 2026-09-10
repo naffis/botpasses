@@ -8,9 +8,7 @@ import { HttpError } from "../errors.ts";
 import type { Provider, ProviderId } from "./types.ts";
 import {
   defaultConnectRedirect,
-  isLoopbackPublicUrl,
   legacyProviderCallback,
-  LOOPBACK_REDIRECT,
 } from "./connect-redirect.ts";
 import { isProviderId } from "./registry.ts";
 
@@ -55,12 +53,9 @@ export function hostedRedirect(_provider: Provider, publicUrl: string): string {
 export function chooseRedirect(provider: Provider, publicUrl: string, requested?: string): string {
   const hosted = defaultConnectRedirect(publicUrl);
   const legacy = legacyProviderCallback(publicUrl, provider.id);
-  const loopback = isLoopbackPublicUrl(publicUrl);
   if (!requested) return hosted;
   if (requested === hosted || requested === legacy) return requested;
-  // The dev loopback callback is only a valid landing place when Botpasses itself runs on loopback.
-  if (requested === LOOPBACK_REDIRECT && loopback) return requested;
-  throw new HttpError(400, loopback ? `redirect_uri must be the Botpasses callback or ${LOOPBACK_REDIRECT}` : "redirect_uri must be the Botpasses callback");
+  throw new HttpError(400, "redirect_uri must be the Botpasses callback");
 }
 
 export function sealOauthState(payload: ProviderOauthState, kek: Buffer): string {
