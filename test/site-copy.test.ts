@@ -95,3 +95,11 @@ test("site copy says botpasses.com, not 'this origin'", () => {
     .map((f) => relative(root, f));
   assert.deepEqual(hits, []);
 });
+
+test("docs Shiki paints brand tokens, not a third palette", () => {
+  const config = readFileSync(join(root, "site/astro.config.mjs"), "utf8");
+  assert.match(config, /shikiConfig:\s*\{\s*theme:\s*"css-variables"/);
+  assert.doesNotMatch(config, /github-dark|github-light/);
+  const css = readFileSync(join(root, "site/src/styles/global.css"), "utf8");
+  assert.doesNotMatch(css, /--shiki-dark/);
+});

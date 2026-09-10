@@ -12,12 +12,12 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 - Hosted origins: `https://botpasses.com`, `https://staging.botpasses.com`. Never a platform default hostname.
 - Hosted identity is first-party (email OTP + TOTP). This origin is the MCP OAuth authorization server. No Clerk.
 - Hosted plane KEK: prefer `VAULT_KEK_WRAPPED` + KMS. `VAULT_KEK_REQUIRE_KMS=1` refuses raw-only. Do not claim zero-knowledge.
-- Hosted durability is Neon (PITR + isolated projects) plus a fail-closed encrypted `pg_dump` to R2 (`BACKUP_KEY` ≠ KEK). SQLite is the local CLI only. Restore: `docs/ops/restore.md`.
+- Hosted durability on staging/production is Postgres (Neon on the reference stack: PITR + isolated projects) plus a fail-closed encrypted `pg_dump` to R2 (`BACKUP_KEY` ≠ KEK). SQLite is the local CLI (`VAULT_HOME`) and laptop hosted-dev (`.botpasses-hosted/`). Restore: `docs/ops/restore.md`.
 
 ## Commands
 
 - Install: `npm ci`, then `npm run site:build` once (tests read `site/dist`)
-- Dev / CLI: `npx vault <command>` (set `VAULT_HOME` and `VAULT_MASTER_KEY`)
+- Dev / CLI: `npx vault <command>` (set `VAULT_HOME` and `VAULT_MASTER_KEY`). Laptop hosted kernel: `npm run hosted:dev`
 - Test: `npm test` (prefer a focused file: `node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=spec test/<file>.test.ts`)
 - Typecheck: `npm run typecheck` · Lint: `npm run lint` · Postgres tests: `npm run test:pg` (needs `DATABASE_URL`)
 - Browser smoke: `npm run test:smoke` (skips with a reason unless Playwright and Chromium are installed; CI installs them globally, or set `BOTPASSES_PLAYWRIGHT_PKG` / `BOTPASSES_CHROMIUM`)
@@ -29,7 +29,7 @@ Litmus test per line: "would removing this cause an agent to make a mistake?" If
 - Secrets are injected into **tool/runtime env only**. Never into model context, MCP tool results, operator console JSON, audit logs, or chat. There is no `get_secret`.
 - MCP may list names, find by exact name or API host, run `setup` for a provider, request a grant, report grant status. A miss returns a path-only Botpasses `collect_url` (no HMAC). The operator types the secret on that origin. Values stay in the vault process until `vault run` or `http_request`. Tool and HTTP contracts: `docs/reference/mcp.md`, `docs/reference/http-api.md`.
 - Tests must fail if a canary secret appears in a mocked LLM/agent conversation after store, grant, or use.
-- `master.key`, `.botpasses/`, `.vault/`, and `.env` stay out of git.
+- `master.key`, `.botpasses/`, `.botpasses-hosted/`, `.vault/`, and `.env` stay out of git.
 
 ## Workflow
 

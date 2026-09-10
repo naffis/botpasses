@@ -146,7 +146,55 @@ export const CONTRAST_PAIRS: ReadonlyArray<readonly [BrandHexKey, BrandHexKey]> 
   ["ok", "bg"],
   ["ok", "okDim"],
   ["fg", "accentDim"],
+  ["accent", "bgElev"],
+  ["info", "bgElev"],
+  ["ok", "bgElev"],
+  ["warn", "bgElev"],
 ];
+
+/**
+ * Shiki `css-variables` roles. Each maps to a brand token that CONTRAST_PAIRS
+ * already requires against `bgElev`, so docs fences cannot paint a third palette.
+ */
+export type CodeHighlightRole =
+  | "foreground"
+  | "background"
+  | "token-comment"
+  | "token-punctuation"
+  | "token-keyword"
+  | "token-constant"
+  | "token-function"
+  | "token-string"
+  | "token-string-expression"
+  | "token-parameter"
+  | "token-link"
+  | "token-inserted"
+  | "token-deleted"
+  | "token-changed";
+
+export const CODE_HIGHLIGHT_ROLES: Record<CodeHighlightRole, BrandHexKey> = {
+  foreground: "fg",
+  background: "bgElev",
+  "token-comment": "muted",
+  "token-punctuation": "muted",
+  "token-keyword": "accent",
+  "token-constant": "info",
+  "token-function": "info",
+  "token-string": "ok",
+  "token-string-expression": "ok",
+  "token-parameter": "warn",
+  "token-link": "accent",
+  "token-inserted": "ok",
+  "token-deleted": "danger",
+  "token-changed": "warn",
+};
+
+/** `--astro-code-*: var(--token);` aliases. Follows the active theme because the tokens switch. */
+export function cssCodeHighlightLines(): string {
+  return (Object.keys(CODE_HIGHLIGHT_ROLES) as CodeHighlightRole[])
+    .map((role) => `--astro-code-${role}: var(${CSS_VAR_NAMES[CODE_HIGHLIGHT_ROLES[role]]});`)
+    .join("\n  ");
+}
 
 /** `--name: #hex;` lines for one theme, indented for a rule body. */
 export function cssTokenLines(theme: BrandTheme): string {
@@ -165,8 +213,9 @@ export function cssVariables(): string {
   const light = cssTokenLines("light");
   const dark = cssTokenLines("dark");
   const darkNested = dark.replace(/\n {2}/g, "\n    ");
+  const code = cssCodeHighlightLines();
   return [
-    `:root {\n  color-scheme: light dark;\n  ${light}\n}`,
+    `:root {\n  color-scheme: light dark;\n  ${light}\n  ${code}\n}`,
     `@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {\n    ${darkNested}\n  }\n}`,
     `:root[data-theme="dark"] {\n  ${dark}\n}`,
   ].join("\n");

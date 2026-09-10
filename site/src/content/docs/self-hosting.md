@@ -5,7 +5,9 @@ section: help
 order: 3
 ---
 
-The hosted process is one Node.js service. The reference deployment is one Fly Machine per plane, Neon Postgres, Cloudflare DNS and WAF in front, and AWS KMS holding the key that wraps the platform key. The code is MIT licensed at [github.com/naffis/botpasses](https://github.com/naffis/botpasses).
+The hosted process is one Node.js service. The runtime contract is a Postgres 16 URL, an `https` origin you control, and a platform key (raw on a laptop; KMS-wrapped in production). The reference deployment is one Fly Machine per plane, Neon Postgres, Cloudflare DNS and WAF in front, and AWS KMS holding the key that wraps the platform key. Any other Postgres 16 and any non-platform-default `https` origin work the same. The code is MIT licensed at [github.com/naffis/botpasses](https://github.com/naffis/botpasses).
+
+For a laptop hosted kernel (loopback, sqlite-hosted, OTP printed in the terminal) run `npm run hosted:dev`. That sets `VAULT_DEPLOY_PLANE=dev` and does not inherit a leftover `DATABASE_URL`. Run one process per sqlite file; a second writer can get SQLITE_BUSY. Do not set plane `dev` on Fly.
 
 This page names what you need. The operational runbooks live in the repository under `docs/ops` ([cutover](https://github.com/naffis/botpasses/blob/dev/docs/ops/botpasses-cutover.md), [KEK rotation](https://github.com/naffis/botpasses/blob/dev/docs/ops/kek-rotation.md), [restore](https://github.com/naffis/botpasses/blob/dev/docs/ops/restore.md)).
 
@@ -18,14 +20,15 @@ Help me deploy a self-hosted Botpasses plane from https://github.com/naffis/botp
 
 Reference shape (adapt to our cloud if we are not on Fly):
 - One Node process: VAULT_MODE=hosted vault serve (one Machine per plane; in-memory enroll/rate-limit state).
-- Postgres (Neon or equivalent): separate project per plane; pooled DATABASE_URL + direct DATABASE_URL_DIRECT.
+- Postgres 16 (any vendor): separate database per plane; pooled DATABASE_URL + direct DATABASE_URL_DIRECT.
 - Edge DNS/WAF (Cloudflare or ours) with SSL full strict.
-- AWS KMS (or approved KMS) wrapping VAULT_KEK_WRAPPED; Fly OIDC or equivalent for AWS_ROLE_ARN.
+- AWS KMS (or approved KMS) wrapping VAULT_KEK_WRAPPED; VAULT_KMS_APP_ID or FLY_APP_NAME; Fly OIDC or equivalent for AWS_ROLE_ARN.
 - Email provider for codes (Resend pattern: RESEND_API_KEY + VAULT_EMAIL_FROM).
 - Optional: R2/S3 encrypted backups, Sentry without values.
+- Laptop hosted kernel is npm run hosted:dev (VAULT_DEPLOY_PLANE=dev, loopback, sqlite). That plane is refused when FLY_APP_NAME is set.
 
 Required config checklist (confirm each is set in secrets, never paste into chat):
-DATABASE_URL, DATABASE_URL_DIRECT, VAULT_PUBLIC_URL (our origin), VAULT_DEPLOY_PLANE (staging|production), VAULT_KEK_WRAPPED, VAULT_KMS_KEY_ID, AWS_ROLE_ARN, VAULT_KEK_REQUIRE_KMS=1 after cutover, VAULT_SESSION_SECRET (>=32 bytes), VAULT_OIDC_PRIVATE_JWK, VAULT_APPROVAL_HMAC (64 hex), bootstrap token pair only for break-glass window, VAULT_TRUST_PROXY as appropriate.
+DATABASE_URL (Postgres URL), DATABASE_URL_DIRECT, VAULT_PUBLIC_URL (our https origin), VAULT_DEPLOY_PLANE (staging|production), VAULT_KEK_WRAPPED, VAULT_KMS_KEY_ID, VAULT_KMS_APP_ID or FLY_APP_NAME, AWS_ROLE_ARN, VAULT_KEK_REQUIRE_KMS=1 after cutover, VAULT_SESSION_SECRET (>=32 bytes), VAULT_OIDC_PRIVATE_JWK, VAULT_APPROVAL_HMAC (64 hex), bootstrap token pair only for break-glass window, VAULT_TRUST_PROXY as appropriate.
 
 Build:
 npm ci
@@ -68,12 +71,13 @@ Hosted mode reads its listen address from `VAULT_BIND_HOST` and `PORT` (or `VAUL
 
 | Secret | Purpose |
 | --- | --- |
-| `DATABASE_URL` | Neon pooled connection string (`-pooler` host) |
-| `DATABASE_URL_DIRECT` | Neon direct connection string, for backups and migrations |
-| `VAULT_PUBLIC_URL` | The origin this plane serves, for example `https://botpasses.com`. Must match the deploy plane |
-| `VAULT_DEPLOY_PLANE` | `staging` or `production`, required. Staging refuses vault environment `production`. Unset is exit 78 |
+| `DATABASE_URL` | Postgres 16 URL (any vendor). The reference stack uses a Neon pooled (`-pooler`) host |
+| `DATABASE_URL_DIRECT` | Direct Postgres URL for backups and migrations |
+| `VAULT_PUBLIC_URL` | The origin this plane serves. First-party hosts must match the plane. A custom `https` origin is allowed on self-hosted staging/production. Loopback is plane `dev` only |
+| `VAULT_DEPLOY_PLANE` | `staging`, `production`, or `dev`, required. Staging refuses vault environment `production`. Unset is exit 78. `dev` is the laptop hosted kernel and is refused when `FLY_APP_NAME` is set |
 | `VAULT_KEK_WRAPPED` | The platform key, wrapped by KMS. Produced by `vault kek-wrap` |
 | `VAULT_KMS_KEY_ID` | The KMS key id or ARN |
+| `VAULT_KMS_APP_ID` | Optional. KMS EncryptionContext `app` when `FLY_APP_NAME` is unset |
 | `AWS_ROLE_ARN` | Role the Machine assumes through Fly OIDC; it needs `kms:Decrypt` on that key |
 | `VAULT_KEK_REQUIRE_KMS` | Set to `1` after the wrapped key is confirmed. Refuses to boot on the raw key |
 | `VAULT_KEK` | Raw platform key. Pre-cutover fallback only; unset it after `VAULT_KEK_REQUIRE_KMS=1` |
@@ -88,7 +92,7 @@ Hosted mode reads its listen address from `VAULT_BIND_HOST` and `PORT` (or `VAUL
 | `VAULT_EMAIL_FROM` | For example `Botpasses <noreply@example.com>`. Required when `RESEND_API_KEY` is set |
 | `SENTRY_DSN` | Optional; a plane without it logs `sentry_dsn_missing` at boot |
 | `VAULT_TRUSTED_PROXY_CIDRS` | Optional. Comma-separated CIDRs of the CDN in front of the plane. `CF-Connecting-IP` is read for rate limits only when the connecting address is inside them. Unset means Cloudflare's published ranges; empty means the header is never read |
-| `VAULT_BIND_HOST` | Optional. Listen address of the hosted process, default `0.0.0.0` |
+| `VAULT_BIND_HOST` | Optional. Listen address. Default `127.0.0.1` on plane `dev`, `0.0.0.0` on staging/production |
 | `PORT` | Optional. Listen port, default `8788`; Fly sets it. `VAULT_PORT` is read when `PORT` is unset |
 | `VAULT_SITE_ROOT` | Optional. Directory of the built Astro site, default `./site/dist`; boot exits 78 when its `index.html` is missing |
 

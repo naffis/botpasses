@@ -1,7 +1,7 @@
 /** Shared request/response helpers for the hosted HTTP router and its route modules. */
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { WWW_AUTHENTICATE_REALM } from "../brand.ts";
+import { WWW_AUTHENTICATE_REALM, type DeployPlane } from "../brand.ts";
 import type { GrantPolicy, ItemKind, VaultEnvName } from "../hosted-types.ts";
 import { HttpError, isHttpError, isNeedItemError } from "./errors.ts";
 import { corsHeaders, corsMethod, corsPath, corsPublicUrl } from "./http-cors.ts";
@@ -216,8 +216,8 @@ export function isPublicHtmlPath(path: string, hosted: boolean): boolean {
     path === "/device";
 }
 
-export function robotsTxt(plane: "staging" | "production"): string {
-  if (plane === "staging") {
+export function robotsTxt(plane: DeployPlane): string {
+  if (plane !== "production") {
     return "User-agent: *\nAllow: /\n";
   }
   return [

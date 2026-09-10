@@ -103,6 +103,7 @@ test("staging plane shows a small label and defaults store and issue to staging"
   assert.match(production, /Defaults to production, the environment agents on this deployment use/);
   assert.equal(defaultEnvironmentForPlane("staging"), "staging");
   assert.equal(defaultEnvironmentForPlane("production"), "production");
+  assert.equal(defaultEnvironmentForPlane("dev"), "staging");
 });
 
 test("team panel, org switcher, and plan card are in the shell and the bundle drives them", () => {

@@ -12,7 +12,7 @@ An existing local sqlite tree at `~/.agent-vault` is ignored unless you set `VAU
 
 You store named credentials **once**. Agents request use. You authorize with a policy. The runtime gets the key. The chat does not.
 
-Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault run`. Hosted (`VAULT_MODE=hosted`) is the multi-user product: first-party operator accounts (email OTP + TOTP), same-origin OAuth, Neon Postgres, Fly (one Machine), Cloudflare WAF.
+Local CLI (`VAULT_MODE` unset) stays a single-operator sqlite kernel for `vault run`. Hosted (`VAULT_MODE=hosted`) is the multi-user product: first-party operator accounts (email OTP + TOTP), same-origin OAuth, Postgres (Neon on the reference stack; any Postgres 16 for self-host), Fly (one Machine), Cloudflare WAF. Laptop hosted kernel: `npm run hosted:dev` (`VAULT_DEPLOY_PLANE=dev`, sqlite-hosted, loopback).
 
 ## v1 local path
 
@@ -173,7 +173,7 @@ There is no `get_secret` / `read_value` / `revoke_grant` on MCP. Approval and re
 | `vault login` | Print `/sign-in`, `/console`, and `/device` on the hosted origin |
 | `vault mcp` | MCP stdio (local sqlite). `vault mcp --remote` forwards stdio to a running `vault serve` with the model bearer. `vault mcp --user-jwt` proxies hosted MCP over an access token |
 
-`VAULT_MODE=hosted` on `vault serve` starts the hosted process (Postgres). Do not set `VAULT_HOME` in that mode (exit 78).
+`VAULT_MODE=hosted` on `vault serve` starts the hosted process (Postgres on staging/production; sqlite-hosted on plane `dev` when `DATABASE_URL` is unset). Do not set `VAULT_HOME` in that mode (exit 78). `npm run hosted:dev` is the laptop path.
 
 ## Encryption
 
@@ -232,6 +232,7 @@ npm run lint
 | `npm run migrate` | Apply `migrations/` to `DATABASE_URL_DIRECT` or `DATABASE_URL` |
 | `npm run dev` | Local `vault serve` with `--watch` |
 | `npm run hosted` | Hosted process (`VAULT_MODE=hosted` env required; exits 78 without it) |
+| `npm run hosted:dev` | Laptop hosted kernel: loopback, sqlite-hosted, printed OTP. `--check` does not listen. One process per sqlite file (SQLITE_BUSY otherwise) |
 
 ## Layout
 
@@ -239,7 +240,7 @@ npm run lint
 src/           local kernel, hosted kernel, stores, MCP, HTTP
 test/          isolation, MCP, CLI, HTTP, hosted ACs, migrations
 migrations/    hosted Postgres DDL, applied by scripts/migrate.ts (release_command)
-scripts/       migrate.ts, hosted-backup.ts (dump envelope), pretest.ts
+scripts/       migrate.ts, hosted-backup.ts (dump envelope), pretest.ts, hosted-dev.ts
 docs/ops/      runbooks: cutover, KEK rotation, migrations, restore, default branch, alerts
 fly.staging.toml / fly.prod.toml
 ```

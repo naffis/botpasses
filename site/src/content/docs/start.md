@@ -27,7 +27,7 @@ Pick the client you use. Each page has the copy-paste config.
 
 Any other MCP client that supports remote servers over HTTP works with the URL `https://botpasses.com/mcp` and OAuth sign-in on botpasses.com.
 
-Then paste the [hosted agent prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat. Setting up a laptop vault instead? Use the [local prompt](/docs/prompts#local). The full set is on [Copy-paste prompts](/docs/prompts).
+Then paste the [hosted agent prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on botpasses.com, never in chat. Setting up a laptop CLI vault instead? Use the [local prompt](/docs/prompts#local). To run the hosted kernel on this laptop (console, OTP, MCP on loopback) run `npm run hosted:dev` from a clone; see [Install](/docs/install). The full set is on [Copy-paste prompts](/docs/prompts).
 
 ## 3. Set up a credential
 

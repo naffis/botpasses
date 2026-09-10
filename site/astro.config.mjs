@@ -21,7 +21,7 @@ export default defineConfig({
   redirects,
   markdown: {
     rehypePlugins: [rehypeDocsTables],
-    shikiConfig: { theme: "github-dark-default" },
+    shikiConfig: { theme: "css-variables" },
   },
   integrations: [
     sitemap({

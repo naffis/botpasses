@@ -1,3 +1,4 @@
+import type { DeployPlane } from "../brand.ts";
 import type { VaultEnvName } from "../hosted-types.ts";
 import { envOptionsHtml } from "./console-panels.ts";
 import {
@@ -10,7 +11,7 @@ import {
   storeKindOptionsHtml,
 } from "./store-form-fields.ts";
 
-function storeDialog(plane: VaultEnvName, defaultEnv: VaultEnvName): string {
+function storeDialog(plane: DeployPlane, defaultEnv: VaultEnvName): string {
   return `<dialog id="store-dialog" data-testid="store-dialog" aria-labelledby="store-title">
     <h2 id="store-title">Store credential</h2>
     <p id="store-error" class="flash" role="alert" data-testid="store-error"></p>
@@ -168,7 +169,7 @@ function backupCodesDialog(): string {
   </dialog>`;
 }
 
-export function consoleDialogsHtml(plane: VaultEnvName, defaultEnv: VaultEnvName): string {
+export function consoleDialogsHtml(plane: DeployPlane, defaultEnv: VaultEnvName): string {
   return [
     storeDialog(plane, defaultEnv),
     rotateDialog(),

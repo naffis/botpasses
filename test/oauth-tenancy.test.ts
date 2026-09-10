@@ -184,6 +184,28 @@ test("O13 a token signed by the previous key verifies only while that key is con
   }
 });
 
+test("persistIssuedAccess on a dev process plane writes clients.environment staging", async () => {
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "dev-tenancy.sqlite"));
+  try {
+    const kernel = new HostedKernel({
+      store,
+      kek: parseMasterKey(generateMasterKey()),
+      publicUrl: ISSUER,
+      deployPlane: "dev",
+    });
+    await kernel.createOrg("acme", "user_a");
+    await persistIssuedAccess(kernel, { jti: "jti-dev", oauthClientId: "dcr_dev", accountId: "user_a" });
+    const { orgId } = await kernel.ensureVaultOrgForUser("user_a");
+    const client = (await store.listClients(orgId)).find((cl) => cl.oauthClientId === "dcr_dev");
+    assert.ok(client);
+    assert.equal(client.environment, "staging");
+  } finally {
+    await store.close();
+    cleanup(home);
+  }
+});
+
 for (const plane of ["staging", "production"] as const) {
   test(`D1 OAuth-issued vault clients bind to the ${plane} plane's environment, take the client_name, and record the consenting account`, async () => {
     const c = await ctx(plane);

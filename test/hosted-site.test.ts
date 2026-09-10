@@ -293,20 +293,42 @@ test("AC-15 invalid bearer on marketing is 200; on API is 401", async () => {
   }
 });
 
-/** GET with an explicit Host header (fetch will not let a test forge one). */
-function getWithHost(port: number, host: string, path: string): Promise<{ status: number; body: string }> {
+/** Request with an explicit Host (fetch will not let a test forge one). */
+function requestWithHost(
+  port: number,
+  host: string,
+  path: string,
+  opts: { method?: string; origin?: string } = {},
+): Promise<{ status: number; body: string; type: string; acao: string | null }> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: "127.0.0.1", port, path, method: "GET", headers: { host } }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
-    });
+    const headers: Record<string, string> = { host };
+    if (opts.origin) headers.origin = opts.origin;
+    const req = httpRequest(
+      { host: "127.0.0.1", port, path, method: opts.method ?? "GET", headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+            type: String(res.headers["content-type"] ?? ""),
+            acao: typeof res.headers["access-control-allow-origin"] === "string"
+              ? res.headers["access-control-allow-origin"]
+              : null,
+          }),
+        );
+      },
+    );
     req.on("error", reject);
     req.end();
   });
+}
+
+function getWithHost(port: number, host: string, path: string): Promise<{ status: number; body: string }> {
+  return requestWithHost(port, host, path);
 }
 
 test("B9 the marketing site is served only on an allowed Host; a foreign or loopback Host on a public plane is refused", async () => {
@@ -341,6 +363,78 @@ test("B9 the marketing site is served only on an allowed Host; a foreign or loop
     }
     // Platform health checks do not carry the public Host and stay reachable.
     assert.equal((await getWithHost(addr.port, "evil.example.com", "/health")).status, 200);
+  } finally {
+    await http.close();
+    await store.close();
+    cleanup(home);
+  }
+});
+
+test("public site GET/HEAD/OPTIONS from a foreign Origin still serve cards and icons", async () => {
+  const home = tempHome();
+  const store = openHostedSqlite(join(home, "hosted.sqlite"));
+  const publicUrl = "https://staging.botpasses.com";
+  const kek = parseMasterKey(generateMasterKey());
+  const kernel = new HostedKernel({
+    store,
+    kek,
+    publicUrl,
+    deployPlane: "staging",
+  });
+  const identity = new OperatorIdentity({ store, sessionSecret: TEST_SESSION_SECRET, kek });
+  const http = createHostedServer({
+    kernel,
+    host: "127.0.0.1",
+    port: 0,
+    publicUrl,
+    siteRoot: SITE,
+    deployPlane: "staging",
+    identity,
+    authResolver: identityAuthResolver({ identity, kernel, secureCookies: true }),
+  });
+  const addr = await http.listen();
+  const host = "staging.botpasses.com";
+  const unfurl = "https://composer.example";
+  const other = "https://cards.example";
+  try {
+    for (const [path, type] of [
+      ["/favicon.ico", /image\/x-icon/],
+      ["/og.png", /image\/png/],
+      ["/og-square.png", /image\/png/],
+      ["/logo.png", /image\/png/],
+      ["/apple-touch-icon.png", /image\/png/],
+    ] as const) {
+      const res = await requestWithHost(addr.port, host, path, { origin: unfurl });
+      assert.equal(res.status, 200, path);
+      assert.match(res.type, type, path);
+      assert.equal(res.acao, unfurl, path);
+    }
+    const page = await requestWithHost(addr.port, host, "/", { origin: other });
+    assert.equal(page.status, 200);
+    assert.match(page.body, /<h1>/);
+    assert.equal(page.acao, other);
+    const preflight = await requestWithHost(addr.port, host, "/og.png", {
+      method: "OPTIONS",
+      origin: unfurl,
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.acao, unfurl);
+    const head = await requestWithHost(addr.port, host, "/logo.png", {
+      method: "HEAD",
+      origin: other,
+    });
+    assert.equal(head.status, 200);
+    assert.equal(head.acao, other);
+    for (const path of ["/api/items", "/sign-in", "/console"]) {
+      const locked = await requestWithHost(addr.port, host, path, { origin: "https://evil.example" });
+      assert.equal(locked.status, 403, path);
+      assert.equal(locked.acao, null, path);
+    }
+    const wrongHost = await requestWithHost(addr.port, "evil.example.com", "/favicon.ico", {
+      origin: unfurl,
+    });
+    assert.equal(wrongHost.status, 403);
+    assert.doesNotMatch(wrongHost.body, /<h1>|<html/);
   } finally {
     await http.close();
     await store.close();

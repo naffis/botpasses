@@ -9,10 +9,12 @@ import {
   BRAND_NAVY,
   BRAND_TEAL,
   BRAND_THEMES,
+  CODE_HIGHLIGHT_ROLES,
   CONTRAST_PAIRS,
   CSS_VAR_NAMES,
   MARK_SIZE,
   contrastRatio,
+  cssCodeHighlightLines,
   cssTokenLines,
   cssVariables,
   hexToRgb,
@@ -65,6 +67,20 @@ test("css variables emit light on :root and dark under both guards", () => {
   assert.match(cssTokenLines("dark"), /--warn: #E9B857;/);
   assert.match(cssTokenLines("light"), /--warn: #8A5A00;/);
   assert.match(cssTokenLines("dark"), /--accent-fg: #0B1020;/);
+  assert.match(css, /--astro-code-foreground: var\(--fg\);/);
+  assert.match(css, /--astro-code-background: var\(--bg-elev\);/);
+});
+
+test("code highlight roles are brand tokens that pass AA on the elevated surface", () => {
+  assert.match(cssCodeHighlightLines(), /--astro-code-token-comment: var\(--muted\);/);
+  assert.match(cssCodeHighlightLines(), /--astro-code-token-keyword: var\(--accent\);/);
+  assert.notEqual(CODE_HIGHLIGHT_ROLES["token-keyword"], CODE_HIGHLIGHT_ROLES["token-comment"]);
+  assert.equal(CODE_HIGHLIGHT_ROLES.background, "bgElev");
+  for (const [role, key] of Object.entries(CODE_HIGHLIGHT_ROLES)) {
+    if (role === "background") continue;
+    const pair = CONTRAST_PAIRS.find(([fg, bg]) => fg === key && bg === "bgElev");
+    assert.ok(pair, `${role} maps to ${key} which must contrast on bgElev`);
+  }
 });
 
 test("self-hosted typefaces are named", () => {

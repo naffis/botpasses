@@ -403,7 +403,8 @@ function userPathHint(provider          , host        , path        )           
 // ---- src/hosted/providers/connect-redirect.ts ----
 /**
  * The redirect URI a vendor app must allowlist for a Botpasses user connect.
- * One hosted path for every provider; loopback only when Botpasses itself is local.
+ * Hosted (including plane \`dev\`) is always \`{origin}/connect/callback\`.
+ * \`LOOPBACK_REDIRECT\` is the CLI vault-serve callback only.
  */
 const LOOPBACK_REDIRECT = "http://127.0.0.1:8888/callback";
 const HOSTED_CONNECT_CALLBACK_PATH = "/connect/callback";
@@ -415,7 +416,6 @@ function isLoopbackPublicUrl(publicUrl        )          {
 /** The URI \`chooseRedirect\` sends when the caller does not ask for another allowlisted one. */
 function defaultConnectRedirect(publicUrl        )         {
   const origin = publicUrl.replace(/\\/$/, "");
-  if (isLoopbackPublicUrl(origin)) return LOOPBACK_REDIRECT;
   return \`\${origin}\${HOSTED_CONNECT_CALLBACK_PATH}\`;
 }
 
@@ -3392,7 +3392,8 @@ function storeRequestBody(values                 , opts                      )  
 // ---- src/hosted/providers/connect-redirect.ts ----
 /**
  * The redirect URI a vendor app must allowlist for a Botpasses user connect.
- * One hosted path for every provider; loopback only when Botpasses itself is local.
+ * Hosted (including plane \`dev\`) is always \`{origin}/connect/callback\`.
+ * \`LOOPBACK_REDIRECT\` is the CLI vault-serve callback only.
  */
 const LOOPBACK_REDIRECT = "http://127.0.0.1:8888/callback";
 const HOSTED_CONNECT_CALLBACK_PATH = "/connect/callback";
@@ -3404,7 +3405,6 @@ function isLoopbackPublicUrl(publicUrl        )          {
 /** The URI \`chooseRedirect\` sends when the caller does not ask for another allowlisted one. */
 function defaultConnectRedirect(publicUrl        )         {
   const origin = publicUrl.replace(/\\/$/, "");
-  if (isLoopbackPublicUrl(origin)) return LOOPBACK_REDIRECT;
   return \`\${origin}\${HOSTED_CONNECT_CALLBACK_PATH}\`;
 }
 
