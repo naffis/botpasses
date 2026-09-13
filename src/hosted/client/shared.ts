@@ -173,7 +173,7 @@ export function setFormNotice(id: string, message: string, ok: boolean): void {
 
 let flashTimer: number | undefined;
 
-/** Page flash: auto-clears after 6 s and can be dismissed. */
+/** Success notices clear after 6 s; errors stay available until dismissed or replaced. */
 export function flash(message: string, ok: boolean): void {
   const el = byId("flash");
   if (!el) return;
@@ -189,7 +189,7 @@ export function flash(message: string, ok: boolean): void {
   );
   el.className = ok ? "flash is-ok" : "flash is-err";
   el.querySelector("button")?.addEventListener("click", () => flash("", true));
-  flashTimer = window.setTimeout(() => flash("", true), FLASH_CLEAR_MS);
+  if (ok) flashTimer = window.setTimeout(() => flash("", true), FLASH_CLEAR_MS);
 }
 
 /** Inline error state for a loader: message plus a Retry button. */

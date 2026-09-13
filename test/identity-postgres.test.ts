@@ -1,14 +1,13 @@
 /** Identity queries against a real Postgres. Skips without DATABASE_URL, like hosted-postgres.test.ts. */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { Client } from "pg";
 import { test } from "node:test";
 import * as OTPAuth from "otpauth";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { IDENTITY_KEY_ID } from "../src/hosted/identity-keys.ts";
 import { TOTP_LOCK_MS, TOTP_MAX_FAILURES } from "../src/hosted/identity-totp.ts";
 import { OperatorIdentity, hashToken } from "../src/hosted/operator-identity.ts";
-import { PostgresStore } from "../src/store/postgres.ts";
+import { isolatedPostgres } from "./helpers/postgres-isolated.ts";
 import { TEST_SESSION_SECRET } from "./helpers.ts";
 
 const dbUrl = process.env.DATABASE_URL;
@@ -36,15 +35,7 @@ test("identity on Postgres: enroll, pending session rotation, lockout, backup co
     t.skip("DATABASE_URL not set");
     return;
   }
-  const store = await PostgresStore.open(dbUrl);
-  // The identity DEK is a singleton row; each run uses a fresh random KEK, so a row left by a
-  // previous run on a shared database cannot unwrap. Clearing it here mirrors a first boot.
-  {
-    const admin = new Client({ connectionString: dbUrl });
-    await admin.connect();
-    await admin.query("DELETE FROM identity_keys WHERE id = 'identity'");
-    await admin.end();
-  }
+  const { store, done } = await isolatedPostgres(dbUrl);
   await store.migrate(); // the ALTER2 statements must be idempotent
   const clock = { now: Date.now() };
   const now = (): Date => new Date(clock.now);
@@ -129,14 +120,6 @@ test("identity on Postgres: enroll, pending session rotation, lockout, backup co
     await store.deleteUnusedBackupCodes(pending.user.id);
     assert.equal((await identityB.accountSummary(pending.user.id)).backup_codes_remaining, 0);
   } finally {
-    try {
-      // Do not leave a rotation KEK on the shared CI database for later files.
-      const admin = new Client({ connectionString: dbUrl });
-      await admin.connect();
-      await admin.query("DELETE FROM identity_keys WHERE id = 'identity'");
-      await admin.end();
-    } finally {
-      await store.close();
-    }
+    await done();
   }
 });

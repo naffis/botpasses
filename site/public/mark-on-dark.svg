@@ -1,31 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="botpasses">
-  <defs>
-    <mask id="ticket-on-dark">
-      <rect width="32" height="32" rx="7" fill="#fff"/>
-      <circle cx="0" cy="16" r="3.4" fill="#000"/>
-      <circle cx="32" cy="16" r="3.4" fill="#000"/>
-    </mask>
-  </defs>
+  <defs><mask id="ticket-on-dark"><rect width="32" height="32" rx="7" fill="#fff"/><circle cy="16" r="3" fill="#000"/><circle cx="32" cy="16" r="3" fill="#000"/></mask></defs>
   <rect width="32" height="32" rx="7" fill="#F4F6FA" mask="url(#ticket-on-dark)"/>
-  <rect x="8.1" y="6" width="4.5" height="7.4" rx="2.25" fill="#00C2A8"/>
-  <rect x="19.4" y="6" width="4.5" height="7.4" rx="2.25" fill="#00C2A8"/>
-  <g fill="#14213D">
-    <rect x="5" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-    <rect x="8.1" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-    <rect x="11.2" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-    <rect x="14.3" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-    <rect x="17.4" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-    <rect x="20.5" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-    <rect x="23.6" y="15.15" width="2.1" height="1.7" rx="0.35"/>
-  </g>
-  <g fill="#14213D">
-    <rect x="6.2" y="19.2" width="1.35" height="7.6" rx="0.3"/>
-    <rect x="8.4" y="19.2" width="2.15" height="7.6" rx="0.3"/>
-    <rect x="11.4" y="19.2" width="1.2" height="7.6" rx="0.3"/>
-    <rect x="13.4" y="19.2" width="1.45" height="7.6" rx="0.3"/>
-    <rect x="15.7" y="19.2" width="1.2" height="7.6" rx="0.3"/>
-    <rect x="20.6" y="19.2" width="1.35" height="7.6" rx="0.3"/>
-    <rect x="22.8" y="19.2" width="2.8" height="7.6" rx="0.3"/>
-  </g>
-  <rect x="17.7" y="19.2" width="2.15" height="7.6" rx="0.3" fill="#00C2A8"/>
+  <g fill="#00C2A8"><rect x="8" y="6" width="5" height="7" rx="2.5"/><rect x="19" y="6" width="5" height="7" rx="2.5"/></g>
+  <path d="M6 16h20" fill="none" stroke="#14213D" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <g fill="#14213D"><rect x="6" y="20" width="2" height="7" rx=".5"/><rect x="10" y="20" width="3" height="7" rx=".5"/><rect x="15" y="20" width="2" height="7" rx=".5"/><rect x="23" y="20" width="3" height="7" rx=".5"/></g>
+  <rect x="19" y="20" width="2" height="7" rx=".5" fill="#00C2A8"/>
 </svg>

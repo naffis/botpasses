@@ -596,7 +596,7 @@ test("inject writes audit and access snapshot fetched names without the secret",
         last_access_at: string | null;
         fetched: string[];
       }[];
-      grants: { id: string; client_id: string; fetched: string[] }[];
+      grants: { id: string; item_id: string; client_id: string; fetched: string[] }[];
     };
     assert.ok(!("audit" in json));
     assert.ok(!("events" in json));
@@ -607,6 +607,7 @@ test("inject writes audit and access snapshot fetched names without the secret",
     assert.deepEqual(client.fetched, ["STRIPE_KEY"]);
     const grant = json.grants.find((g) => g.id === asked.grant.id);
     assert.equal(grant?.client_id, body.client.id);
+    assert.equal(grant?.item_id, asked.grant.itemId, "drawer approvals identify the exact credential");
     assert.deepEqual(grant?.fetched, ["STRIPE_KEY"]);
     const raw = JSON.stringify(json);
     assert.doesNotMatch(raw, /avm_/);

@@ -160,4 +160,6 @@ jobs:
           # own Chromium plus the runner image is enough for test:smoke.
           playwright install chromium
           echo "BOTPASSES_PLAYWRIGHT_PKG=$(npm root -g)/playwright/package.json" >> "$GITHUB_ENV"
+      - run: npm --prefix site ci
+      - run: npm run site:build
       - run: npm run test:smoke

@@ -127,6 +127,8 @@ async function loadCredentials(route: Route): Promise<void> {
     return;
   }
   const loaded = await loadItems();
+  // Navigation may have changed while the credential list was in flight.
+  if (current !== route) return;
   if (!loaded || (await openItemRoute(route))) return;
   flash("That credential was not found. It may have been deleted.", false);
   navigate("#credentials");

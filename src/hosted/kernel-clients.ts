@@ -312,6 +312,7 @@ export async function listAccess(host: ClientHost, orgId: string, currentSession
     const usage = grantUsage(g, audit, g.clientId, itemName);
     grantRows.push({
       id: g.id,
+      item_id: g.itemId,
       item_name: itemName,
       client_id: g.clientId,
       client_name: clientNames.get(g.clientId) ?? g.clientId,

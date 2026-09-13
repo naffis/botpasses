@@ -37,6 +37,7 @@ export type ItemFilter = { q: string; environment: string; kind: string; sort: "
 
 let items: ItemRow[] = [];
 let credHandlers: CredentialHandlers | undefined;
+let drawerRequest = 0;
 
 function isItem(v: unknown): v is ItemRow {
   return isJson(v) && typeof v.id === "string" && typeof v.name === "string";
@@ -165,6 +166,7 @@ export async function openDrawer(id: string): Promise<boolean> {
   const item = findItem(id);
   const drawer = byId<HTMLDialogElement>("item-drawer");
   if (!item || !drawer) return false;
+  const request = ++drawerRequest;
   const title = byId("drawer-title");
   if (title) title.textContent = item.name;
   const created = item.created_at ?? item.createdAt;
@@ -192,8 +194,16 @@ export async function openDrawer(id: string): Promise<boolean> {
   openDialog("item-drawer");
   try {
     const r = await api("/api/access");
+    // A slow response for a previous credential must never replace the current drawer.
+    if (request !== drawerRequest || !drawer.open) return true;
+    if (r.status === 401) {
+      closeDrawer();
+      handleUnauthorized();
+      return true;
+    }
+    if (!r.ok) throw new Error(errorMessage(r, "Could not load approvals"));
     const grants = arr(r.body.grants, isGrantRow).filter(
-      (g) => g.item_name === item.name && (g.status === "active" || g.status === "pending"),
+      (g) => g.item_id === item.id && (g.status === "active" || g.status === "pending"),
     );
     render(
       approvals,
@@ -205,12 +215,15 @@ export async function openDrawer(id: string): Promise<boolean> {
         : html`<p class="hint">No agent has an approval for this credential.</p>`,
     );
   } catch (err) {
-    render(approvals, html`<p class="hint is-err">${loadErrorText(err, "Could not load approvals")}</p>`);
+    if (request !== drawerRequest || !drawer.open) return true;
+    render(approvals, html`<p class="hint is-err" role="alert">${loadErrorText(err, "Could not load approvals")}</p><button type="button" class="btn-ghost" data-retry-approvals>Retry</button>`);
+    approvals?.querySelector("[data-retry-approvals]")?.addEventListener("click", () => { void openDrawer(id); });
   }
   return true;
 }
 
 export function closeDrawer(): void {
+  drawerRequest++;
   const drawer = byId<HTMLDialogElement>("item-drawer");
   if (drawer?.open) drawer.close();
 }
@@ -223,6 +236,12 @@ export function bindCredentials(
   byId("items-filters")?.addEventListener("input", renderItems);
   byId("items-filters")?.addEventListener("change", renderItems);
   byId("items-filters")?.addEventListener("submit", (e) => e.preventDefault());
+  byId("items-clear")?.addEventListener("click", () => {
+    const form = byId<HTMLFormElement>("items-filters");
+    form?.reset();
+    renderItems();
+    form?.querySelector<HTMLInputElement>("input[type=search]")?.focus();
+  });
   const body = byId("items");
   const act = (item: ItemRow, action: string): void => {
     if (!credHandlers) return;

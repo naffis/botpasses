@@ -41,9 +41,8 @@ test("AC-01 fixture dist GET / is marketing", async () => {
     const res = await fetch(`${ctx.base}/`);
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.match(html, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*The model does not get the key\.\s*<\/h1>/);
-    assert.match(html, /data-hero-rotate="/);
-    assert.match(html, /class="hero-rotate-word">Stripe<\/span>/);
+    assert.match(html, /id="hero-title">Let agents work\./);
+    assert.match(html, /data-access-demo/);
     assert.match(html, /href="\/sign-up"/);
     assert.match(html, /href="\/sign-in"/);
     assert.doesNotMatch(html, /Operator token/);
@@ -353,12 +352,12 @@ test("B9 the marketing site is served only on an allowed Host; a foreign or loop
   try {
     const ok = await getWithHost(addr.port, "staging.botpasses.com", "/");
     assert.equal(ok.status, 200);
-    assert.match(ok.body, /<h1>/);
+    assert.match(ok.body, /<h1\b/);
     for (const host of ["evil.example.com", "staging.botpasses.com.evil.net", "botpasses.com", "127.0.0.1", "localhost"]) {
       for (const path of ["/", "/docs/start", "/security", "/favicon.svg", "/_astro/missing.css"]) {
         const res = await getWithHost(addr.port, host, path);
         assert.equal(res.status, 403, `${host} ${path}`);
-        assert.doesNotMatch(res.body, /<h1>|<html/, `${host} ${path} must not serve the site`);
+        assert.doesNotMatch(res.body, /<h1\b|<html/, `${host} ${path} must not serve the site`);
       }
     }
     // Platform health checks do not carry the public Host and stay reachable.
@@ -411,7 +410,7 @@ test("public site GET/HEAD/OPTIONS from a foreign Origin still serve cards and i
     }
     const page = await requestWithHost(addr.port, host, "/", { origin: other });
     assert.equal(page.status, 200);
-    assert.match(page.body, /<h1>/);
+    assert.match(page.body, /<h1\b/);
     assert.equal(page.acao, other);
     const preflight = await requestWithHost(addr.port, host, "/og.png", {
       method: "OPTIONS",
@@ -434,7 +433,7 @@ test("public site GET/HEAD/OPTIONS from a foreign Origin still serve cards and i
       origin: unfurl,
     });
     assert.equal(wrongHost.status, 403);
-    assert.doesNotMatch(wrongHost.body, /<h1>|<html/);
+    assert.doesNotMatch(wrongHost.body, /<h1\b|<html/);
   } finally {
     await http.close();
     await store.close();
