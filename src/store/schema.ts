@@ -280,10 +280,10 @@ DO $$
 BEGIN
   -- clients_org_oauth shipped once as a plain index; CREATE UNIQUE ... IF NOT EXISTS would keep it.
   IF EXISTS (
-    SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
-    WHERE c.relname = 'clients_org_oauth' AND NOT i.indisunique
+    SELECT 1 FROM pg_index
+    WHERE indexrelid = to_regclass('clients_org_oauth') AND NOT indisunique
   ) THEN
-    DROP INDEX clients_org_oauth;
+    DROP INDEX IF EXISTS clients_org_oauth;
   END IF;
 END $$;
 ALTER TABLE oidc_payloads ADD COLUMN IF NOT EXISTS uid TEXT;

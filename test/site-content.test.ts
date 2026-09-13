@@ -63,51 +63,35 @@ test("site dist has every documented URL", () => {
 
 test("homepage sells the product and links the right places", () => {
   const home = page("index.html");
-  assert.match(home, /<h1>\s*Your agent can call[\s\S]*Stripe[\s\S]*The model does not get the key\.\s*<\/h1>/);
-  assert.match(home, /data-hero-rotate="/);
-  assert.match(home, /class="hero-rotate-word">Stripe<\/span>/);
-  assert.doesNotMatch(home, /hero-rotate-sizer/);
-  assert.match(home, /class="hero-rotate-word">Stripe<\/span><\/span>\. The model does not get the key\./);
-  for (const service of ["Slack", "GitHub", "Salesforce", "Twilio", "Shopify", "Notion"]) {
-    assert.match(home, new RegExp(`data-hero-rotate="[^"]*${service}`), service);
-  }
+  const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(home)?.[1] ?? "";
+  assert.match(text(heading), /Let agents work\.\s*Keep your keys\./);
+  assert.match(home, /data-access-demo/);
+  assert.match(home, /INTERACTIVE EXAMPLE/);
+  assert.match(home, /data-demo-approve/);
   assert.match(home, /<script type="module" src="\/_astro\/[^"]+\.js"/);
-  assert.match(home, /Create account/);
-  assert.match(home, /Copy a setup prompt/);
-  assert.match(home, /data-copy-prompt="hosted"/);
-  assert.match(home, /data-copy-prompt="local"/);
-  assert.match(home, /data-copy-prompt="self-host"/);
-  assert.match(home, /href="\/docs\/prompts#hosted"/);
-  assert.match(home, /href="\/docs\/prompts#local"/);
-  assert.match(home, /href="\/docs\/prompts#self-host"/);
-  assert.doesNotMatch(home, /Operator token/);
-  assert.match(home, /How it works/);
-  assert.match(text(home), /"name": "http_request"/);
-  assert.match(home, /approval_code/);
-  assert.match(home, /What the model sees/);
-  assert.match(home, /What the API sees/);
-  for (const w of ["Claude", "Claude Code", "Cursor", "ChatGPT", "Grok", "Any MCP client"]) {
-    assert.match(home, new RegExp(`<li>${w}</li>`), w);
+  for (const id of ["hosted", "local", "self-host"]) {
+    assert.ok(home.includes(`data-copy-prompt="${id}"`));
+    assert.ok(home.includes(`href="/docs/prompts#${id}"`));
+  }
+  for (const client of ["claude", "claude-code", "cursor", "chatgpt", "grok"]) {
+    assert.ok(home.includes(`href="/docs/connect/${client}"`));
+  }
+  for (const href of ["/sign-up", "/sign-in", "/security", "/docs/start", "#how", "#get-started"]) {
+    assert.ok(home.includes(`href="${href}"`), href);
   }
   assert.match(home, /grant-vault, not zero-knowledge/);
-  assert.match(home, /Who can decrypt/);
-  assert.match(home, /Who cannot/);
+  assert.match(home, /The model does not get the key/);
+  assert.match(home, /get_secret/);
   assert.match(home, /github\.com\/naffis\/botpasses/);
   assert.match(home, /Free while in beta/);
   assert.match(text(home), /npm run hosted:dev/);
-  assert.doesNotMatch(text(home), /run it yourself on Fly, Neon, and KMS/);
   assert.match(home, /Can I run Botpasses on my laptop\?/);
   assert.match(home, /Botpasses is a grant-vault for AI agents/);
-  assert.match(home, /The model does not get the key/);
-  assert.doesNotMatch(home, /The model never sees the value/);
-  assert.doesNotMatch(home, /The model never receives the value/);
   assert.match(home, /What is Botpasses\?/);
   assert.match(home, /Is this a password manager\?/);
-  assert.match(home, /Composio/);
-  assert.match(home, /"@type":"FAQPage"/);
   assert.match(home, /prompt-injected/);
   assert.match(home, /mailto:support@botpasses\.com/);
-  assert.match(home, /mailto:security@botpasses\.com/);
+  assert.doesNotMatch(home, /Operator token/);
   assert.match(home, /class="wrap wide"/);
 });
 

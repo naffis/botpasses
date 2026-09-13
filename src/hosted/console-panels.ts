@@ -55,9 +55,10 @@ function credentialsPanel(plane: DeployPlane): string {
           <div id="items-empty" class="empty" hidden data-testid="items-empty">
             <strong>No credentials yet</strong>
             Ask a connected agent to set up a provider, or store a named credential here. Agents request it, you approve, and the key stays in the vault.
+            <ol class="onboarding-steps"><li><span>1</span>Store a credential</li><li><span>2</span><a href="#agents">Connect an agent</a></li><li><span>3</span>Approve its first request</li></ol>
             <p class="toolbar"><button type="button" id="empty-store" class="btn-primary" data-testid="empty-store">Store credential</button></p>
           </div>
-          <p id="items-none" class="empty" hidden data-testid="items-none">No credentials match these filters.</p>
+          <div id="items-none" class="empty" hidden data-testid="items-none"><strong>No credentials match these filters.</strong>Try another name or host, or clear the filters to see everything.<p class="toolbar"><button type="button" id="items-clear" class="btn-ghost">Clear filters</button></p></div>
           <div class="table-wrap" id="items-table" hidden>
             <table class="items-table">
               <colgroup>

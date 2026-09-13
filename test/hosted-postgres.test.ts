@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { Client } from "pg";
+import { isolatedPostgres } from "./helpers/postgres-isolated.ts";
 import { randomUUID } from "node:crypto";
 import { generateMasterKey, parseMasterKey } from "../src/crypto.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
@@ -184,5 +186,30 @@ test("AC-11 GET /ready is 200 against Postgres", async (t) => {
   } finally {
     await http.close();
     await store.close();
+  }
+});
+
+
+test("Postgres bootstrap ignores a same-named legacy index in another schema", async (t) => {
+  if (!dbUrl) { t.skip("DATABASE_URL not set"); return; }
+  const schema = `bp_index_${randomUUID().replaceAll("-", "")}`;
+  const admin = new Client({ connectionString: dbUrl });
+  await admin.connect();
+  try {
+    await admin.query(`CREATE SCHEMA "${schema}"`);
+    await admin.query(`CREATE TABLE "${schema}".clients (org_id TEXT, oauth_client_id TEXT)`);
+    await admin.query(`CREATE INDEX clients_org_oauth ON "${schema}".clients (org_id, oauth_client_id)`);
+    const isolated = await isolatedPostgres(dbUrl);
+    try {
+      await isolated.store.migrate();
+      const foreignIndex = await admin.query("SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = 'clients_org_oauth'", [schema]);
+      assert.equal(foreignIndex.rows.length, 1, "the other schema's index stays intact");
+      assert.doesNotMatch(String(foreignIndex.rows[0]?.indexdef), /UNIQUE/);
+    } finally {
+      await isolated.done();
+    }
+  } finally {
+    try { await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`); }
+    finally { await admin.end(); }
   }
 });

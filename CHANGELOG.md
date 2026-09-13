@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixed: Postgres bootstrap checks the legacy OAuth index in its active schema, so a same-named index in another schema cannot make startup fail.
+
+- Tests: Postgres identity, OIDC, and store-parity fixtures now use isolated schemas. Parallel runs no longer replace or delete another test’s identity key during enrollment or KEK rotation.
+
+- Site: redesigned the homepage around a working approval example, clearer setup paths, mobile navigation, and the shared light/dark palette. Refined the ticket-bot SVGs and rebuilt favicons, app icons, and social cards; the social generator now imports brand tokens and preserves SVG masks.
+- Fixed: credential drawers match approvals by item ID, keeping same-name staging and production credentials separate. Failed loads offer Retry, late responses cannot overwrite a different drawer, and a pending credential lookup cannot interrupt navigation.
+- Console: first-use guidance, a clear-filters action, and persistent error notices. Site copy controls prevent overlapping requests and provide manual-copy guidance when clipboard access is blocked. Browser CI now covers the marketing site and docs search as well as the console.
+
 - Fixed: Always-allow / Connect **Also allow this agent** for a user-OAuth account stands the source credential the agent names (`SPOTIFY_SECRET` on `api.spotify.com`), not only the hidden token mint (`POST accounts.spotify.com/api/token` on `SPOTIFY_REFRESH`). A user-path `http_request` reads `<ITEM>_REFRESH` for the send the way it already reads a sibling client secret; it does not create an Inbox grant whose `requested_scope` is the token endpoint (BOTP-14). A direct `POST` of the refresh item to the token host still needs its own approval. Same for GitHub, Google, Slack, and Stripe Connect.
 - Site: remaining docs name the laptop hosted kernel (`npm run hosted:dev`) and portable self-host. Homepage, FAQ, troubleshooting, Guided setup, Start, Install, Self-hosting, Copy-paste prompts, and the connect pages no longer describe Fly plus Neon as the only run path, or `:8888` as the hosted connect URI.
 - Fixed: unauthenticated `POST /mcp` `initialize`, `ping`, and `tools/list` are 401 with the same `WWW-Authenticate` `resource_metadata` and `scope="mcp"` as `GET /mcp` and `tools/call`. Grok Bot's AuthenticateMcpServer builds the Authorize browser URL from that first JSON-RPC 401; a 200 handshake left `needsAuth` with `no_auth_link` (Authorize spun, then Retry, no browser) after PR #15 put the challenge on GET only (BOTP-13). A preconfigured `avm_` Bearer still skips the card. Cursor desktop OAuth and DCR (including `grokbot://` and `https://www.cursor.com/agents/mcp/oauth/callback`) are unchanged.

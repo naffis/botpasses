@@ -1,6 +1,6 @@
 /**
- * Rebuild site/public icon PNGs and favicon.ico from the official brand rasters
- * in src/brand-assets/source. Not part of site:build (needs ImageMagick).
+ * Rebuild site/public icon PNGs and favicon.ico from the editable favicon SVG
+ * in src/brand-assets. Not part of site:build (needs ImageMagick).
  * Commit the outputs; Astro copies public/ into dist.
  *
  *   node site/scripts/write-icons.mjs
@@ -16,9 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(here, "..", "public");
-const source = join(here, "..", "..", "src", "brand-assets", "source");
-const official512 = join(source, "favicon-512.png");
-const official32 = join(source, "favicon.png");
+const source = join(here, "..", "..", "src", "brand-assets", "favicon.svg");
 
 function run(bin, args) {
   const r = spawnSync(bin, args, { stdio: "inherit" });
@@ -28,13 +26,11 @@ function run(bin, args) {
 
 const tmp = mkdtempSync(join(tmpdir(), "bp-icons-"));
 try {
-  run("magick", [official32, "-resize", "16x16", join(tmp, "f16.png")]);
-  copyFileSync(official32, join(tmp, "f32.png"));
-  run("magick", [official512, "-resize", "48x48", join(tmp, "f48.png")]);
-  run("magick", [official512, "-resize", "180x180", join(publicDir, "apple-touch-icon.png")]);
-  run("magick", [official512, "-resize", "192x192", join(publicDir, "android-chrome-192x192.png")]);
-  copyFileSync(official512, join(publicDir, "android-chrome-512x512.png"));
-  copyFileSync(official512, join(publicDir, "logo.png"));
+  // Render each size directly from the SVG, so favicon and home-screen icons share one mark.
+  for (const [size, file] of [[16, join(tmp, "f16.png")], [32, join(tmp, "f32.png")], [48, join(tmp, "f48.png")], [180, join(publicDir, "apple-touch-icon.png")], [192, join(publicDir, "android-chrome-192x192.png")], [512, join(publicDir, "android-chrome-512x512.png")]]) {
+    run("magick", ["-background", "none", "-density", "1536", source, "-resize", `${size}x${size}`, "-strip", "-depth", "8", file]);
+  }
+  copyFileSync(join(publicDir, "android-chrome-512x512.png"), join(publicDir, "logo.png"));
   run("magick", [join(tmp, "f16.png"), join(tmp, "f32.png"), join(tmp, "f48.png"), join(publicDir, "favicon.ico")]);
 } finally {
   rmSync(tmp, { recursive: true, force: true });

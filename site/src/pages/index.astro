@@ -1,8 +1,8 @@
 ---
 import Base from "../layouts/Base.astro";
 import CopyButton from "../components/CopyButton.astro";
-import { promptById } from "../lib/bootstrap-prompts.ts";
-import { HERO_SERVICES } from "../lib/hero-services.ts";
+import "../styles/home.css";
+import AccessDemo from "../components/AccessDemo.astro";
 import {
   GITHUB,
   PRODUCT_DESCRIPTION,
@@ -12,48 +12,14 @@ import {
   softwareApplicationLd,
 } from "../lib/site-meta.ts";
 
-const hostedPrompt = promptById("hosted");
-const localPrompt = promptById("local");
-const selfHostPrompt = promptById("self-host");
 
-const heroServices = HERO_SERVICES.join("|");
-
-const request = `{
-  "method": "tools/call",
-  "params": {
-    "name": "http_request",
-    "arguments": {
-      "method": "GET",
-      "path": "https://api.stripe.com/v1/balance",
-      "task_description": "Check the account balance"
-    }
-  }
-}`;
-
-const pending = `{
-  "status": "pending",
-  "approval_code": "48213907",
-  "item_name": "STRIPE_SECRET_KEY",
-  "next": { "for_model": "Ask the user to approve, then retry." }
-}`;
-
-const result = `{
-  "status": 200,
-  "body": "{\\"object\\":\\"balance\\",\\"available\\":[{\\"amount\\":125000,\\"currency\\":\\"usd\\"}]}"
-}`;
-
-const modelSees = `STRIPE_SECRET_KEY   ••••4k2p   api.stripe.com
-
-{
-  "status": 200,
-  "body": "{\\"object\\":\\"balance\\",\\"available\\":[...]}"
-}`;
-
-const apiSees = `GET /v1/balance HTTP/1.1
-Host: api.stripe.com
-Authorization: Bearer sk_live_the_real_key_ending_4k2p`;
-
-const works = ["Claude", "Claude Code", "Cursor", "ChatGPT", "Grok", "Any MCP client"];
+const clients = [
+  { name: "Claude", href: "/docs/connect/claude", symbol: "✳" },
+  { name: "Claude Code", href: "/docs/connect/claude-code", symbol: ">_" },
+  { name: "Cursor", href: "/docs/connect/cursor", symbol: "↗" },
+  { name: "ChatGPT", href: "/docs/connect/chatgpt", symbol: "◎" },
+  { name: "Grok", href: "/docs/connect/grok", symbol: "/" },
+];
 
 const faq = [
   {
@@ -74,7 +40,7 @@ const faq = [
   },
   {
     q: "How do I revoke?",
-    a: "From the console Access panel. Revoke an agent (its tokens stop working on the next call), one approval, or one session. Revoke is operator-only; there is no revoke over MCP, so a model cannot undo it.",
+    a: "From Agents in the console. Revoke an agent (its tokens stop working on the next call), one approval, or one session. Revoke is operator-only; there is no revoke over MCP, so a model cannot undo it.",
   },
   {
     q: "What about staging vs production?",
@@ -90,16 +56,13 @@ const faq = [
   },
   {
     q: "How is this different from putting keys in .env or the system prompt?",
-    a: "A key in .env or a prompt is visible to the model, the transcript, and anyone who can read the chat or the repo. Botpasses never returns a value to the model. The agent asks for a call by host; you approve; the vault attaches the key on the way out.",
+    a: "A key pasted into a prompt enters the conversation. A key in .env can be exposed if an agent reads the file or prints its environment. Botpasses never returns a value to the model. The agent asks for a call by host; you approve; the vault attaches the key on the way out.",
   },
-  {
-    q: "How is this different from Composio or Arcade?",
-    a: "Those products give the agent a catalog of tools and hold the tokens themselves. Botpasses is the opposite shape: you keep the credential, the agent keeps MCP http_request, and Botpasses attaches the key only after you approve. We do not wrap Stripe or GitHub as first-party tools.",
-  },
+
 ];
 ---
 <Base
-  title="Your agent can call Stripe, Slack, GitHub"
+  title="Let agents work. Keep your keys."
   description={PRODUCT_DESCRIPTION}
   wide
 >
@@ -118,193 +81,70 @@ const faq = [
     }))} />
   </Fragment>
 
-  <section class="hero">
-    <h1>
-      Your agent can call <span class="hero-rotate" data-hero-rotate={heroServices}><span class="hero-rotate-word">Stripe</span></span>. The model does not get the key.
-    </h1>
-    <script>
-      import { startHeroRotate } from "../scripts/hero-rotate.ts";
-      startHeroRotate();
-    </script>
-    <p class="lede">
-      Botpasses is a grant-vault for AI agents. Store an API key once. Your agent (Claude, Cursor,
-      ChatGPT, Grok) asks to call the API over MCP. You approve. Botpasses attaches the key inside
-      the vault, makes the call, and returns a redacted result. Chat, logs, and the transcript do
-      not get the key.
-    </p>
-    <div class="hero-actions">
-      <a class="btn btn-primary" href="/sign-up">Create account</a>
-      <a class="btn" href="/sign-in">Sign in</a>
-      <a class="btn" href="/docs/start">Read the docs</a>
-    </div>
-    <p class="footer-note">Free while in beta. Open source, MIT.</p>
-  </section>
-
-  <section class="section" aria-labelledby="prompts">
-    <h2 id="prompts">Copy a setup prompt</h2>
-    <p class="section-intro">
-      Paste one of these into your agent instead of inventing setup steps. The agent walks Collect
-      and Connect. You type secrets on botpasses.com, never in chat. Full set:{" "}
-      <a href="/docs/prompts">Copy-paste prompts</a>.
-    </p>
-    <div class="prompt-cards">
-      <article class="card prompt-card-primary">
-        <p class="eyebrow">Hosted</p>
-        <h3>{hostedPrompt.title}</h3>
-        <p>{hostedPrompt.blurb}</p>
-        <div class="prompt-actions">
-          <CopyButton promptId="hosted" primary />
-          <a class="btn" href="/docs/prompts#hosted">Read the prompt</a>
+  <div class="home">
+    <section class="home-hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <a class="beta-link" href="#get-started"><span class="status-dot" aria-hidden="true"></span> Open source. Free while in beta. <span aria-hidden="true">↗</span></a>
+        <h1 id="hero-title">Let agents work.<br /><span>Keep your keys.</span></h1>
+        <p class="hero-description">Give your AI agent access to the APIs it needs, without putting secrets in the conversation. You approve the access. Botpasses handles the keys.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="/sign-up">Create account <span aria-hidden="true">↗</span></a>
+          <a class="btn" href="#how">See how it works <span aria-hidden="true">↓</span></a>
         </div>
-      </article>
-      <article class="card">
-        <h3>{localPrompt.title}</h3>
-        <p>{localPrompt.blurb}</p>
-        <div class="prompt-actions">
-          <CopyButton promptId="local" />
-          <a class="btn" href="/docs/prompts#local">Full prompt</a>
-        </div>
-      </article>
-      <article class="card">
-        <h3>{selfHostPrompt.title}</h3>
-        <p>{selfHostPrompt.blurb}</p>
-        <div class="prompt-actions">
-          <CopyButton promptId="self-host" />
-          <a class="btn" href="/docs/prompts#self-host">Full prompt</a>
-        </div>
-      </article>
-    </div>
-  </section>
-
-  <section class="section" aria-labelledby="how">
-    <h2 id="how">How it works</h2>
-    <p class="section-intro">
-      Three moves. The operator (you) stores and approves. The agent asks by API host, not by key.
-      Botpasses does the call.
-    </p>
-    <ol class="steps">
-      <li class="card">
-        <h3>Store a credential once</h3>
-        <p>In the console, give it a name, the value, and the hosts it may be sent to. It is encrypted at rest and never shown again.</p>
-        <pre tabindex="0"><code>Name           STRIPE_SECRET_KEY
-Allowed hosts  api.stripe.com
-Sent as        Authorization: Bearer
-Stored         ••••4k2p</code></pre>
-      </li>
-      <li class="card">
-        <h3>The agent asks for the call</h3>
-        <p>You say "check my Stripe balance". The agent calls <code>http_request</code> with the URL. If it has no approval yet, Botpasses returns a pending request and an 8-digit code.</p>
-        <pre tabindex="0"><code>{request}</code></pre>
-        <pre tabindex="0"><code>{pending}</code></pre>
-      </li>
-      <li class="card">
-        <h3>You approve. Botpasses makes the call</h3>
-        <p>Approve in the inbox or with the code. The agent retries. The key is attached inside the vault, the request goes to the allowed host only, and the body comes back redacted.</p>
-        <pre tabindex="0"><code>{result}</code></pre>
-      </li>
-    </ol>
-  </section>
-
-  <section class="section" aria-labelledby="split">
-    <h2 id="split">What the model sees. What the API sees.</h2>
-    <p class="section-intro">Two different views of the same call. Only one of them contains the key.</p>
-    <div class="split">
-      <div class="card">
-        <h3>What the model sees</h3>
-        <p>Names, the last four characters, approval status, and the redacted response. No tool returns a value.</p>
-        <pre tabindex="0"><code>{modelSees}</code></pre>
+        <p class="hero-footnote">Your tools. Your credentials. Your call.</p>
       </div>
-      <div class="card">
-        <h3>What the API sees</h3>
-        <p>A normal request from Botpasses with the credential attached, to an allowed host, over pinned HTTPS.</p>
-        <pre tabindex="0"><code>{apiSees}</code></pre>
-      </div>
-    </div>
-  </section>
+      <AccessDemo />
+    </section>
 
-  <section class="section" aria-labelledby="works">
-    <h2 id="works">Works with</h2>
-    <p class="section-intro">
-      Any client that speaks MCP (the Model Context Protocol) over HTTP. OAuth sign-in on botpasses.com, or a
-      bearer token for clients that prefer one.
-    </p>
-    <ul class="works-with">
-      {works.map((w) => <li>{w}</li>)}
-    </ul>
-    <p class="section-intro" style="margin-top:1rem">
-      Setup pages: <a href="/docs/connect/claude">Claude</a>, <a href="/docs/connect/claude-code">Claude Code</a>,{" "}
-      <a href="/docs/connect/cursor">Cursor</a>, <a href="/docs/connect/chatgpt">ChatGPT</a>,{" "}
-      <a href="/docs/connect/grok">Grok</a>.
-    </p>
-  </section>
+    <section class="client-strip" aria-label="Compatible agents">
+      <p>One vault. Your favorite agents.</p>
+      <ul>
+        {clients.map((client) => <li><a href={client.href}><span class="client-symbol" aria-hidden="true">{client.symbol}</span>{client.name}</a></li>)}
+        <li><a href="/docs/start"><span class="client-symbol" aria-hidden="true">＋</span>Any MCP client</a></li>
+      </ul>
+    </section>
 
-  <section class="section" aria-labelledby="trust">
-    <h2 id="trust">Trust model, in plain words</h2>
-    <p class="section-intro">
-      Botpasses is a grant-vault, not zero-knowledge. To attach a key to a request, the hosted process has to
-      decrypt it. We say exactly who can and who cannot.
-    </p>
-    <div class="trust-grid">
-      <div class="card">
-        <h3>Who can decrypt</h3>
-        <ul>
-          <li>The hosted process, in memory, at the moment of an approved inject.</li>
-          <li>Anyone holding both the AWS KMS role and the database. One without the other is not enough.</li>
-          <li>The API you call receives the credential, as it must.</li>
-        </ul>
+    <section class="home-section" aria-labelledby="how">
+      <div class="section-heading">
+        <div><p class="eyebrow">How it works</p><h2 id="how">A key to the API.<br />A say in every step.</h2></div>
+        <p>Ask your agent to check a balance, open an issue, or update a record. Botpasses sits between the request and your credentials.</p>
       </div>
-      <div class="card">
-        <h3>Who cannot</h3>
-        <ul>
-          <li>The model. No tool, route, or page returns a value.</li>
-          <li>The chat transcript and provider logs.</li>
-          <li>Our own logs, error reports, emails, and audit rows.</li>
-          <li>Botpasses staff without both the KMS role and the database. There is no support decrypt tool.</li>
-          <li>Anyone with a database dump alone.</li>
-        </ul>
-      </div>
-    </div>
-    <p class="section-intro" style="margin-top:1rem">
-      Keys are AES-256-GCM with a data key per organisation, wrapped by a platform key that AWS KMS unwraps
-      at boot. Tests in the repository store a canary value and fail if it appears anywhere a model could read
-      it. The full table is on the <a href="/security">Security page</a>.
-    </p>
-  </section>
+      <ol class="workflow">
+        <li><span class="step-number">01 / STORE</span><div class="step-visual credential-visual" aria-hidden="true"><span class="mini-icon">⌘</span><div><strong>GITHUB_TOKEN</strong><span>•••• •••• •••• 4k2p</span></div><span class="mini-status">Encrypted</span></div><h3>Store it once.</h3><p>Add a credential and the API hosts it can reach. Enter the value in Botpasses, never in chat.</p><a href="/docs/how-to/store-a-secret">Store a credential <span aria-hidden="true">↗</span></a></li>
+        <li><span class="step-number">02 / APPROVE</span><div class="step-visual scope-visual" aria-hidden="true"><span>GET</span><code>api.github.com</code><span class="scope-check">✓</span></div><h3>Give access a boundary.</h3><p>Review the agent and its request. Approve one call, or set a standing approval for work you trust.</p><a href="/docs/how-to/grant-access">Explore approvals <span aria-hidden="true">↗</span></a></li>
+        <li><span class="step-number">03 / RUN</span><div class="step-visual result-visual" aria-hidden="true"><span class="status-dot"></span><code>200 OK</code><span>Key stays in the vault</span></div><h3>Get the work done.</h3><p>Botpasses attaches the key to the approved API call and returns a redacted result. The model does not get the key.</p><a href="/docs/explanation/why-the-model-never-sees-the-value">Follow a request <span aria-hidden="true">↗</span></a></li>
+      </ol>
+    </section>
 
-  <section class="section" aria-labelledby="oss">
-    <h2 id="oss">Open source. MIT. Self-host if you want.</h2>
-    <div class="two-up">
-      <div class="card">
-        <h3>The code is public</h3>
-        <p>
-          The CLI, the hosted server, the connector, and the tests are at{" "}
-          <a href={GITHUB} rel="noopener">github.com/naffis/botpasses</a>. Design decisions are written down as
-          ADRs, including the one that rejects a zero-knowledge claim.
-        </p>
+    <section class="home-section control-section" aria-labelledby="control">
+      <div class="section-heading"><div><p class="eyebrow">Permission with a purpose</p><h2 id="control">Useful agents.<br />Clear boundaries.</h2></div><p>Access should be a decision you can see, understand, and take back.</p></div>
+      <div class="control-grid">
+        <article class="control-card boundary-card">
+          <div class="boundary-visual" aria-label="The model sees a credential name. Only the approved API request receives its value."><div><span>MODEL</span><strong>GITHUB_TOKEN</strong><small>Name + redacted result</small></div><span class="boundary-divider" aria-hidden="true">→</span><div><img src="/mark.svg" alt="Botpasses vault" width="40" height="40" /><small>Approved inject</small></div><span class="boundary-divider" aria-hidden="true">→</span><div><span>API</span><strong>Authenticated</strong><small>Allowed host only</small></div></div>
+          <h3>The right access. No key in the chat.</h3><p>The agent asks for an API call. The vault handles authentication. There is no <code>get_secret</code> tool returning your stored value.</p>
+        </article>
+        <article class="control-card"><span class="feature-icon" aria-hidden="true">↶</span><h3>Permission is reversible.</h3><p>Revoke an agent or an approval from the console. Its next call loses access. The agent cannot undo your decision.</p><a href="/docs/how-to/revoke-access">Stay in control <span aria-hidden="true">↗</span></a></article>
+        <article class="control-card"><span class="feature-icon" aria-hidden="true">≡</span><h3>Know what happened.</h3><p>See which agent used which credential, when, and the outcome. Activity records actions and names, without storing secret values.</p></article>
+        <article class="control-card environments-card"><div class="environment-pair" aria-hidden="true"><span>staging</span><span>production</span></div><h3>Keep environments apart.</h3><p>Every agent belongs to an environment. A staging agent cannot use a production credential, even when the names match.</p></article>
       </div>
-      <div class="card">
-        <h3>Free while in beta</h3>
-        <p>
-          The hosted service at botpasses.com is free during the beta. Run the same kernel on a laptop
-          with <code>npm run hosted:dev</code>, or self-host on any Postgres 16 and an https origin you
-          control: <a href="/docs/self-hosting">Self-hosting</a>.
-        </p>
-      </div>
-    </div>
-  </section>
+      <div class="trust-note"><span class="trust-symbol" aria-hidden="true">⊕</span><p><strong>Trust, explained.</strong> Botpasses is a grant-vault, not zero-knowledge. The hosted process decrypts credentials in memory to make approved calls. <a href="/security">Read the security model <span aria-hidden="true">↗</span></a></p></div>
+    </section>
 
-  <section class="section faq" aria-labelledby="faq">
-    <h2 id="faq">Questions</h2>
-    {faq.map((f) => (
-      <details>
-        <summary>{f.q}</summary>
-        <p>{f.a}</p>
-      </details>
-    ))}
-    <p class="section-intro" style="margin-top:1rem">
-      More in the <a href="/docs/faq">docs FAQ</a> and <a href="/docs/troubleshooting">Troubleshooting</a>.
-      Questions: <a href="mailto:support@botpasses.com">support@botpasses.com</a>. Security reports:{" "}
-      <a href="mailto:security@botpasses.com">security@botpasses.com</a>.
-    </p>
-  </section>
+    <section class="home-section setup-section" aria-labelledby="get-started">
+      <div class="section-heading"><div><p class="eyebrow">Start with one connection</p><h2 id="get-started">Your next task.<br />A better way to give access.</h2></div><p>Copy a setup prompt into your agent. It will guide the connection; you enter credentials in the vault.</p></div>
+      <div class="setup-grid">
+        <article class="setup-card setup-hosted"><div class="setup-label"><span class="eyebrow">Hosted</span><span class="recommended">Start here</span></div><h3>Let us run the vault.</h3><p>Create an account, connect your agent, and approve your first call. Free while in beta.</p><div class="prompt-actions"><CopyButton promptId="hosted" primary label="Copy setup prompt" /><a href="/docs/prompts#hosted">Read the prompt <span aria-hidden="true">↗</span></a></div></article>
+        <article class="setup-card"><p class="eyebrow">Local</p><h3>Keep it on your machine.</h3><p>Run a local CLI vault without an account. Your credentials stay on your machine.</p><div class="prompt-actions"><CopyButton promptId="local" /><a href="/docs/prompts#local">Full prompt <span aria-hidden="true">↗</span></a></div></article>
+        <article class="setup-card"><p class="eyebrow">Self-hosted</p><h3>Make the infrastructure yours.</h3><p>Run the hosted console and MCP server on your own infrastructure, with Postgres and your own domain.</p><div class="prompt-actions"><CopyButton promptId="self-host" /><a href="/docs/prompts#self-host">Full prompt <span aria-hidden="true">↗</span></a></div></article>
+      </div>
+      <p class="setup-footnote">Open source, MIT licensed. <a href={GITHUB} rel="noopener">Explore the code on GitHub <span aria-hidden="true">↗</span></a></p>
+    </section>
+
+    <section class="home-section home-faq" aria-labelledby="faq">
+      <div><p class="eyebrow">Good questions</p><h2 id="faq">A little more<br />before you connect.</h2><p>More in the <a href="/docs/faq">docs FAQ</a>.<br />Need a hand? <a href="mailto:support@botpasses.com">Get in touch.</a></p></div>
+      <div class="faq-list">{faq.map((f) => <details><summary>{f.q}</summary><p>{f.a}</p></details>)}</div>
+    </section>
+
+    <section class="closing-cta" aria-labelledby="closing-title"><img src="/mark-on-dark.svg" alt="" width="48" height="48" /><h2 id="closing-title">More doing.<br />Less sharing secrets.</h2><p>Give your agent its next task. Keep the keys in Botpasses.</p><a class="btn btn-primary" href="/sign-up">Create account <span aria-hidden="true">↗</span></a><a class="closing-docs" href="/docs/start">Read the quickstart</a></section>
+  </div>
 </Base>

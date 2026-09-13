@@ -28,6 +28,9 @@ details.card > summary { font-weight: 600; color: var(--fg); font-size: 1rem; }
   margin: 0 0 1rem;
 }
 .empty strong, .error-box strong { display: block; color: var(--fg); margin-bottom: 0.35rem; }
+.onboarding-steps { display: flex; justify-content: center; flex-wrap: wrap; gap: .8rem 1.5rem; list-style: none; padding: 0; margin: 1.5rem 0; font-size: .8rem; }
+.onboarding-steps li { display: flex; align-items: center; gap: .5rem; }
+.onboarding-steps span { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--accent-dim); color: var(--accent); font-weight: 600; }
 .empty .toolbar { justify-content: center; margin-top: 1.1rem; }
 .error-box { border-style: solid; border-color: color-mix(in oklab, var(--danger) 45%, var(--line)); color: var(--fg); }
 .error-box .toolbar { justify-content: center; margin-top: 0.9rem; }

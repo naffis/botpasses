@@ -9,12 +9,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { AccessEventRecord, UserRecord } from "../src/hosted-types.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
-import { PostgresStore } from "../src/store/postgres.ts";
 import { ITEM_AAD_VERSION } from "../src/store/rows.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import type { OperatorSessionRow, VaultStore } from "../src/store/types.ts";
 import { CANARY, cleanup, tempHome } from "./helpers.ts";
-import { TEST_PLANE_KEK, ensureSharedIdentityKey } from "./helpers/plane-kek.ts";
+import { TEST_PLANE_KEK } from "./helpers/plane-kek.ts";
+import { isolatedPostgres } from "./helpers/postgres-isolated.ts";
 
 type Backend = { name: string; open: () => Promise<{ store: VaultStore; done: () => Promise<void> }> };
 
@@ -38,11 +38,7 @@ if (process.env.DATABASE_URL) {
   const url = process.env.DATABASE_URL;
   backends.push({
     name: "postgres",
-    open: async () => {
-      const store = await PostgresStore.open(url);
-      await ensureSharedIdentityKey(store);
-      return { store, done: () => store.close() };
-    },
+    open: () => isolatedPostgres(url),
   });
 }
 
