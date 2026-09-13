@@ -10,7 +10,7 @@ export const SECURITY_EMAIL = "security@botpasses.com";
 export const PRODUCT_DESCRIPTION =
   "Botpasses is a grant-vault for AI agents. Store an API key once. Claude, Cursor, ChatGPT, or Grok call the API over MCP; the key never enters the model, the chat, or the logs.";
 
-export const PRODUCT_TAGLINE = "Your agent can call Stripe, Slack, GitHub. The model does not get the key.";
+export const PRODUCT_TAGLINE = "Let agents work. Keep your keys.";
 
 export type JsonLd = Record<string, unknown>;
 

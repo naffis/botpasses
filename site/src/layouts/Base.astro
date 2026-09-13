@@ -108,10 +108,14 @@ const breadcrumbLd = crumbs && crumbs.length > 0
       <div class="wrap">
         <nav class="primary" aria-label="Primary">
           <a class="brand" href="/"><img class="brand-mark-on-light" src="/mark.svg" alt="" width="32" height="32" /><img class="brand-mark-on-dark" src="/mark-on-dark.svg" alt="" width="32" height="32" /> botpasses</a>
-          <a href="/docs">Docs</a>
-          <a href="/security">Security</a>
-          <a href={GITHUB} rel="noopener">GitHub</a>
+          <a class="desktop-nav" href="/docs">Docs</a>
+          <a class="desktop-nav" href="/security">Security</a>
+          <a class="desktop-nav" href={GITHUB} rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
           <a class="nav-cta" href="/sign-in">Sign in</a>
+          <details class="mobile-menu">
+            <summary>Menu</summary>
+            <div><a href="/docs">Documentation</a><a href="/security">Security</a><a href={GITHUB} rel="noopener">GitHub</a><a href="/sign-up">Create account</a></div>
+          </details>
         </nav>
       </div>
     </header>
@@ -121,19 +125,11 @@ const breadcrumbLd = crumbs && crumbs.length > 0
       </main>
     </div>
     <footer class="site-footer">
-      <div class="wrap">
-        <nav aria-label="Footer">
-          <a href="/docs">Docs</a>
-          <a href="/security">Security</a>
-          <a href="/changelog">Changelog</a>
-          <a href="/design">Design</a>
-          <a href="/privacy">Privacy</a>
-          <a href="/terms">Terms</a>
-          <a href={GITHUB} rel="noopener">GitHub</a>
-          <a href="mailto:support@botpasses.com">Support</a>
-          <a href="/docs/security/disclosure">Report a vulnerability</a>
-        </nav>
-        <p class="footer-note">MIT licensed. Free while in beta. Hosted at botpasses.com.</p>
+      <div class="wrap footer-grid">
+        <div class="footer-brand"><a class="brand" href="/"><img class="brand-mark-on-light" src="/mark.svg" alt="" width="32" height="32" /><img class="brand-mark-on-dark" src="/mark-on-dark.svg" alt="" width="32" height="32" />botpasses</a><p>Let agents work.<br />Keep your keys.</p><p class="footer-note">Open source. MIT licensed.<br />Free while in beta.</p></div>
+        <nav aria-label="Product"><strong>Product</strong><a href="/docs/start">Quickstart</a><a href="/docs">Docs</a><a href="/security">Security</a><a href="/changelog">Changelog</a></nav>
+        <nav aria-label="Resources"><strong>Resources</strong><a href={GITHUB} rel="noopener">GitHub</a><a href="/design">Design</a><a href="mailto:support@botpasses.com">Support</a><a href="/docs/security/disclosure">Report a vulnerability</a></nav>
+        <nav aria-label="Legal"><strong>Legal</strong><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
       </div>
     </footer>
     <script>

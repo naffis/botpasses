@@ -44,9 +44,31 @@ function flashLabel(btn: HTMLButtonElement, idle: string, next: string): void {
 }
 
 async function copyAndLabel(btn: HTMLButtonElement, text: string, idle: string): Promise<void> {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
   btn.textContent = "Copying";
-  const ok = await writeClipboard(text);
-  flashLabel(btn, idle, ok ? "Copied" : "Copy failed");
+  try {
+    const ok = await writeClipboard(text);
+    flashLabel(btn, idle, ok ? "Copied" : "Copy unavailable");
+    if (!ok) {
+      // Keep the content usable when permissions or browser settings block the clipboard.
+      const pre = btn.closest(".copy-pre")?.querySelector("pre");
+      if (pre) {
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        btn.title = "Code selected. Use your browser's Copy command.";
+      } else {
+        btn.title = "Open the full prompt using the link beside this button to copy it manually.";
+      }
+    } else btn.removeAttribute("title");
+  } finally {
+    btn.disabled = false;
+    btn.removeAttribute("aria-busy");
+  }
 }
 
 /** One-click copy for homepage and docs cards (`data-copy-prompt="<id>"`). */

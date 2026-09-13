@@ -96,7 +96,7 @@ Policies: `prompt` (one successful call, then consumed; a failed call keeps it u
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/api/access` | Live snapshot: operators, clients, grants, sessions, with created, first and last access, fetched names, and bearer last-4. No ledger array, no tokens |
+| GET | `/api/access` | Live snapshot: operators, clients, grants, sessions, with created, first and last access, fetched names, and bearer last-4. Grants include `item_id` to distinguish same-name credentials in different environments. No ledger array, no tokens |
 | GET | `/api/access/events` | Issuance ledger, newest first, limit 200. `jti` is hashed |
 | POST | `/api/sessions/:id/revoke` | Only sessions acting in this organisation are listed and revocable. 400 `cannot_revoke_current` for the session making the call |
 | POST | `/api/sessions/revoke-others` | Ends every other operator session |

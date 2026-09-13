@@ -6,11 +6,11 @@ import { IdentityKeyring } from "../src/hosted/identity-keys.ts";
 import { HostedKernel } from "../src/hosted/kernel.ts";
 import { createStoreAdapter, destroyOidcPayloadsForClient, purgeExpired } from "../src/hosted/oidc-adapter.ts";
 import { OidcDirectory } from "../src/hosted/oidc-directory.ts";
-import { PostgresStore } from "../src/store/postgres.ts";
 import { openHostedSqlite } from "../src/store/sqlite-hosted.ts";
 import { oidcPayloadIndex, type VaultStore } from "../src/store/types.ts";
 import { cleanup, tempHome } from "./helpers.ts";
-import { TEST_PLANE_KEK, ensureSharedIdentityKey } from "./helpers/plane-kek.ts";
+import { TEST_PLANE_KEK } from "./helpers/plane-kek.ts";
+import { isolatedPostgres } from "./helpers/postgres-isolated.ts";
 
 type Backend = { name: string; open: () => Promise<{ store: VaultStore; done: () => Promise<void> }> };
 
@@ -34,11 +34,7 @@ if (process.env.DATABASE_URL) {
   const url = process.env.DATABASE_URL;
   backends.push({
     name: "postgres",
-    open: async () => {
-      const store = await PostgresStore.open(url);
-      await ensureSharedIdentityKey(store);
-      return { store, done: () => store.close() };
-    },
+    open: () => isolatedPostgres(url),
   });
 }
 

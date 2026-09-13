@@ -3,7 +3,7 @@
  * tagline. Run after changing the wordmark, tagline, or palette, then commit
  * the PNGs. Astro copies public/ into dist.
  *
- *   node site/scripts/og.mjs [path-to-chromium]
+ *   npm --prefix site run og -- [path-to-chromium]
  *
  * Writes:
  *   og.png        1200x630  Open Graph / X large card
@@ -13,6 +13,8 @@
  * paths CI uses. Override with `PLAYWRIGHT_PKG` / `BOTPASSES_PLAYWRIGHT_PKG` and
  * `CHROMIUM_PATH` / `BOTPASSES_CHROMIUM`, or pass a Chromium binary as argv[2].
  */
+import { BRAND_HEX } from "../../src/brand-visual.ts";
+import { PRODUCT_TAGLINE } from "../src/lib/site-meta.ts";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -57,27 +59,9 @@ const pinnedChromium =
   process.argv[2] ?? process.env.CHROMIUM_PATH ?? process.env.BOTPASSES_CHROMIUM ?? "/opt/pw-browsers/chromium";
 const executablePath = existsSync(pinnedChromium) ? pinnedChromium : pw.chromium.executablePath();
 
-const brand = readFileSync(join(repoRoot, "src/brand-visual.ts"), "utf8");
-const hex = (key) => {
-  const m = new RegExp(`${key}: "(#[0-9A-Fa-f]{6})"`).exec(brand);
-  if (!m) throw new Error(`token ${key} not found in brand-visual.ts`);
-  return m[1];
-};
-const bg = hex("bg");
-const bgElev = hex("bgElev");
-const fg = hex("fg");
-const muted = hex("muted");
-const line = hex("line");
-const accent = hex("accent");
-
-const metaSrc = readFileSync(join(siteRoot, "src/lib/site-meta.ts"), "utf8");
-const tagline = /export const PRODUCT_TAGLINE = "([^"]+)"/.exec(metaSrc)?.[1];
-if (!tagline) throw new Error("PRODUCT_TAGLINE not found in site-meta.ts");
-const [lead, punch] = tagline.split(/(?<=\.)\s+/);
-if (!lead || !punch) throw new Error(`PRODUCT_TAGLINE must be two sentences: ${tagline}`);
-const leadVerb = "Your agent can call";
-if (!lead.startsWith(leadVerb)) throw new Error(`PRODUCT_TAGLINE lead must start with "${leadVerb}"`);
-const leadNames = lead.slice(leadVerb.length).trim();
+const { bg, bgElev, fg, muted, line, accent } = BRAND_HEX;
+const [lead, punch] = PRODUCT_TAGLINE.split(/(?<=\.)\s+/);
+if (!lead || !punch) throw new Error("PRODUCT_TAGLINE must have two sentences");
 
 const fontFile = (pkg, file) => {
   const path = require.resolve(`@fontsource/${pkg}/files/${file}`, { paths: [siteRoot] });
@@ -88,10 +72,9 @@ const inter600 = fontFile("inter", "inter-latin-600-normal.woff2");
 const inter700 = fontFile("inter", "inter-latin-700-normal.woff2");
 const mono = fontFile("ibm-plex-mono", "ibm-plex-mono-latin-400-normal.woff2");
 
-const markSvg = readFileSync(join(repoRoot, "src/brand-assets/mark-on-dark.svg"), "utf8").replace(
-  /\s+(width|height)="32"/g,
-  "",
-);
+// Embed the complete SVG as an image. Removing every width/height attribute also
+// removed the mask rectangle, and repeated inline mask IDs collide within one card.
+const markImage = `<img alt="" src="data:image/svg+xml;base64,${readFileSync(join(repoRoot, "src/brand-assets/mark-on-dark.svg")).toString("base64")}">`;
 
 const faces = `
   @font-face { font-family: Inter; font-weight: 400; src: url(${inter400}) format("woff2"); }
@@ -100,56 +83,45 @@ const faces = `
   @font-face { font-family: "IBM Plex Mono"; font-weight: 400; src: url(${mono}) format("woff2"); }
 `;
 
-const landscape = `<!doctype html>
-<html><head><meta charset="utf-8">
-<style>
+const shared = `
   ${faces}
-  html, body { margin: 0; width: 1200px; height: 630px; background: ${bg}; color: ${fg}; font-family: Inter, Helvetica, Arial, sans-serif; }
-  .card { position: absolute; inset: 0; padding: 64px 80px 88px; display: flex; flex-direction: column; justify-content: space-between; }
-  .brand { display: flex; align-items: center; gap: 16px; font-family: Inter, Helvetica, Arial, sans-serif; font-weight: 700; font-size: 36px; letter-spacing: -0.03em; }
-  .brand svg { width: 52px; height: 52px; }
-  h1 { font-family: Inter, Helvetica, Arial, sans-serif; font-weight: 700; font-size: 54px; line-height: 1.12; margin: 0; letter-spacing: -0.03em; max-width: 1040px; }
-  h1 .punch { color: ${accent}; }
-  .bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 36px; }
-  .tag { font-size: 22px; color: ${muted}; max-width: 640px; line-height: 1.4; font-weight: 400; }
-  .chip { font-family: "IBM Plex Mono", monospace; font-size: 22px; color: ${fg}; background: ${bgElev}; border: 2px solid ${line}; border-radius: 12px; padding: 14px 20px; white-space: nowrap; }
-  .chip b { color: ${accent}; font-weight: 400; }
-  .rule { position: absolute; left: 80px; right: 80px; bottom: 48px; height: 4px; background: linear-gradient(90deg, ${accent}, transparent); border-radius: 2px; }
-</style></head>
-<body>
-  <div class="card">
-    <div class="brand">${markSvg} botpasses</div>
-    <h1>${leadVerb}<br>${leadNames}<br><span class="punch">${punch}</span></h1>
-    <div class="bottom">
-      <div class="tag">Store an API key once. Your agent calls the API through Botpasses. The key never enters the chat, the model, or the logs.</div>
-      <div class="chip">STRIPE_SECRET_KEY <b>••••4k2p</b></div>
-    </div>
-  </div>
-  <div class="rule"></div>
-</body></html>`;
-
-const square = `<!doctype html>
-<html><head><meta charset="utf-8">
-<style>
-  ${faces}
-  html, body { margin: 0; width: 1200px; height: 1200px; background: ${bg}; color: ${fg}; font-family: Inter, Helvetica, Arial, sans-serif; }
-  .card { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 80px; }
-  .mark { width: 196px; height: 196px; margin-bottom: 48px; }
-  .mark svg { width: 196px; height: 196px; }
-  .name { font-family: Inter, Helvetica, Arial, sans-serif; font-weight: 700; font-size: 72px; letter-spacing: -0.03em; margin: 0 0 28px; }
-  .punch { font-family: Inter, Helvetica, Arial, sans-serif; font-weight: 700; font-size: 40px; line-height: 1.25; color: ${accent}; margin: 0 0 56px; max-width: 900px; }
-  .host { font-size: 28px; color: ${muted}; font-weight: 600; letter-spacing: 0.02em; }
-  .rule { position: absolute; left: 160px; right: 160px; bottom: 80px; height: 4px; background: linear-gradient(90deg, transparent, ${accent}, transparent); border-radius: 2px; }
-</style></head>
-<body>
-  <div class="card">
-    <div class="mark">${markSvg}</div>
-    <p class="name">botpasses</p>
-    <p class="punch">${punch}</p>
-    <p class="host">botpasses.com</p>
-  </div>
-  <div class="rule"></div>
-</body></html>`;
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: ${bg}; color: ${fg}; font-family: Inter, sans-serif; }
+  .brand { display: flex; align-items: center; gap: 14px; font-size: 32px; font-weight: 700; letter-spacing: -.04em; }
+  .brand img { width: 42px; height: 42px; }
+  h1 { font-size: 76px; line-height: 1.06; font-weight: 700; letter-spacing: -.065em; margin: 36px 0 26px; }
+  h1 span { color: ${accent}; }
+  .description { font-size: 22px; line-height: 1.6; color: ${muted}; max-width: 580px; }
+  .foot { position: absolute; bottom: 42px; left: 64px; right: 64px; display: flex; justify-content: space-between; padding-top: 22px; border-top: 1px solid ${line}; color: ${muted}; font-size: 16px; }
+  .ticket { background: ${bgElev}; border: 1px solid ${line}; border-radius: 20px; padding: 30px; }
+  .ticket img { width: 64px; height: 64px; }
+  .ticket .label { font: 13px "IBM Plex Mono"; color: ${muted}; letter-spacing: .06em; margin: 28px 0 12px; }
+  .ticket .name { font: 18px "IBM Plex Mono"; margin: 0; }
+  .ticket .masked { font: 22px "IBM Plex Mono"; color: ${muted}; padding-bottom: 25px; border-bottom: 1px dashed ${line}; }
+  .ticket .approved { font-size: 16px; color: ${accent}; margin: 24px 0 0; }
+`;
+const ticket = `<div class="ticket">${markImage}<p class="label">YOUR CREDENTIAL</p><p class="name">GITHUB_TOKEN</p><p class="masked">•••• •••• 4k2p</p><p class="approved">✓ Approved access. Private keys.</p></div>`;
+const landscape = `<!doctype html><html><head><meta charset="utf-8"><style>
+  ${shared}
+  html, body { width: 1200px; height: 630px; }
+  .card { padding: 56px 64px; }
+  .content { display: grid; grid-template-columns: 1fr 340px; gap: 48px; align-items: center; }
+  .ticket { transform: rotate(-4deg); margin-top: 28px; }
+</style></head><body><div class="card"><div class="brand">${markImage} botpasses</div><div class="content"><div><h1>${lead}<br><span>${punch}</span></h1><p class="description">Give AI agents access to your APIs.<br>Keep secrets out of the conversation.</p></div>${ticket}</div><div class="foot"><span>Open source · MCP · Free while in beta</span><span>botpasses.com ↗</span></div></div></body></html>`;
+const square = `<!doctype html><html><head><meta charset="utf-8"><style>
+  ${shared}
+  html, body { width: 1200px; height: 1200px; }
+  .card { padding: 70px 80px; }
+  h1 { font-size: 106px; margin-top: 68px; }
+  .description { font-size: 28px; max-width: 900px; }
+  .ticket { width: 880px; margin: 50px auto; display: grid; grid-template-columns: 80px 1fr 1fr; align-items: center; gap: 20px; padding: 38px; }
+  .ticket .label { grid-column: 2 / -1; margin: 0; }
+  .ticket img { grid-row: 1 / 4; }
+  .ticket .name { grid-column: 2; }
+  .ticket .masked { grid-column: 3; padding: 0; border: 0; margin: 0; }
+  .ticket .approved { grid-column: 2 / -1; margin: 0; }
+  .foot { bottom: 64px; left: 80px; right: 80px; font-size: 21px; }
+</style></head><body><div class="card"><div class="brand">${markImage} botpasses</div><h1>${lead}<br><span>${punch}</span></h1><p class="description">Give AI agents access to your APIs.<br>Keep secrets out of the conversation.</p>${ticket}<div class="foot"><span>Open source · MCP · Free while in beta</span><span>botpasses.com ↗</span></div></div></body></html>`;
 
 const browser = await pw.chromium.launch({ executablePath, headless: true });
 try {

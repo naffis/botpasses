@@ -47,6 +47,8 @@ export type PwLocator = {
 };
 
 export type PwPage = {
+  route(pattern: string, handler: (route: PwRoute) => Promise<void>): Promise<void>;
+  unroute(pattern: string): Promise<void>;
   goto(url: string): Promise<unknown>;
   reload(): Promise<unknown>;
   goBack(): Promise<unknown>;
@@ -66,6 +68,11 @@ export type PwPage = {
   on(event: "pageerror", fn: (err: Error) => void): void;
   emulateMedia(opts: { colorScheme?: "light" | "dark" }): Promise<void>;
   keyboard: { press(key: string): Promise<void> };
+};
+
+export type PwRoute = {
+  fulfill(opts: { status?: number; contentType?: string; body?: string }): Promise<void>;
+  continue(): Promise<void>;
 };
 
 export type PwContext = {

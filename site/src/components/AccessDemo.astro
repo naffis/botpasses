@@ -1,0 +1,45 @@
+---
+import { cssTokenLines } from "../../../src/brand-visual.ts";
+---
+<div class="access-demo" data-access-demo style={cssTokenLines("dark")}>
+  <div class="demo-topbar"><span class="demo-brand"><img src="/mark-on-dark.svg" alt="" width="22" height="22" /> botpasses</span><span class="demo-caption">INTERACTIVE EXAMPLE</span></div>
+  <div class="demo-body">
+    <div class="demo-message"><span class="agent-avatar" aria-hidden="true">✳</span><div><span class="demo-label">YOUR AGENT</span><p>“Check the open issues on GitHub.”</p></div></div>
+    <div class="demo-connector" aria-hidden="true"><span></span><small>Requests access through MCP</small></div>
+    <div class="demo-request">
+      <div class="demo-request-heading"><span class="demo-service" aria-hidden="true">↗</span><div><strong>Read GitHub issues</strong><span>GITHUB_TOKEN <b>••••4k2p</b></span></div></div>
+      <dl class="demo-facts"><div><dt>Allowed host</dt><dd>api.github.com</dd></div><div><dt>Permission</dt><dd>One API call</dd></div></dl>
+      <div class="demo-decision" data-demo-pending><span class="demo-pending-label"><span class="status-dot"></span> Your approval needed</span><button class="btn btn-primary" type="button" data-demo-approve hidden>Approve example <span aria-hidden="true">↗</span></button></div>
+      <div class="demo-approved" data-demo-approved hidden><span aria-hidden="true">✓</span> Approved for one call</div>
+    </div>
+    <div class="demo-output" role="status" aria-live="polite" aria-atomic="true"><span class="output-icon" aria-hidden="true">⌁</span><p data-demo-status>The key stays in the vault. You decide what happens next.</p></div>
+  </div>
+  <div class="demo-footer"><span><span class="status-dot" aria-hidden="true"></span> No secret values in the conversation</span><button type="button" data-demo-reset hidden>Replay <span aria-hidden="true">↶</span></button></div>
+</div>
+<script>
+  const demo = document.querySelector<HTMLElement>("[data-access-demo]");
+  const approve = demo?.querySelector<HTMLButtonElement>("[data-demo-approve]");
+  const reset = demo?.querySelector<HTMLButtonElement>("[data-demo-reset]");
+  const pending = demo?.querySelector<HTMLElement>("[data-demo-pending]");
+  const approved = demo?.querySelector<HTMLElement>("[data-demo-approved]");
+  const status = demo?.querySelector<HTMLElement>("[data-demo-status]");
+  if (demo && approve && reset && pending && approved && status) {
+    approve.hidden = false;
+    approve.addEventListener("click", () => {
+      pending.hidden = true;
+      approved.hidden = false;
+      reset.hidden = false;
+      demo.dataset.complete = "true";
+      status.textContent = "200 OK. Your agent gets the issues. The model does not get the key.";
+      reset.focus();
+    });
+    reset.addEventListener("click", () => {
+      pending.hidden = false;
+      approved.hidden = true;
+      reset.hidden = true;
+      delete demo.dataset.complete;
+      status.textContent = "The key stays in the vault. You decide what happens next.";
+      approve.focus();
+    });
+  }
+</script>

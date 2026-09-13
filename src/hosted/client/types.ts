@@ -79,6 +79,7 @@ export type AccessClient = {
 
 export type AccessGrant = {
   id: string;
+  item_id?: string | null;
   item_name: string;
   client_id: string;
   client_name: string;

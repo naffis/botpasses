@@ -509,3 +509,92 @@ test("console smoke: user_connect_required lands in the Inbox; Connect and the d
     await server.close();
   }
 });
+
+test("credential drawer: isolate environments, retry failures, and ignore stale responses", { skip: skipReason, timeout: SMOKE_TIMEOUT_MS * 3 }, async () => {
+  const server = await bootConsoleServer();
+  const browser = await launchChromium();
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await signUpInBrowser(page, server, `drawer-${Date.now()}@example.com`);
+    for (const environment of ["production", "staging"]) {
+      await page.click("[data-testid=open-store]");
+      await page.fill("#store-name", "SHARED_TOKEN");
+      await page.fill("#store-value", "drawer_test_canary_1234");
+      await page.fill("#store-hosts", "api.github.com");
+      await page.selectOption("#store-env", environment);
+      await page.click("#store-submit");
+      await page.waitForSelector("#store-dialog:not([open])", { state: "attached" });
+    }
+    await page.waitForFunction("() => document.querySelectorAll('tr[data-item]').length === 2");
+    const rows = await page.evaluate<{ id: string; environment: string }[]>("Array.from(document.querySelectorAll('tr[data-item]')).map(row => ({ id: row.dataset.item, environment: row.querySelector('.pill-env').textContent }))");
+    const prod = rows.find((r) => r.environment === "production")?.id;
+    const staging = rows.find((r) => r.environment === "staging")?.id;
+    assert.ok(prod && staging);
+    const grants = rows.map((r) => ({ id: `grant_${r.environment}`, item_id: r.id, item_name: "SHARED_TOKEN", client_name: `${r.environment} agent`, client_id: `client_${r.environment}`, status: "active", policy: "prompt" }));
+    let fail = true;
+    let hold = false;
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    await page.route("**/api/access", async (route) => {
+      if (hold) {
+        hold = false;
+        await new Promise<void>((resolve) => { release = resolve; started?.(); });
+      }
+      await route.fulfill({ status: fail ? 503 : 200, contentType: "application/json", body: JSON.stringify(fail ? { error: "Temporarily unavailable" } : { clients: [], sessions: [], grants }) });
+    });
+    await page.click(`tr[data-item="${prod}"] td.name`);
+    await page.waitForSelector("[data-retry-approvals]");
+    assert.match((await page.locator("#drawer-approvals").textContent()) ?? "", /Temporarily unavailable/);
+    assert.doesNotMatch((await page.locator("#drawer-approvals").textContent()) ?? "", /No agent has an approval/);
+    fail = false;
+    await page.click("[data-retry-approvals]");
+    await page.waitForSelector('[data-revoke-grant="grant_production"]');
+    assert.equal(await page.locator('[data-revoke-grant="grant_staging"]').count(), 0, "same-name staging approvals stay out of the production drawer");
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+    hold = true;
+    const oldRequest = new Promise<void>((resolve) => { started = resolve; });
+    await page.click(`tr[data-item="${staging}"] td.name`);
+    await oldRequest;
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+    await page.click(`tr[data-item="${prod}"] td.name`);
+    await page.waitForSelector('[data-revoke-grant="grant_production"]');
+    const beforeRelease = await loads(page, "/api/access");
+    release?.();
+    await page.waitForFunction(`() => performance.getEntriesByType('resource').filter(e => new URL(e.name).pathname === '/api/access').length > ${beforeRelease}`);
+    assert.equal(await page.locator('[data-revoke-grant="grant_staging"]').count(), 0, "late staging response cannot overwrite the production drawer");
+    assert.equal(await page.locator('[data-revoke-grant="grant_production"]').count(), 1);
+    await page.click("[data-testid=drawer-close]");
+    await page.waitForSelector("#item-drawer:not([open])", { state: "attached" });
+    await page.fill('[data-testid="items-search"]', "does-not-exist");
+    await page.waitForSelector("#items-none:not([hidden])");
+    await page.click("#items-clear");
+    assert.equal(await page.locator("tr[data-item]").count(), 2);
+    assert.equal(await page.locator('[data-testid="items-search"]').inputValue(), "");
+    let releaseItems: (() => void) | undefined;
+    let itemsStarted: (() => void) | undefined;
+    const waitingForItems = new Promise<void>((resolve) => { itemsStarted = resolve; });
+    await page.route("**/api/items", async (route) => {
+      await new Promise<void>((resolve) => { releaseItems = resolve; itemsStarted?.(); });
+      await route.continue();
+    });
+    await page.evaluate("location.hash = '#credentials/item/itm_missing_after_navigation'");
+    await waitingForItems;
+    await page.click("[data-testid=nav-agents]");
+    const beforeItemsRelease = await loads(page, "/api/items");
+    releaseItems?.();
+    await page.waitForFunction(`() => performance.getEntriesByType('resource').filter(e => new URL(e.name).pathname === '/api/items').length > ${beforeItemsRelease}`);
+    assert.match(page.url(), /#agents$/);
+    assert.equal(await page.locator("#item-drawer[open]").count(), 0, "late credential lookup cannot reopen the previous route");
+    await page.unroute("**/api/items");
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});

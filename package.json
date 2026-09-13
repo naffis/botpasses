@@ -19,7 +19,7 @@
     "migrate": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/migrate.ts",
     "pretest": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/pretest.ts",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=spec test/*.test.ts",
-    "test:smoke": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/console-smoke.test.ts",
+    "test:smoke": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/console-smoke.test.ts test/site-browser.test.ts",
     "test:coverage": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --experimental-test-coverage --test-coverage-lines=80 test/*.test.ts",
     "test:pg": "DATABASE_URL=${DATABASE_URL:-postgres://vault:vault@localhost:5432/vault} npm test",
     "lint": "eslint .",
