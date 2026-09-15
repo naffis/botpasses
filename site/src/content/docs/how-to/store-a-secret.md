@@ -6,7 +6,7 @@ section: how-to
 order: 1
 ---
 
-A **credential** is the stored thing: an API key, a token, or an OAuth client secret. It has a name, a value, a kind, an environment, and a list of allowed hosts. The value is encrypted at rest and never shown again after you submit it.
+A **credential** is an API key, a token, or an OAuth client secret. It has a name, a value, a kind, an environment, and a list of allowed hosts. The value is encrypted at rest and never shown again after you submit it.
 
 ## In the console
 

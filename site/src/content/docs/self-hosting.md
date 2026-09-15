@@ -9,9 +9,9 @@ The hosted process is one Node.js service. The runtime contract is a Postgres 16
 
 For a laptop hosted kernel (loopback, sqlite-hosted, OTP printed in the terminal) run `npm run hosted:dev`. That sets `VAULT_DEPLOY_PLANE=dev` and does not inherit a leftover `DATABASE_URL`. Run one process per sqlite file; a second writer can get SQLITE_BUSY. Do not set plane `dev` on Fly.
 
-This page names what you need. The operational runbooks live in the repository under `docs/ops` ([cutover](https://github.com/naffis/botpasses/blob/dev/docs/ops/botpasses-cutover.md), [KEK rotation](https://github.com/naffis/botpasses/blob/dev/docs/ops/kek-rotation.md), [restore](https://github.com/naffis/botpasses/blob/dev/docs/ops/restore.md)).
+The operational runbooks are in the repository under `docs/ops` ([cutover](https://github.com/naffis/botpasses/blob/dev/docs/ops/botpasses-cutover.md), [KEK rotation](https://github.com/naffis/botpasses/blob/dev/docs/ops/kek-rotation.md), [restore](https://github.com/naffis/botpasses/blob/dev/docs/ops/restore.md)).
 
-Paste the [self-host prompt](/docs/prompts#self-host) into an ops agent so it follows this page and `docs/ops` instead of inventing steps. Do not paste secret values into chat.
+Paste the [self-host prompt](/docs/prompts#self-host) into an ops agent for help with the configuration on this page and the runbooks in `docs/ops`. Do not paste secret values into chat.
 
 ## Copy-paste prompt
 

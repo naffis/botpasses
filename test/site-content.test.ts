@@ -58,13 +58,19 @@ const REQUIRED_PAGES = [
 ];
 
 test("site dist has every documented URL", () => {
-  for (const rel of REQUIRED_PAGES) assert.ok(existsSync(join(dist, rel)), rel);
+  for (const rel of REQUIRED_PAGES) {
+    assert.ok(existsSync(join(dist, rel)), rel);
+    assert.doesNotMatch(page(rel), /free while in beta/i, rel);
+  }
+  for (const rel of ["llms.txt", "llms-full.txt"]) {
+    assert.doesNotMatch(page(rel), /free while in beta/i, rel);
+  }
 });
 
 test("homepage sells the product and links the right places", () => {
   const home = page("index.html");
   const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(home)?.[1] ?? "";
-  assert.match(text(heading), /Let agents work\.\s*Keep your keys\./);
+  assert.match(text(heading), /API access\s*for agents\./);
   assert.match(home, /data-access-demo/);
   assert.match(home, /INTERACTIVE EXAMPLE/);
   assert.match(home, /data-demo-approve/);
@@ -79,14 +85,14 @@ test("homepage sells the product and links the right places", () => {
   for (const href of ["/sign-up", "/sign-in", "/security", "/docs/start", "#how", "#get-started"]) {
     assert.ok(home.includes(`href="${href}"`), href);
   }
-  assert.match(home, /grant-vault, not zero-knowledge/);
+  assert.match(home, /Botpasses is not zero-knowledge/);
   assert.match(home, /The model does not get the key/);
   assert.match(home, /get_secret/);
   assert.match(home, /github\.com\/naffis\/botpasses/);
-  assert.match(home, /Free while in beta/);
+  assert.match(home, /Free to use/);
   assert.match(text(home), /npm run hosted:dev/);
   assert.match(home, /Can I run Botpasses on my laptop\?/);
-  assert.match(home, /Botpasses is a grant-vault for AI agents/);
+  assert.match(home, /Botpasses stores API keys/);
   assert.match(home, /What is Botpasses\?/);
   assert.match(home, /Is this a password manager\?/);
   assert.match(home, /prompt-injected/);

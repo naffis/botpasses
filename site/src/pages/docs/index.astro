@@ -12,10 +12,9 @@ const groups = groupBySection(toNavItems(await getCollection("docs")));
 >
   <h1>Docs</h1>
   <p>
-    Botpasses stores a named credential once. An agent (Claude, Cursor, ChatGPT, Grok, or any
-    MCP client) asks to use it, you approve, and Botpasses makes the API call with the
-    credential attached. The key stays in the vault. Start with the first section, then
-    connect your agent.
+    Store your API keys in Botpasses, connect an agent, and approve its access. Botpasses
+    makes the API calls with your keys and returns responses with secrets removed.
+    Follow the quickstart to connect your first agent.
   </p>
   {groups.map((g) => (
     <section>

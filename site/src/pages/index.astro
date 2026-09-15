@@ -24,15 +24,15 @@ const clients = [
 const faq = [
   {
     q: "What is Botpasses?",
-    a: "Botpasses is a grant-vault for AI agents. You store an API key once. An agent (Claude, Cursor, ChatGPT, Grok, or any MCP client) asks to call an API. You approve. Botpasses attaches the key inside the vault, makes the call, and returns a redacted result. The model does not get the key. There is no get_secret.",
+    a: "Botpasses stores API keys and lets your agents use them with your approval. It attaches the key to each approved API call and removes secrets from the response. The model does not get the key. There is no get_secret tool.",
   },
   {
     q: "Is this a password manager?",
-    a: "No. Password managers hold secrets for people and fill them into browsers. Botpasses holds credentials for agents and attaches them to API calls the agent asks for. Nothing reads a value back out, and there is no browser autofill or sharing.",
+    a: "No. Password managers hold secrets for people and fill them into browsers. Botpasses holds credentials for agents and attaches them to API calls the agent asks for. Agents cannot retrieve the stored key. Botpasses has no browser autofill or sharing between people.",
   },
   {
     q: "What if the agent is prompt-injected?",
-    a: "It still cannot read a value, because no tool returns one. It can call APIs it has an approval for, so keep approvals to one call (prompt) for anything sensitive, keep allowed hosts tight, and revoke standing approvals when a task is done. Every call is in the activity log by agent and credential name.",
+    a: "It cannot read the stored key through MCP, but it can call APIs it has approval to use. Use one-call approvals for sensitive tasks, restrict allowed hosts, and revoke standing approvals when a task is done. The activity log records each call by agent and credential name.",
   },
   {
     q: "What do you log?",
@@ -44,15 +44,15 @@ const faq = [
   },
   {
     q: "What about staging vs production?",
-    a: "Every credential carries an environment tag, and every agent is bound to one environment. An agent bound to staging cannot use production credentials. Separately, staging.botpasses.com is the pre-release copy of the service with its own accounts. The laptop hosted kernel is npm run hosted:dev, not a Fly deploy.",
+    a: "Every credential carries an environment tag, and every agent is bound to one environment. An agent bound to staging cannot use production credentials. Separately, staging.botpasses.com is the pre-release copy of the service with its own accounts. You can also run the console and MCP server locally with npm run hosted:dev.",
   },
   {
     q: "Can I run Botpasses on my laptop?",
-    a: "Yes. Two paths. npm run hosted:dev boots the hosted console, OTP, and MCP on 127.0.0.1:8788 with sqlite. A local CLI vault uses VAULT_HOME and vault mcp with no account. Self-host on any Postgres 16 is on the Self-hosting page.",
+    a: "Yes. Run npm run hosted:dev for the console and MCP server on your laptop, or use the local CLI vault without an account. Botpasses is open source and MIT licensed. You can also host it on your own server with Postgres 16; see the Self-hosting guide.",
   },
   {
     q: "Can Botpasses staff read my keys?",
-    a: "Not without both the AWS KMS role and the database. The hosted process decrypts only at inject, in memory, to attach the value to your API call. There is no support tool that reveals a value. This is a grant-vault, not zero-knowledge, and we say so.",
+    a: "Anyone with both the AWS KMS role and the database can decrypt your keys. The hosted process decrypts them in memory when making approved calls. Staff have no support tool that reveals a key. Botpasses is not zero-knowledge.",
   },
   {
     q: "How is this different from putting keys in .env or the system prompt?",
@@ -62,7 +62,7 @@ const faq = [
 ];
 ---
 <Base
-  title="Let agents work. Keep your keys."
+  title="API access for agents."
   description={PRODUCT_DESCRIPTION}
   wide
 >
@@ -84,20 +84,20 @@ const faq = [
   <div class="home">
     <section class="home-hero" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <a class="beta-link" href="#get-started"><span class="status-dot" aria-hidden="true"></span> Open source. Free while in beta. <span aria-hidden="true">↗</span></a>
-        <h1 id="hero-title">Let agents work.<br /><span>Keep your keys.</span></h1>
-        <p class="hero-description">Give your AI agent access to the APIs it needs, without putting secrets in the conversation. You approve the access. Botpasses handles the keys.</p>
+        <a class="availability-link" href="#get-started"><span class="status-dot" aria-hidden="true"></span> Open source. Free to use. <span aria-hidden="true">↗</span></a>
+        <h1 id="hero-title">API access<br /><span>for agents.</span></h1>
+        <p class="hero-description">Store your API keys in Botpasses and approve which agents can use them. Botpasses makes the API calls and removes secrets from the responses before returning them to the agent.</p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="/sign-up">Create account <span aria-hidden="true">↗</span></a>
           <a class="btn" href="#how">See how it works <span aria-hidden="true">↓</span></a>
         </div>
-        <p class="hero-footnote">Your tools. Your credentials. Your call.</p>
+        <p class="hero-footnote">Use the hosted service or <a href="/docs/self-hosting">run Botpasses yourself</a>.</p>
       </div>
       <AccessDemo />
     </section>
 
     <section class="client-strip" aria-label="Compatible agents">
-      <p>One vault. Your favorite agents.</p>
+      <p>Connect through MCP</p>
       <ul>
         {clients.map((client) => <li><a href={client.href}><span class="client-symbol" aria-hidden="true">{client.symbol}</span>{client.name}</a></li>)}
         <li><a href="/docs/start"><span class="client-symbol" aria-hidden="true">＋</span>Any MCP client</a></li>
@@ -106,45 +106,45 @@ const faq = [
 
     <section class="home-section" aria-labelledby="how">
       <div class="section-heading">
-        <div><p class="eyebrow">How it works</p><h2 id="how">A key to the API.<br />A say in every step.</h2></div>
-        <p>Ask your agent to check a balance, open an issue, or update a record. Botpasses sits between the request and your credentials.</p>
+        <div><p class="eyebrow">How it works</p><h2 id="how">Store a key and<br />approve access.</h2></div>
+        <p>Ask your agent to check a balance, open an issue, or update a record. Botpasses checks its approval before sending the API request with your key.</p>
       </div>
       <ol class="workflow">
-        <li><span class="step-number">01 / STORE</span><div class="step-visual credential-visual" aria-hidden="true"><span class="mini-icon">⌘</span><div><strong>GITHUB_TOKEN</strong><span>•••• •••• •••• 4k2p</span></div><span class="mini-status">Encrypted</span></div><h3>Store it once.</h3><p>Add a credential and the API hosts it can reach. Enter the value in Botpasses, never in chat.</p><a href="/docs/how-to/store-a-secret">Store a credential <span aria-hidden="true">↗</span></a></li>
-        <li><span class="step-number">02 / APPROVE</span><div class="step-visual scope-visual" aria-hidden="true"><span>GET</span><code>api.github.com</code><span class="scope-check">✓</span></div><h3>Give access a boundary.</h3><p>Review the agent and its request. Approve one call, or set a standing approval for work you trust.</p><a href="/docs/how-to/grant-access">Explore approvals <span aria-hidden="true">↗</span></a></li>
-        <li><span class="step-number">03 / RUN</span><div class="step-visual result-visual" aria-hidden="true"><span class="status-dot"></span><code>200 OK</code><span>Key stays in the vault</span></div><h3>Get the work done.</h3><p>Botpasses attaches the key to the approved API call and returns a redacted result. The model does not get the key.</p><a href="/docs/explanation/why-the-model-never-sees-the-value">Follow a request <span aria-hidden="true">↗</span></a></li>
+        <li><span class="step-number">01 / STORE</span><div class="step-visual credential-visual" aria-hidden="true"><span class="mini-icon">⌘</span><div><strong>GITHUB_TOKEN</strong><span>•••• •••• •••• 4k2p</span></div><span class="mini-status">Encrypted</span></div><h3>Store an API key</h3><p>Add a credential and the API hosts it can reach. Enter the value in Botpasses, never in chat.</p><a href="/docs/how-to/store-a-secret">Store a credential <span aria-hidden="true">↗</span></a></li>
+        <li><span class="step-number">02 / APPROVE</span><div class="step-visual scope-visual" aria-hidden="true"><span>GET</span><code>api.github.com</code><span class="scope-check">✓</span></div><h3>Approve the agent</h3><p>Review the agent and its request. Approve one call, or set a standing approval for work you trust.</p><a href="/docs/how-to/grant-access">Set up approvals <span aria-hidden="true">↗</span></a></li>
+        <li><span class="step-number">03 / RUN</span><div class="step-visual result-visual" aria-hidden="true"><span class="status-dot"></span><code>200 OK</code><span>Key stays in the vault</span></div><h3>Run the API call</h3><p>Botpasses attaches the key to the approved API call and returns a redacted result. The model does not get the key.</p><a href="/docs/explanation/why-the-model-never-sees-the-value">Follow a request <span aria-hidden="true">↗</span></a></li>
       </ol>
     </section>
 
     <section class="home-section control-section" aria-labelledby="control">
-      <div class="section-heading"><div><p class="eyebrow">Permission with a purpose</p><h2 id="control">Useful agents.<br />Clear boundaries.</h2></div><p>Access should be a decision you can see, understand, and take back.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">Access controls</p><h2 id="control">Choose who can<br />use each credential.</h2></div><p>Review requests, check the activity log, and revoke access from the console.</p></div>
       <div class="control-grid">
         <article class="control-card boundary-card">
-          <div class="boundary-visual" aria-label="The model sees a credential name. Only the approved API request receives its value."><div><span>MODEL</span><strong>GITHUB_TOKEN</strong><small>Name + redacted result</small></div><span class="boundary-divider" aria-hidden="true">→</span><div><img src="/mark.svg" alt="Botpasses vault" width="40" height="40" /><small>Approved inject</small></div><span class="boundary-divider" aria-hidden="true">→</span><div><span>API</span><strong>Authenticated</strong><small>Allowed host only</small></div></div>
-          <h3>The right access. No key in the chat.</h3><p>The agent asks for an API call. The vault handles authentication. There is no <code>get_secret</code> tool returning your stored value.</p>
+          <div class="boundary-visual" aria-label="The model sees a credential name. Only the approved API request receives its value."><div><span>MODEL</span><strong>GITHUB_TOKEN</strong><small>Name + redacted result</small></div><span class="boundary-divider" aria-hidden="true">→</span><div><img src="/mark.svg" alt="Botpasses vault" width="40" height="40" /><small>Key attached to request</small></div><span class="boundary-divider" aria-hidden="true">→</span><div><span>API</span><strong>Authenticated</strong><small>Allowed host only</small></div></div>
+          <h3>Call APIs without exposing keys to the agent</h3><p>The agent asks for an API call. The vault handles authentication. There is no <code>get_secret</code> tool returning your stored value.</p>
         </article>
-        <article class="control-card"><span class="feature-icon" aria-hidden="true">↶</span><h3>Permission is reversible.</h3><p>Revoke an agent or an approval from the console. Its next call loses access. The agent cannot undo your decision.</p><a href="/docs/how-to/revoke-access">Stay in control <span aria-hidden="true">↗</span></a></article>
-        <article class="control-card"><span class="feature-icon" aria-hidden="true">≡</span><h3>Know what happened.</h3><p>See which agent used which credential, when, and the outcome. Activity records actions and names, without storing secret values.</p></article>
-        <article class="control-card environments-card"><div class="environment-pair" aria-hidden="true"><span>staging</span><span>production</span></div><h3>Keep environments apart.</h3><p>Every agent belongs to an environment. A staging agent cannot use a production credential, even when the names match.</p></article>
+        <article class="control-card"><span class="feature-icon" aria-hidden="true">↶</span><h3>Revoke access</h3><p>Revoke an agent or an approval from the console. Its next call loses access. The agent cannot undo your decision.</p><a href="/docs/how-to/revoke-access">Revoke an agent or approval <span aria-hidden="true">↗</span></a></article>
+        <article class="control-card"><span class="feature-icon" aria-hidden="true">≡</span><h3>Review API activity</h3><p>See which agent used which credential, when, and the outcome. Activity records actions and names, without storing secret values.</p></article>
+        <article class="control-card environments-card"><div class="environment-pair" aria-hidden="true"><span>staging</span><span>production</span></div><h3>Separate staging and production</h3><p>Every agent belongs to an environment. A staging agent cannot use a production credential, even when the names match.</p></article>
       </div>
-      <div class="trust-note"><span class="trust-symbol" aria-hidden="true">⊕</span><p><strong>Trust, explained.</strong> Botpasses is a grant-vault, not zero-knowledge. The hosted process decrypts credentials in memory to make approved calls. <a href="/security">Read the security model <span aria-hidden="true">↗</span></a></p></div>
+      <div class="trust-note"><span class="trust-symbol" aria-hidden="true">⊕</span><p><strong>Who can decrypt your keys?</strong> The hosted process decrypts credentials in memory to make approved calls. Anyone with both the AWS KMS role and the database can also decrypt them. Botpasses is not zero-knowledge. <a href="/security">Read the security model <span aria-hidden="true">↗</span></a></p></div>
     </section>
 
     <section class="home-section setup-section" aria-labelledby="get-started">
-      <div class="section-heading"><div><p class="eyebrow">Start with one connection</p><h2 id="get-started">Your next task.<br />A better way to give access.</h2></div><p>Copy a setup prompt into your agent. It will guide the connection; you enter credentials in the vault.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">Get started</p><h2 id="get-started">Connect your agent<br />to Botpasses.</h2></div><p>Choose the hosted service, a local vault, or your own server. Copy the setup prompt into your agent and enter credentials in Botpasses.</p></div>
       <div class="setup-grid">
-        <article class="setup-card setup-hosted"><div class="setup-label"><span class="eyebrow">Hosted</span><span class="recommended">Start here</span></div><h3>Let us run the vault.</h3><p>Create an account, connect your agent, and approve your first call. Free while in beta.</p><div class="prompt-actions"><CopyButton promptId="hosted" primary label="Copy setup prompt" /><a href="/docs/prompts#hosted">Read the prompt <span aria-hidden="true">↗</span></a></div></article>
-        <article class="setup-card"><p class="eyebrow">Local</p><h3>Keep it on your machine.</h3><p>Run a local CLI vault without an account. Your credentials stay on your machine.</p><div class="prompt-actions"><CopyButton promptId="local" /><a href="/docs/prompts#local">Full prompt <span aria-hidden="true">↗</span></a></div></article>
-        <article class="setup-card"><p class="eyebrow">Self-hosted</p><h3>Make the infrastructure yours.</h3><p>Run the hosted console and MCP server on your own infrastructure, with Postgres and your own domain.</p><div class="prompt-actions"><CopyButton promptId="self-host" /><a href="/docs/prompts#self-host">Full prompt <span aria-hidden="true">↗</span></a></div></article>
+        <article class="setup-card setup-hosted"><div class="setup-label"><span class="eyebrow">Hosted</span><span class="recommended">Start here</span></div><h3>Use botpasses.com</h3><p>Create an account, connect your agent, and approve your first call. Free to use.</p><div class="prompt-actions"><CopyButton promptId="hosted" primary label="Copy setup prompt" /><a href="/docs/prompts#hosted">Read the prompt <span aria-hidden="true">↗</span></a></div></article>
+        <article class="setup-card"><p class="eyebrow">Local</p><h3>Run a local vault</h3><p>Run a local CLI vault without an account. Your credentials stay on your machine.</p><div class="prompt-actions"><CopyButton promptId="local" /><a href="/docs/prompts#local">Read the prompt <span aria-hidden="true">↗</span></a></div></article>
+        <article class="setup-card"><p class="eyebrow">Self-hosted</p><h3>Host your own server</h3><p>Botpasses is open source. Run the console and MCP server on your own infrastructure, with Postgres and your own domain.</p><div class="prompt-actions"><CopyButton promptId="self-host" /><a href="/docs/prompts#self-host">Read the prompt <span aria-hidden="true">↗</span></a></div></article>
       </div>
-      <p class="setup-footnote">Open source, MIT licensed. <a href={GITHUB} rel="noopener">Explore the code on GitHub <span aria-hidden="true">↗</span></a></p>
+      <p class="setup-footnote">Open source, MIT licensed. <a href={GITHUB} rel="noopener">View the source on GitHub <span aria-hidden="true">↗</span></a></p>
     </section>
 
     <section class="home-section home-faq" aria-labelledby="faq">
-      <div><p class="eyebrow">Good questions</p><h2 id="faq">A little more<br />before you connect.</h2><p>More in the <a href="/docs/faq">docs FAQ</a>.<br />Need a hand? <a href="mailto:support@botpasses.com">Get in touch.</a></p></div>
+      <div><p class="eyebrow">FAQ</p><h2 id="faq">Common questions</h2><p>More in the <a href="/docs/faq">docs FAQ</a>.<br />Need help? <a href="mailto:support@botpasses.com">Contact support.</a></p></div>
       <div class="faq-list">{faq.map((f) => <details><summary>{f.q}</summary><p>{f.a}</p></details>)}</div>
     </section>
 
-    <section class="closing-cta" aria-labelledby="closing-title"><img src="/mark-on-dark.svg" alt="" width="48" height="48" /><h2 id="closing-title">More doing.<br />Less sharing secrets.</h2><p>Give your agent its next task. Keep the keys in Botpasses.</p><a class="btn btn-primary" href="/sign-up">Create account <span aria-hidden="true">↗</span></a><a class="closing-docs" href="/docs/start">Read the quickstart</a></section>
+    <section class="closing-cta" aria-labelledby="closing-title"><img src="/mark-on-dark.svg" alt="" width="48" height="48" /><h2 id="closing-title">Connect your first agent</h2><p>Create a free account, store an API key, and approve your first call.</p><a class="btn btn-primary" href="/sign-up">Create account <span aria-hidden="true">↗</span></a><a class="closing-docs" href="/docs/start">Read the quickstart</a></section>
   </div>
 </Base>

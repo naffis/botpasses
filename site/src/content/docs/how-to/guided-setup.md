@@ -8,7 +8,7 @@ order: 2
 
 After you [create an account](/docs/start) and [connect an agent](/docs/start), you can ask the agent to set up a provider. The agent does not get the secret.
 
-Or paste a prompt from [Copy-paste prompts](/docs/prompts). The hosted prompt walks the whole flow. The short prompt below is enough when MCP is already connected.
+Or paste a prompt from [Copy-paste prompts](/docs/prompts). The hosted prompt covers account connection, credential setup, and a test API call. The short prompt below is enough when MCP is already connected.
 
 ## Copy-paste prompts
 

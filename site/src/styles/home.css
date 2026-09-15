@@ -7,7 +7,7 @@
 .home .btn { border-radius: 8px; padding: .8rem 1.2rem; gap: 1rem; }
 .home .eyebrow { font: 600 .72rem/1.5 var(--font-body); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
 .home-hero { display: grid; grid-template-columns: 1.04fr 1fr; align-items: center; gap: 3.5rem; padding: 3.5rem 0 4.5rem; }
-.beta-link { display: inline-flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .75rem; text-decoration: none; border: 1px solid var(--line); border-radius: 100px; padding: .4rem .75rem; }
+.availability-link { display: inline-flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .75rem; text-decoration: none; border: 1px solid var(--line); border-radius: 100px; padding: .4rem .75rem; }
 .status-dot { display: inline-block; width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--accent); }
 .home-hero h1 { font-size: clamp(2.8rem, 4.6vw, 4.3rem); line-height: 1.04; letter-spacing: -.065em; margin: 1.5rem 0; }
 .home-hero h1 > span { color: var(--accent); }

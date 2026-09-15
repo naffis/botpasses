@@ -125,7 +125,7 @@ I already have Botpasses working for one client. Help a second agent (name the c
 
 ### Staging
 
-Dogfood on staging.botpasses.com. Separate accounts from production.
+Test on staging.botpasses.com with a separate account from production.
 
 ```
 Use https://staging.botpasses.com (separate accounts from production). Connect MCP to https://staging.botpasses.com/mcp, set up a test credential, smoke one call, and remind me production agents cannot use staging items and vice versa.

@@ -46,7 +46,7 @@ export function teamPanelHtml(): string {
 export function planCardHtml(): string {
   return `<div class="card" id="plan-card" data-testid="plan-card">
             <h2>Plan</h2>
-            <p class="hint">Free while in beta. <span id="plan-period"></span></p>
+            <p class="hint">Free to use. <span id="plan-period"></span></p>
             <dl class="facts">
               <dt>Credentials</dt><dd id="plan-credentials">Loading</dd>
               <dt>Agents</dt><dd id="plan-agents">Loading</dd>

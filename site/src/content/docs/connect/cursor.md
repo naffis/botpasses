@@ -34,7 +34,7 @@ The server shows its tools once connected. Do not paste an operator token or any
 
 Ask the agent for the task in plain language. It calls `http_request`. Pending approvals show an 8-digit code you approve in the [console](/console) Inbox. A missing credential returns a `collect_url` to open in a browser.
 
-After MCP is connected, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on the Botpasses plane you connected, never in chat. For a laptop CLI vault (`VAULT_HOME`), use the [local prompt](/docs/prompts#local). To run the hosted kernel on this laptop, `npm run hosted:dev` and point Cursor at `http://127.0.0.1:8788/mcp`; provider apps get `http://127.0.0.1:8788/connect/callback`. See [Install](/docs/install).
+After MCP is connected, paste a [hosted bootstrap prompt](/docs/prompts#hosted) for help storing credentials and connecting API accounts. Enter secrets on the Botpasses site you connected to. Do not paste them into chat. For a laptop CLI vault (`VAULT_HOME`), use the [local prompt](/docs/prompts#local). To run the hosted kernel on this laptop, `npm run hosted:dev` and point Cursor at `http://127.0.0.1:8788/mcp`; provider apps get `http://127.0.0.1:8788/connect/callback`. See [Install](/docs/install).
 
 ## Stdio (local vault, no account)
 

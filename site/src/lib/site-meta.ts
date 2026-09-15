@@ -6,11 +6,11 @@ export const GITHUB = "https://github.com/naffis/botpasses";
 export const SUPPORT_EMAIL = "support@botpasses.com";
 export const SECURITY_EMAIL = "security@botpasses.com";
 
-/** One-sentence product definition. Used as the default homepage description and in JSON-LD. */
+/** Product description shared by homepage metadata and JSON-LD. */
 export const PRODUCT_DESCRIPTION =
-  "Botpasses is a grant-vault for AI agents. Store an API key once. Claude, Cursor, ChatGPT, or Grok call the API over MCP; the key never enters the model, the chat, or the logs.";
+  "Botpasses lets AI agents call APIs with your approval while keeping keys out of their conversations. Free to use and open source. Use botpasses.com or host it yourself.";
 
-export const PRODUCT_TAGLINE = "Let agents work. Keep your keys.";
+export const PRODUCT_TAGLINE = "API access for agents.";
 
 export type JsonLd = Record<string, unknown>;
 
@@ -57,12 +57,12 @@ export function softwareApplicationLd(): JsonLd {
       "@type": "Offer",
       price: "0",
       priceCurrency: "USD",
-      description: "Free while in beta",
+      description: "Free to use",
     },
     featureList: [
       "Store a named API credential once",
       "MCP http_request attaches the key inside the vault",
-      "Operator approval before each inject",
+      "Check agent approval before each API call",
       "No get_secret tool",
       "Open source, MIT licensed",
     ],
@@ -77,7 +77,7 @@ export function definedTermLd(): JsonLd {
     "@type": "DefinedTerm",
     name: "grant-vault",
     description:
-      "A vault that decrypts a credential only at an approved inject, to attach it to an outbound API call. The model does not get the key. Not zero-knowledge.",
+      "A vault that checks an agent’s approval before attaching a stored credential to its API request. The model does not get the key. The vault process can decrypt credentials; it is not zero-knowledge.",
     url: `${SITE_URL}/docs/explanation/why-the-model-never-sees-the-value`,
     inDefinedTermSet: {
       "@type": "DefinedTermSet",

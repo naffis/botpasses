@@ -41,7 +41,7 @@ test("AC-01 fixture dist GET / is marketing", async () => {
     const res = await fetch(`${ctx.base}/`);
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.match(html, /id="hero-title">Let agents work\./);
+    assert.match(html, /id="hero-title">API access/);
     assert.match(html, /data-access-demo/);
     assert.match(html, /href="\/sign-up"/);
     assert.match(html, /href="\/sign-in"/);

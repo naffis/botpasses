@@ -36,7 +36,7 @@ If I already have a hosted account and only need stdio to hosted: use VAULT_PUBL
 
 Nothing to install. [Create an account](/sign-up) on botpasses.com, then follow [Start](/docs/start). Agents connect to `https://botpasses.com/mcp`.
 
-The hosted service is free while in beta. `staging.botpasses.com` is the pre-release plane. Accounts and data are separate between the two.
+The hosted service is free to use. `staging.botpasses.com` is the pre-release plane. Accounts and data are separate between the two.
 
 To run the same hosted kernel on this laptop (loopback, sqlite, OTP printed in the terminal):
 

@@ -60,8 +60,8 @@ const pinnedChromium =
 const executablePath = existsSync(pinnedChromium) ? pinnedChromium : pw.chromium.executablePath();
 
 const { bg, bgElev, fg, muted, line, accent } = BRAND_HEX;
-const [lead, punch] = PRODUCT_TAGLINE.split(/(?<=\.)\s+/);
-if (!lead || !punch) throw new Error("PRODUCT_TAGLINE must have two sentences");
+const [lead, punch] = PRODUCT_TAGLINE.split(" for ");
+if (!lead || !punch) throw new Error("PRODUCT_TAGLINE must describe access for agents");
 
 const fontFile = (pkg, file) => {
   const path = require.resolve(`@fontsource/${pkg}/files/${file}`, { paths: [siteRoot] });
@@ -100,14 +100,14 @@ const shared = `
   .ticket .masked { font: 22px "IBM Plex Mono"; color: ${muted}; padding-bottom: 25px; border-bottom: 1px dashed ${line}; }
   .ticket .approved { font-size: 16px; color: ${accent}; margin: 24px 0 0; }
 `;
-const ticket = `<div class="ticket">${markImage}<p class="label">YOUR CREDENTIAL</p><p class="name">GITHUB_TOKEN</p><p class="masked">•••• •••• 4k2p</p><p class="approved">✓ Approved access. Private keys.</p></div>`;
+const ticket = `<div class="ticket">${markImage}<p class="label">YOUR CREDENTIAL</p><p class="name">GITHUB_TOKEN</p><p class="masked">•••• •••• 4k2p</p><p class="approved">✓ Approved for one API call</p></div>`;
 const landscape = `<!doctype html><html><head><meta charset="utf-8"><style>
   ${shared}
   html, body { width: 1200px; height: 630px; }
   .card { padding: 56px 64px; }
   .content { display: grid; grid-template-columns: 1fr 340px; gap: 48px; align-items: center; }
   .ticket { transform: rotate(-4deg); margin-top: 28px; }
-</style></head><body><div class="card"><div class="brand">${markImage} botpasses</div><div class="content"><div><h1>${lead}<br><span>${punch}</span></h1><p class="description">Give AI agents access to your APIs.<br>Keep secrets out of the conversation.</p></div>${ticket}</div><div class="foot"><span>Open source · MCP · Free while in beta</span><span>botpasses.com ↗</span></div></div></body></html>`;
+</style></head><body><div class="card"><div class="brand">${markImage} botpasses</div><div class="content"><div><h1>${lead}<br><span>for ${punch}</span></h1><p class="description">Approve API calls from your agents.<br>Keep keys out of the conversation.</p></div>${ticket}</div><div class="foot"><span>Open source · MCP · Free to use</span><span>botpasses.com ↗</span></div></div></body></html>`;
 const square = `<!doctype html><html><head><meta charset="utf-8"><style>
   ${shared}
   html, body { width: 1200px; height: 1200px; }
@@ -121,7 +121,7 @@ const square = `<!doctype html><html><head><meta charset="utf-8"><style>
   .ticket .masked { grid-column: 3; padding: 0; border: 0; margin: 0; }
   .ticket .approved { grid-column: 2 / -1; margin: 0; }
   .foot { bottom: 64px; left: 80px; right: 80px; font-size: 21px; }
-</style></head><body><div class="card"><div class="brand">${markImage} botpasses</div><h1>${lead}<br><span>${punch}</span></h1><p class="description">Give AI agents access to your APIs.<br>Keep secrets out of the conversation.</p>${ticket}<div class="foot"><span>Open source · MCP · Free while in beta</span><span>botpasses.com ↗</span></div></div></body></html>`;
+</style></head><body><div class="card"><div class="brand">${markImage} botpasses</div><h1>${lead}<br><span>for ${punch}</span></h1><p class="description">Approve API calls from your agents.<br>Keep keys out of the conversation.</p>${ticket}<div class="foot"><span>Open source · MCP · Free to use</span><span>botpasses.com ↗</span></div></div></body></html>`;
 
 const browser = await pw.chromium.launch({ executablePath, headless: true });
 try {

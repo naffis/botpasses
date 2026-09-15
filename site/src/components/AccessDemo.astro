@@ -12,7 +12,7 @@ import { cssTokenLines } from "../../../src/brand-visual.ts";
       <div class="demo-decision" data-demo-pending><span class="demo-pending-label"><span class="status-dot"></span> Your approval needed</span><button class="btn btn-primary" type="button" data-demo-approve hidden>Approve example <span aria-hidden="true">↗</span></button></div>
       <div class="demo-approved" data-demo-approved hidden><span aria-hidden="true">✓</span> Approved for one call</div>
     </div>
-    <div class="demo-output" role="status" aria-live="polite" aria-atomic="true"><span class="output-icon" aria-hidden="true">⌁</span><p data-demo-status>The key stays in the vault. You decide what happens next.</p></div>
+    <div class="demo-output" role="status" aria-live="polite" aria-atomic="true"><span class="output-icon" aria-hidden="true">⌁</span><p data-demo-status>Review the request and approve one API call.</p></div>
   </div>
   <div class="demo-footer"><span><span class="status-dot" aria-hidden="true"></span> No secret values in the conversation</span><button type="button" data-demo-reset hidden>Replay <span aria-hidden="true">↶</span></button></div>
 </div>
@@ -30,7 +30,7 @@ import { cssTokenLines } from "../../../src/brand-visual.ts";
       approved.hidden = false;
       reset.hidden = false;
       demo.dataset.complete = "true";
-      status.textContent = "200 OK. Your agent gets the issues. The model does not get the key.";
+      status.textContent = "200 OK. The agent receives the issues. The model does not get the key.";
       reset.focus();
     });
     reset.addEventListener("click", () => {
@@ -38,7 +38,7 @@ import { cssTokenLines } from "../../../src/brand-visual.ts";
       approved.hidden = true;
       reset.hidden = true;
       delete demo.dataset.complete;
-      status.textContent = "The key stays in the vault. You decide what happens next.";
+      status.textContent = "Review the request and approve one API call.";
       approve.focus();
     });
   }

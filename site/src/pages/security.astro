@@ -58,8 +58,7 @@ const adrs = [
   <p>
     This is not zero-knowledge. To attach a key to a request the hosted process has to decrypt it, so the
     hosted process (and anyone holding both the AWS KMS role and the database) can read values. The model,
-    the transcript, logs, and staff without both of those cannot. We publish that instead of a claim we
-    could not keep. Decision:
+    the transcript, logs, and staff without both of those cannot. See the design decision in
     <a href={adrs[0]?.href} rel="noopener">ADR 0006</a>.
   </p>
   <div class="table-wrap">
@@ -130,7 +129,7 @@ const adrs = [
     over MCP can approve or revoke.
   </p>
 
-  <h2 id="tests">Tests that fail on a leak</h2>
+  <h2 id="tests">Tests for secret exposure</h2>
   <p>
     The repository stores a canary value in tests and asserts that it never appears in an MCP tool result, a
     REST payload for a model, the inbox JSON, an email, a collect page, an audit row, or the SQLite file.

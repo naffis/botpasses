@@ -31,7 +31,7 @@ Ask for the task: "list my open Stripe disputes". Claude Code calls `http_reques
 - Pending approval: Claude Code shows an 8-digit code. Approve in the [console](/console) Inbox or type the code under **Approve by code**. Then let it retry.
 - Missing credential: it shows a `collect_url`. Open it in a browser, sign in, and store the key there. Never paste a key into the terminal chat.
 
-After MCP is connected, paste a [hosted bootstrap prompt](/docs/prompts#hosted) so the agent walks Collect and Connect. You type secrets on the Botpasses plane you connected, never in chat. For a laptop CLI vault, use the [local prompt](/docs/prompts#local). The laptop hosted kernel is `npm run hosted:dev` at `http://127.0.0.1:8788/mcp`; provider apps get `http://127.0.0.1:8788/connect/callback`. See [Install](/docs/install).
+After MCP is connected, paste a [hosted bootstrap prompt](/docs/prompts#hosted) for help storing credentials and connecting API accounts. Enter secrets on the Botpasses site you connected to. Do not paste them into chat. For a laptop CLI vault, use the [local prompt](/docs/prompts#local). The laptop hosted kernel is `npm run hosted:dev` at `http://127.0.0.1:8788/mcp`; provider apps get `http://127.0.0.1:8788/connect/callback`. See [Install](/docs/install).
 
 ## Team projects
 

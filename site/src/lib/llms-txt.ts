@@ -2,7 +2,7 @@ import { groupBySection, sortDocs, toNavItems, type DocEntry } from "./docs-nav.
 import { GITHUB, SITE_URL } from "./site-meta.ts";
 
 const QUOTE =
-  "Botpasses is a grant-vault for AI agents. You store an API key once. An agent (Claude, Cursor, ChatGPT, Grok, or any MCP client) calls the API through Botpasses over MCP; the key is attached inside the vault and does not enter the chat, the model, or the logs. Grant-vault, not zero-knowledge: the hosted process decrypts only at an approved inject.";
+  "Botpasses stores API keys and lets your agents call APIs over MCP with your approval. It attaches the key to approved requests and removes secrets from responses before returning them to the agent. The hosted process decrypts keys in memory; Botpasses is not zero-knowledge.";
 
 const MCP_LINE =
   "MCP endpoint: https://botpasses.com/mcp (OAuth 2.1 with PKCE and dynamic client registration on botpasses.com, or a console-issued bearer token). Primary tool: http_request. Also find_items, list_items, request_grant, list_grants, setup. There is no get_secret.";
@@ -22,7 +22,7 @@ export function renderLlmsIndex(docs: DocEntry[]): string {
     "- Not a password manager. Credentials are for agents, not browser autofill.",
     "- Not zero-knowledge. The hosted process decrypts at inject. Staff need both the AWS KMS role and the database.",
     "- Hosted at https://botpasses.com. Staging at https://staging.botpasses.com has its own accounts.",
-    "- MIT licensed. Free while in beta. Source: https://github.com/naffis/botpasses",
+    "- Free to use and open source under the MIT license. You can self-host. Source: https://github.com/naffis/botpasses",
     "",
     "## Docs",
     "",
